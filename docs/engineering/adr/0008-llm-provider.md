@@ -66,23 +66,47 @@ free-tier limits are ever a problem for the *topic generation* path
 specifically (no personal-data concern there either way) — noted, not
 adopted, since Gemini alone already comfortably covers our scale.
 
+**Feedback-generation decision made (user, 2026-07-25):** stay on Gemini's
+**free tier** for feedback generation too, matching topic generation, with
+the explicit intent to move that one call to the paid tier later once
+there's budget. This is path 1 from the two options above — **the
+consent-flow disclosure is therefore a required Phase 1 task, not
+optional:** before feedback generation ships, the recorded-consent flow
+(guardrail #3) must be extended to disclose that session transcripts are
+processed by Google's Gemini API under its free-tier terms (prompts may be
+used to improve Google's products; human reviewers may see them). Shipping
+feedback generation without that disclosure update would violate the
+"explicit recorded consent" guardrail, not just be an oversight.
+
+**Implementation note:** this ADR's research (2026-07-25) found the
+current free-tier model lineup to be the Gemini **2.5** family (Flash,
+Flash-Lite, Pro) — Gemini 2.5 Flash had the most generous free daily/RPM
+limits of the three. Whoever implements this should confirm the exact
+model/limits at build time rather than assuming a specific version number,
+since this moves quickly; the provider decision (Gemini/Google AI Studio)
+is what this ADR fixes, not a specific model snapshot.
+
 ## Consequences
 - **Positive:** Topic generation is unambiguously solved — free forever, no
   card, no compliance wrinkle, generous limits. Google's scale gives this
   the strongest longevity footing of the free options.
-- **Open item carried into Phase 1:** the feedback-generation data-use
-  question above needs an actual decision (disclosure vs. small paid-tier
-  spend) before that feature ships — this is exactly the kind of "human
-  verification gate" territory guardrail #1 cares about, since feedback
-  text is the thing students actually read and trust.
+- **Decided, with a required follow-up task (2026-07-25):** feedback
+  generation stays on the free tier, matching topic generation, with a
+  planned move to the paid tier once there's budget. The required
+  follow-up is not optional: the consent flow must disclose free-tier
+  processing before this feature ships (see above) — this is exactly the
+  kind of "human verification gate" territory guardrail #1 cares about,
+  since feedback text is the thing students actually read and trust.
 - No new vendor lock-in risk beyond the usual "any LLM API is swappable
   with a rewrite of the prompt-calling code" — this isn't a foundational
   platform choice like hosting/auth/database, so switching providers later
   if needed is a comparatively small, isolated change.
 
 ## Revisit if
-- The feedback-generation decision above is made — update this ADR (or add
-  an addendum) once Phase 1 resolves it, so the paper trail stays accurate.
+- There's budget to move feedback generation to the paid tier, per the
+  user's stated intent to revisit this later — at that point, update this
+  ADR's status to reflect the switch and confirm the consent copy is
+  updated too (disclosure no longer applies once off the free tier).
 - Gemini's free-tier terms or limits change materially, or
 - Actual usage approaches the free-tier daily/per-minute caps — Groq or
   OpenRouter's free models are the first fallback to reach for before
