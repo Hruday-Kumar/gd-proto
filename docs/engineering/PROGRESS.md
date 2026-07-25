@@ -6,8 +6,9 @@ _Durable state so any session can resume from docs, not conversation memory._
 
 ## Current phase
 **Phase 1 build — in progress.** Pre-flight P1 + P2 done; W1 (Foundation &
-scaffolding) done 2026-07-25; W2 (Accounts) done 2026-07-26. **Next: W3 —
-Consent (guardrail #3 hard gate)** — see "What's next" below.
+scaffolding) done 2026-07-25; W2 (Accounts) done 2026-07-26; **W3 (Consent)
+— DONE 2026-07-26**, human-verification walkthrough passed. **Next: W4 —
+Topics + rooms + matching** — see "What's next" below.
 `docs/engineering/PHASE1_PLAN.md` is the durable build plan; work from that
 file, this file stays the "where are we right now" record.
 
@@ -80,6 +81,26 @@ not a blanket exception to the free-tools-first rule.
 - **Phase 1 pre-flight started (2026-07-25).** **P1 (old key deletion) confirmed done by user.** **P2 (AssemblyAI smoke test) — PASS, run twice.** Built `spike/selftest-assemblyai.js` + `spike/src/assemblyai.js` + `spike/src/transcriber-assemblyai.js`, parallel to the existing Deepgram path (left untouched — stays the documented ADR-0002 fallback). Per-speaker attribution correct with no leakage on both runs; finalization latency ~0.1–0.4s after audio ends, matching the original Deepgram spike baseline. Hit and fixed one real integration gotcha: AssemblyAI's v3 endpoint requires 50–1000ms of audio per message (Deepgram has no minimum) — LiveKit's ~10ms frames needed client-side buffering first. Documented in `LESSONS.md`'s AssemblyAI entry. **Note:** this smoke test satisfies P2, not guardrail #1 — W5 still needs the full human-verification gate (multiple real people, live room) before shipping real transcription. P3 (remaining account provisioning: Supabase, Google AI Studio, Render, Cloudflare Pages) and P4 (Render keep-alive verification) still outstanding.
 - **W1 (Foundation & scaffolding) — DONE, 2026-07-25.** Skipped straight here from pre-flight per user's explicit choice (P3/P4 don't block local dev). Built the monorepo exactly per `PHASE1_PLAN.md` §4: `apps/web` (React 19 + Vite), `apps/server` (Express 5.2 + a `/health` route + a clearly-labeled agent-worker boot stub, real logic deferred to W5), `packages/shared` (empty placeholder). New test runner: **Vitest + Supertest** (chosen because the frontend already committed to Vite in ADR-0006 — one toolchain, not two; documented in `LESSONS.md`). Root-level `Dockerfile` builds `apps/server`; **verified for real, not just written** — `docker build` succeeded and a container from that image served `{"status":"ok"}` on `/health`. `.github/workflows/ci.yml` added (test job + docker-build job) but not yet observed green on GitHub since nothing's pushed this session. Full detail (including the Docker `COPY . .` gotcha with npm workspaces) is in `PHASE1_PLAN.md`'s W1 section and `LESSONS.md`'s new Vitest/Supertest and Docker entries. `spike/` untouched.
 - **W2 (Accounts) — DONE, 2026-07-26.** Provisioned a real Supabase project (user did this — see credentials note below). **Core, tests-first:** `apps/server/src/domain/verifyToken.js` verifies Supabase JWTs asymmetrically against the project's JWKS using `jose` — the approach Supabase's own docs now recommend over the legacy shared-secret method. 5 fully offline tests (locally generated test keypair, no network) cover missing/malformed/expired/wrong-signature/valid tokens. Wired as Express middleware (`authMiddleware.js`) gating a first protected route, `GET /api/me`, with its own rejection test. **Peripheral:** `apps/web` got a Supabase-backed `AuthContext`, `ProtectedRoute`, and Login/Signup/Home pages via `react-router-dom` (new dependency — flagged an inapplicable `npm audit` finding about React Router's RSC/Framework-Mode CSRF issue; we only use client-side SPA routing, documented in `LESSONS.md`). Added `cors` to the backend so the Vite dev server can call it locally. DB: `supabase/migrations/0001_profiles.sql` — `profiles` table + RLS (own-row-only) + an `on_auth_user_created` trigger; **the user ran it manually via the Supabase SQL Editor** (no migration tooling wired up yet — noted as a possible gap to revisit). **Verified end-to-end, twice:** scripted signup→login→refresh directly against Supabase's Auth REST API (each token verified correctly by the running backend; the `profiles` row confirmed present via a live RLS-scoped query) *and* the user manually walked signup→login→page-refresh in a real browser and confirmed the session survives a refresh. One real snag: toggling "Confirm email" off doesn't retroactively unblock already-created unconfirmed users — only affects new signups; cost some back-and-forth during testing, documented in `LESSONS.md` so it doesn't surprise anyone again. **Credentials note:** the user pasted the Supabase URL + anon/publishable key directly in chat — safe, since publishable keys are meant to be client-exposed (not a secret leak like the earlier AssemblyAI-key situation, which was handled by asking them to edit `.env` directly instead).
+- **W3 (Consent, guardrail #3) — DONE, 2026-07-26.** `supabase/migrations/0002_consents.sql` — `consents` table, own-row RLS, insert-only (a consent event is immutable; a version bump is a new row, never an edit to an old one) — **not yet run against the live Supabase project** (needs the same manual SQL-Editor step as `0001_profiles.sql`). **Core, tests-first:** `apps/server/src/domain/consent.js`'s `canEnableMic(latestConsent, currentVersion)` — pure, false with no record or a stale `consent_version`, true only on current (`test/consent.test.js`, 3 tests). Since the real LiveKit token-mint route doesn't exist until W5, "every mint must call it" is satisfied now as composable Express middleware — `createConsentGate()` (`apps/server/src/api/consentGate.js`), proven against a stub route in `test/consentGate.test.js` (403 with no/stale consent, 200 with current); W5 mounts this in front of the real mint route when it's built. `GET /api/consent/status` + `POST /api/consent` (`apps/server/src/api/consent.js`, `apps/server/src/db/consents.js`) let a student check/record consent, tested offline in `test/consentApi.test.js` with `requireAuth` stubbed (same pattern already used for `/api/me`). All 17 server tests green. **Peripheral:** `apps/web`'s `/consent` route (`ConsentPage.jsx` + `useConsentStatus.js`) renders all four required disclosures verbatim (mic capture, no raw audio storage, transcript retention until account deletion, Gemini free-tier processing per ADR-0008) and posts agreement; linked from `HomePage`. `npm run build`/`lint` on `apps/web` both clean. **Both outstanding items closed 2026-07-26 (guardrail #1 satisfied):** the
+user ran `0002_consents.sql` in the Supabase SQL Editor, then walked
+signup → `/consent` → read the copy → agreed → confirmed the page flipped
+to "Consent recorded... you're clear to join a mic-enabled room" on
+revisit. **A real blocker surfaced and was fixed along the way:** the
+Node-20-vs-22 engine mismatch (flagged earlier as a maybe-later CI risk)
+actually broke local dev — `@supabase/supabase-js`'s realtime client needs
+a native `WebSocket` global, only present in Node 22+, and the failure
+only appears on the *first DB-backed request* (`getSupabase()`), not at
+boot, so the server looks fine until `/api/consent` is actually hit. Fixed
+by adding `engines: {node: ">=22.0.0"}` to `apps/server/package.json` and a
+root `.nvmrc` pinning `22`; documented as a gotcha in `LESSONS.md`. Also
+found and fixed this session: the checked-out working tree had no
+installed dependencies at all (`npm install` at the repo root was required
+before any test could run, even pre-existing ones) — worth remembering if
+a fresh clone/session hits the same "Cannot find package" error. Also added
+`.github/PULL_REQUEST_TEMPLATE.md` per user request — references
+`For_Developers/CONTRIBUTING.md` and `npm run lint`/`npm run
+audit:rls`/`design.md §14`, none of which exist in this repo yet; left
+as-is pending user follow-up.
 
 ## Confirmed inputs (user, 2026-07-24)
 | Dimension | Decision |
@@ -102,17 +123,20 @@ keep-alive check) remain non-blocking for local dev, deferred until the
 workstream that needs them. W1 and W2 are both done — see "What's done"
 above.
 
-**Next up: W3 — Consent (guardrail #3 — hard gate).** A recorded, versioned
-consent flow shown before any mic is ever enabled. The consent copy must
-disclose mic capture, that raw audio is never stored, that transcripts are
-kept until account deletion, **and** the Gemini free-tier processing
-disclosure decided in ADR-0008 (2026-07-25) — shipping without that last
-one violates guardrail #3, not just an oversight. **Core, tests-first:**
-`canEnableMic(user)` — false without a current consent record, true only
-on a current one; every LiveKit token mint must call it. See
-PHASE1_PLAN.md's W3 section for full scope and done-criteria. Needs the
-`consents` table added to the DB (not yet created — only `profiles` exists
-so far, from W2's migration).
+**W3 — Consent (guardrail #3 — hard gate): DONE, 2026-07-26.** Migration
+run, human walkthrough passed (see "What's done" above). PR #1
+(`feature/w3-consent` → `dev`) merge is the last step, then move to **W4 —
+Topics + rooms + matching**. See PHASE1_PLAN.md's W4 section for that
+workstream's scope (Gemini topic generation, room codes, matchmaking,
+server-authoritative session timer).
+
+**Carry-forward for whoever builds W4/later workstreams:** local dev now
+requires **Node 22+** (a root `.nvmrc` pins `22`; run `nvm use` — or
+`nvm install 22 && nvm use` — before `npm run dev`/`npm test` in any
+package). Node 20 boots the server fine but throws on the first real
+Supabase DB query (`getSupabase()` in any `db/*.js` module), since
+`@supabase/supabase-js`'s realtime client needs a native `WebSocket`
+global only present in Node 22+. See `LESSONS.md`'s Node.js entry.
 
 **Historical pre-flight items, now closed:**
 1. ~~Set up version control (git)~~ **DONE 2026-07-25** — repo is live at

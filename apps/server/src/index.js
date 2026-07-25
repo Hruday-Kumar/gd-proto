@@ -5,9 +5,11 @@ import { pathToFileURL } from 'node:url';
 import { healthRouter } from './api/health.js';
 import { createAuthMiddleware } from './api/authMiddleware.js';
 import { createMeRouter } from './api/me.js';
+import { createConsentRouter } from './api/consent.js';
+import { getLatestConsent, recordConsent } from './db/consents.js';
 import { startAgentWorker } from './agent/worker.js';
 
-export function createApp({ supabaseUrl } = {}) {
+export function createApp({ supabaseUrl, consentDb } = {}) {
   const app = express();
   app.use(cors());
   app.use(express.json());
@@ -15,6 +17,7 @@ export function createApp({ supabaseUrl } = {}) {
 
   const requireAuth = createAuthMiddleware({ supabaseUrl });
   app.use(createMeRouter(requireAuth));
+  app.use(createConsentRouter(requireAuth, consentDb ?? { getLatestConsent, recordConsent }));
 
   return app;
 }

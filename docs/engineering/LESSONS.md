@@ -237,6 +237,21 @@ India DPDP — we still need our own recorded-consent flow before mic access
 - **ws** — a low-level library for WebSockets (a way for a program to keep an
   open, two-way connection to a server — what we use to talk to Deepgram).
 
+**Gotcha (hit 2026-07-26, W3):** `@supabase/supabase-js`'s `createClient()`
+always spins up a realtime client under the hood, which needs a native
+`WebSocket` global — only present in Node **22+**. On Node 20 (or lower),
+any code path that calls `getSupabase()` (i.e. anything touching the DB,
+not just auth/JWKS verification) throws `Error: Node.js detected but
+native WebSocket not found` at the point of the *first real query*, not at
+boot — so a server can look like it's running fine until the first
+DB-backed route is hit. `@supabase/realtime-js`'s own `package.json`
+already declares `engines: {node: ">=22.0.0"}` (an `npm install` warning
+you'll see even before hitting the runtime error) — this is why. Fixed by
+adding an `engines` field to `apps/server/package.json` too, plus a root
+`.nvmrc` pinning `22` —
+run `nvm install 22 && nvm use` (or `nvm use` if 22+ is already installed)
+in the repo root before `npm run dev`.
+
 **Why we use it:** All mainstream, extremely well-documented, huge community —
 exactly what an agent-assisted, stack-new team needs (see `TEAM.md`).
 Also using **npm workspaces** (built into npm itself, no extra tool) to

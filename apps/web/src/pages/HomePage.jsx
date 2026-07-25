@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext.jsx';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
@@ -25,6 +26,9 @@ export function HomePage() {
       <p>
         Backend /api/me:{' '}
         {apiResult ? `userId=${apiResult.userId}` : apiError ? `error: ${apiError}` : 'loading…'}
+      </p>
+      <p>
+        <Link to="/consent">GD mic consent</Link>
       </p>
       <button type="button" onClick={() => signOut()}>
         Log out

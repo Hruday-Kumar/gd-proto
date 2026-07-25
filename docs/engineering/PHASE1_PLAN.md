@@ -255,6 +255,35 @@ A recorded, versioned consent flow shown **before any mic is ever enabled**.
   a current consent record, and a human walks the flow and confirms the copy
   is understandable (not just legally present).
 
+**Status: ✅ DONE, 2026-07-26.** `supabase/migrations/0002_consents.sql` adds the `consents`
+table (own-row RLS, insert-only — a consent event is immutable, a new
+version is a new row, never an edit). **Core, tests-first:**
+`apps/server/src/domain/consent.js` — `canEnableMic(latestConsent,
+currentVersion = CURRENT_CONSENT_VERSION)`, pure, false with no record or a
+stale `consent_version`, true only on current
+(`test/consent.test.js`). Since the real LiveKit token-mint route doesn't
+exist until W5, the "every mint must call it" requirement is satisfied as
+composable Express middleware now — `createConsentGate()` in
+`apps/server/src/api/consentGate.js`, proven against a stub route in
+`test/consentGate.test.js` (403 with no/stale consent, 200 with current);
+W5 mounts this in front of the real mint route when it's built.
+`GET /api/consent/status` and `POST /api/consent`
+(`apps/server/src/api/consent.js`, `apps/server/src/db/consents.js`) let a
+student check and record consent, tested in `test/consentApi.test.js` with
+`requireAuth` stubbed (network-free, matching the pattern already used for
+`/api/me`). **Peripheral:** `apps/web`'s `/consent` route
+(`ConsentPage.jsx` + `useConsentStatus.js`) renders all four required
+disclosures verbatim and posts agreement; linked from `HomePage` so it's
+reachable to walk manually. **Guardrail #1 satisfied:** the user ran
+`0002_consents.sql` in the Supabase SQL Editor, then walked signup →
+`/consent` → read the copy → agreed → confirmed the page reflects
+"Consent recorded" on revisit. **One real bug surfaced and fixed along the
+way, unrelated to the consent logic itself:** `@supabase/supabase-js`
+requires Node 22+ (native `WebSocket` for its realtime client) — Node 20
+boots the server fine but throws on the first actual DB query. Fixed with
+`engines` in `apps/server/package.json` + a root `.nvmrc`; see
+`LESSONS.md`.
+
 ### W4 — Topics + rooms + matching
 Gemini topic generation by category/difficulty (ADR-0008 — confirm the
 current free-tier model at build time rather than hardcoding a version from
