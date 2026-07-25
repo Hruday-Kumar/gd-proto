@@ -200,11 +200,30 @@ source and can be self-hosted, unlike Firebase or Clerk.
 **Docs:** https://supabase.com/docs/guides/auth ·
 https://supabase.com/docs/guides/database
 
-**Gotchas we hit:** None yet — not integrated into code as of these ADRs
-(2026-07-25). Compliance note carried over from ADR-0003: choosing Supabase
-doesn't by itself satisfy India DPDP — we still need our own recorded-consent
-flow before mic access (guardrail #3) and to confirm Supabase's data
-processing terms during the build phase.
+**Gotchas we hit:** Integrated 2026-07-25 (W2 — accounts). Compliance note
+carried over from ADR-0003: choosing Supabase doesn't by itself satisfy
+India DPDP — we still need our own recorded-consent flow before mic access
+(guardrail #3, due in W3) and to confirm Supabase's data processing terms.
+- **How the backend verifies a user's session token:** Supabase's own docs
+  now recommend *against* verifying tokens with the legacy shared JWT
+  secret (HS256) and recommend asymmetric verification against the
+  project's JWKS endpoint instead
+  (`https://<project>.supabase.co/auth/v1/.well-known/jwks.json`), using
+  the `jose` library. We followed that — `apps/server/src/domain/
+  verifyToken.js` + `apps/server/src/api/authMiddleware.js`. One upside
+  worth knowing: `jose`'s JWKS resolver is dependency-injectable, so the
+  middleware's tests (`test/verifyToken.test.js`) sign fixture tokens with
+  a locally generated keypair and never touch the network — fast,
+  deterministic, no Supabase project needed to run `npm test`.
+- **New table needs a manual step:** we don't have Supabase CLI/migrations
+  wired up yet, just a plain SQL file (`supabase/migrations/0001_profiles
+  .sql`) that has to be pasted into the dashboard's SQL Editor by hand.
+  Revisit if this becomes a recurring source of drift between environments.
+- **Email confirmation is on by default** for new projects — blocks a
+  freshly-signed-up user from logging in until they click a confirmation
+  link. Turned off during Phase 1 dev (Authentication → Sign In / Providers
+  → Email) to allow scripted signup→login testing; **must be turned back on
+  before real students use the app** (tracked in PROGRESS.md).
 
 ---
 
@@ -325,9 +344,41 @@ yourself, not hosted services.
 
 **Docs:** https://react.dev · https://vite.dev
 
-**Gotchas we hit:** None yet — not integrated into code as of this ADR
-(2026-07-25). One to remember for later: don't reach for `create-react-app`
+**Gotchas we hit:** Integrated 2026-07-25 (W1 scaffolding via `npm create
+vite`, W2 auth pages). One to remember: don't reach for `create-react-app`
 out of habit/old tutorials — it's unmaintained; scaffold with Vite instead.
+
+---
+
+## React Router
+**What it is:** Client-side routing for the React app — which page renders
+for `/login`, `/signup`, `/` (the protected home page) etc, without a full
+page reload.
+
+**Why we use it:** The standard, most-documented routing library in the
+React ecosystem — same "mainstream, well-documented" reasoning as every
+other pick (`TEAM.md`). We use it purely as a client-side SPA router
+(`BrowserRouter` + `<Routes>`) — no server-side "Framework Mode," no React
+Server Components, no server actions.
+
+**Free tier / cost:** Free, MIT-licensed library, no hosted component.
+
+**Open source?** Yes, MIT.
+
+**Docs:** https://reactrouter.com
+
+**Gotchas we hit:** `npm install` flags a **high-severity `npm audit`
+finding** (GHSA-qwww-vcr4-c8h2, a CSRF issue in React Router's RSC
+"Framework Mode" server-action request handling) against the latest
+version (7.18.1, the one we use). **Assessed as not applicable to us** —
+the vulnerable code path only triggers for apps using React Router's
+server-side Framework Mode / server actions, which this project doesn't
+use at all (plain client-side SPA routing only). `npm audit fix --force`
+would "fix" it by downgrading to 7.11.0, which is actually vulnerable to a
+*different* CSRF CVE (2026-22030, affects 7.0.0–7.11.0) — so downgrading
+trades one inapplicable advisory for one that's inapplicable for the same
+reason. Staying on latest. Revisit if this project ever adopts React
+Router's Framework Mode/server actions.
 
 ---
 

@@ -196,7 +196,7 @@ server` passed. `.github/workflows/ci.yml` added (test job + a docker-build
 job) — not yet observed green on GitHub itself since nothing's been pushed
 this session. `spike/` untouched, left as reference per §4.
 
-### W2 — Accounts (ADR-0003)
+### W2 — Accounts (ADR-0003) ✅ DONE 2026-07-26
 Supabase Auth signup/login/logout, `profiles` row on signup, Express
 middleware that verifies the Supabase JWT on every protected route, React
 auth context + protected routes.
@@ -207,6 +207,35 @@ auth context + protected routes.
 - **Peripheral:** login/signup UI, session persistence.
 - **Done when:** a logged-out request to any protected route is rejected in
   a test, and a real signup→login→refresh cycle works in the browser.
+
+**Status:** Real Supabase project provisioned (`uiqshhuiykwopqkrvyci
+.supabase.co`). **Core, tests-first:** `apps/server/src/domain/
+verifyToken.js` verifies asymmetrically against the project's JWKS (per
+Supabase's own current recommendation — see `LESSONS.md`'s Supabase entry
+for why, not the legacy shared-secret approach), using `jose`. 5 offline
+tests (`test/verifyToken.test.js`) cover missing/malformed/expired/
+wrong-signature/valid, all signed with a locally generated keypair — no
+network call, no live Supabase project needed to run `npm test`.
+`apps/server/src/api/authMiddleware.js` wraps it as Express middleware;
+`GET /api/me` is the first protected route, with its own integration test
+(`test/authMiddleware.test.js`) proving an unauthenticated request is
+rejected. **Peripheral:** `apps/web` got `AuthContext` (supabase-js +
+React context), `ProtectedRoute`, and Login/Signup/Home pages wired via
+`react-router-dom`. DB: `supabase/migrations/0001_profiles.sql` (profiles
+table, RLS scoped to own row, an `on_auth_user_created` trigger so a
+profile is created automatically — no app code has to remember that step)
+— run manually via the Supabase SQL Editor (no CLI/migration tooling
+wired up yet, tracked as a possible future gap in `LESSONS.md`).
+**Verified for real, end-to-end, twice:** (1) scripted — real signup,
+login, and refresh-token calls directly against Supabase's Auth REST API,
+each resulting access token successfully verified by the running
+`apps/server`, and a `profiles` row confirmed present via a live,
+RLS-scoped query; (2) a human (the user) walked signup → login → page
+refresh in an actual browser against both dev servers and confirmed the
+session survives a refresh. One real-world snag hit along the way: an
+already-created user's `email_not_confirmed` state doesn't clear
+retroactively when "Confirm email" is toggled off in the dashboard — only
+new signups are affected. Documented in `LESSONS.md`.
 
 ### W3 — Consent (guardrail #3 — hard gate)
 A recorded, versioned consent flow shown **before any mic is ever enabled**.
@@ -304,6 +333,11 @@ environment.
   disconnected worker fails *silently*: the room works, students talk, and
   nothing is transcribed. A dead worker must be noticeable without a student
   reporting it.
+- **Pre-launch checklist item:** turn Supabase's "Confirm email" back **on**
+  (Authentication → Sign In / Providers → Email) — it was switched off
+  2026-07-25 to make W2's automated/manual testing possible, and anyone can
+  currently sign up with an unconfirmed email. Tracked in PROGRESS.md's
+  Blockers section so it isn't missed.
 - **Done when:** the deployed stack passes a full end-to-end run with real
   people, including a session started right after a >15-minute quiet period.
 

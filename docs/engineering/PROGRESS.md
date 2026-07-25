@@ -2,14 +2,14 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-07-25
+**Last updated:** 2026-07-26
 
 ## Current phase
 **Phase 1 build — in progress.** Pre-flight P1 + P2 done; W1 (Foundation &
-scaffolding) done 2026-07-25. **Next: W2 — Accounts (ADR-0003)** — see
-"What's next" below. `docs/engineering/PHASE1_PLAN.md` is the durable build
-plan; work from that file, this file stays the "where are we right now"
-record.
+scaffolding) done 2026-07-25; W2 (Accounts) done 2026-07-26. **Next: W3 —
+Consent (guardrail #3 hard gate)** — see "What's next" below.
+`docs/engineering/PHASE1_PLAN.md` is the durable build plan; work from that
+file, this file stays the "where are we right now" record.
 
 **Phase 0b (formal research + ADRs) — ✅ COMPLETE.** All 8 categories done
 (real-time/WebRTC, live STT, auth, DB/storage, backend framework, frontend
@@ -79,6 +79,7 @@ not a blanket exception to the free-tools-first rule.
 - **Version control set up (2026-07-25).** `git init`, verified nothing sensitive staged (`.env` correctly gitignored, no hardcoded keys in source — only `process.env.*` references), initial commit made, pushed to `github.com/Hruday-Kumar/gd-proto` (user confirmed push completed after fixing a stale cached GitHub credential in Windows Credential Manager). Repo is live.
 - **Phase 1 pre-flight started (2026-07-25).** **P1 (old key deletion) confirmed done by user.** **P2 (AssemblyAI smoke test) — PASS, run twice.** Built `spike/selftest-assemblyai.js` + `spike/src/assemblyai.js` + `spike/src/transcriber-assemblyai.js`, parallel to the existing Deepgram path (left untouched — stays the documented ADR-0002 fallback). Per-speaker attribution correct with no leakage on both runs; finalization latency ~0.1–0.4s after audio ends, matching the original Deepgram spike baseline. Hit and fixed one real integration gotcha: AssemblyAI's v3 endpoint requires 50–1000ms of audio per message (Deepgram has no minimum) — LiveKit's ~10ms frames needed client-side buffering first. Documented in `LESSONS.md`'s AssemblyAI entry. **Note:** this smoke test satisfies P2, not guardrail #1 — W5 still needs the full human-verification gate (multiple real people, live room) before shipping real transcription. P3 (remaining account provisioning: Supabase, Google AI Studio, Render, Cloudflare Pages) and P4 (Render keep-alive verification) still outstanding.
 - **W1 (Foundation & scaffolding) — DONE, 2026-07-25.** Skipped straight here from pre-flight per user's explicit choice (P3/P4 don't block local dev). Built the monorepo exactly per `PHASE1_PLAN.md` §4: `apps/web` (React 19 + Vite), `apps/server` (Express 5.2 + a `/health` route + a clearly-labeled agent-worker boot stub, real logic deferred to W5), `packages/shared` (empty placeholder). New test runner: **Vitest + Supertest** (chosen because the frontend already committed to Vite in ADR-0006 — one toolchain, not two; documented in `LESSONS.md`). Root-level `Dockerfile` builds `apps/server`; **verified for real, not just written** — `docker build` succeeded and a container from that image served `{"status":"ok"}` on `/health`. `.github/workflows/ci.yml` added (test job + docker-build job) but not yet observed green on GitHub since nothing's pushed this session. Full detail (including the Docker `COPY . .` gotcha with npm workspaces) is in `PHASE1_PLAN.md`'s W1 section and `LESSONS.md`'s new Vitest/Supertest and Docker entries. `spike/` untouched.
+- **W2 (Accounts) — DONE, 2026-07-26.** Provisioned a real Supabase project (user did this — see credentials note below). **Core, tests-first:** `apps/server/src/domain/verifyToken.js` verifies Supabase JWTs asymmetrically against the project's JWKS using `jose` — the approach Supabase's own docs now recommend over the legacy shared-secret method. 5 fully offline tests (locally generated test keypair, no network) cover missing/malformed/expired/wrong-signature/valid tokens. Wired as Express middleware (`authMiddleware.js`) gating a first protected route, `GET /api/me`, with its own rejection test. **Peripheral:** `apps/web` got a Supabase-backed `AuthContext`, `ProtectedRoute`, and Login/Signup/Home pages via `react-router-dom` (new dependency — flagged an inapplicable `npm audit` finding about React Router's RSC/Framework-Mode CSRF issue; we only use client-side SPA routing, documented in `LESSONS.md`). Added `cors` to the backend so the Vite dev server can call it locally. DB: `supabase/migrations/0001_profiles.sql` — `profiles` table + RLS (own-row-only) + an `on_auth_user_created` trigger; **the user ran it manually via the Supabase SQL Editor** (no migration tooling wired up yet — noted as a possible gap to revisit). **Verified end-to-end, twice:** scripted signup→login→refresh directly against Supabase's Auth REST API (each token verified correctly by the running backend; the `profiles` row confirmed present via a live RLS-scoped query) *and* the user manually walked signup→login→page-refresh in a real browser and confirmed the session survives a refresh. One real snag: toggling "Confirm email" off doesn't retroactively unblock already-created unconfirmed users — only affects new signups; cost some back-and-forth during testing, documented in `LESSONS.md` so it doesn't surprise anyone again. **Credentials note:** the user pasted the Supabase URL + anon/publishable key directly in chat — safe, since publishable keys are meant to be client-exposed (not a secret leak like the earlier AssemblyAI-key situation, which was handled by asking them to edit `.env` directly instead).
 
 ## Confirmed inputs (user, 2026-07-24)
 | Dimension | Decision |
@@ -95,17 +96,23 @@ not a blanket exception to the free-tools-first rule.
 ## What's next
 **Phase 1 is underway. Follow `docs/engineering/PHASE1_PLAN.md` §5 from
 here** — one workstream's core units at a time (guardrail #9). Pre-flight
-recap: P1 and P2 done; P3 (Supabase/Google AI Studio/Render/Cloudflare
-Pages accounts) and P4 (Render keep-alive check) are explicitly non-blocking
-for local dev and deferred until the workstream that actually needs them.
-W1 (Foundation & scaffolding) is done — see "What's done" above.
+recap: P1 and P2 done; Supabase (part of P3) now provisioned and wired
+(W2). Google AI Studio/Render/Cloudflare Pages accounts and P4 (Render
+keep-alive check) remain non-blocking for local dev, deferred until the
+workstream that needs them. W1 and W2 are both done — see "What's done"
+above.
 
-**Next up: W2 — Accounts (ADR-0003).** Needs a Supabase project (P3, not
-yet provisioned) — get that first, then: Supabase Auth signup/login/logout,
-a `profiles` row on signup, the JWT-verification Express middleware
-(**core, tests-first** — rejects missing/malformed/expired/wrong-signature
-tokens), and a React auth context. See PHASE1_PLAN.md's W2 section for the
-full scope and done-criteria.
+**Next up: W3 — Consent (guardrail #3 — hard gate).** A recorded, versioned
+consent flow shown before any mic is ever enabled. The consent copy must
+disclose mic capture, that raw audio is never stored, that transcripts are
+kept until account deletion, **and** the Gemini free-tier processing
+disclosure decided in ADR-0008 (2026-07-25) — shipping without that last
+one violates guardrail #3, not just an oversight. **Core, tests-first:**
+`canEnableMic(user)` — false without a current consent record, true only
+on a current one; every LiveKit token mint must call it. See
+PHASE1_PLAN.md's W3 section for full scope and done-criteria. Needs the
+`consents` table added to the DB (not yet created — only `profiles` exists
+so far, from W2's migration).
 
 **Historical pre-flight items, now closed:**
 1. ~~Set up version control (git)~~ **DONE 2026-07-25** — repo is live at
@@ -138,7 +145,8 @@ settle:**
 - ~~Not yet set up: version control (git), repo hosting.~~ **DONE 2026-07-25** — pushed to github.com/Hruday-Kumar/gd-proto.
 - rtc-node prints `lk-rtc` pino debug lines; set `NODE_ENV=production` to silence.
 - **STT (ADR-0002):** AssemblyAI's one-time trial credit will eventually run out; card-vs-fresh-trial-account is a build-phase decision (user already deferred this on 2026-07-25).
-- ~~LLM feedback generation (ADR-0008): free tier vs. paid tier decision~~ **DECIDED 2026-07-25** — free tier for now, paid tier later once funded. **New follow-up requirement:** consent flow must disclose free-tier processing before feedback generation ships — see "What's next" #5. Don't build this feature without that disclosure added.
+- ~~LLM feedback generation (ADR-0008): free tier vs. paid tier decision~~ **DECIDED 2026-07-25** — free tier for now, paid tier later once funded. **New follow-up requirement:** consent flow must disclose free-tier processing before feedback generation ships — see W3 in "What's next". Don't build this feature without that disclosure added.
+- **Supabase "Confirm email" is currently OFF** (toggled 2026-07-26 for W2 testing — see PHASE1_PLAN.md's W2 section). **Must be turned back on before real students use the app** — right now anyone can sign up with any email, confirmed or not. Add to the W8 (deploy) pre-launch checklist.
 
 ## Deferred (not v1, tracked so they aren't forgotten)
 GD AI Voice Practice · JAM · Aptitude/Technical · 1-on-1 Roleplay · Drive Simulator · payments · notifications/SMS/push · analytics · advanced observability.

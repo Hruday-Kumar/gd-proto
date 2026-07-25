@@ -1,13 +1,21 @@
 import 'dotenv/config';
+import cors from 'cors';
 import express from 'express';
 import { pathToFileURL } from 'node:url';
 import { healthRouter } from './api/health.js';
+import { createAuthMiddleware } from './api/authMiddleware.js';
+import { createMeRouter } from './api/me.js';
 import { startAgentWorker } from './agent/worker.js';
 
-export function createApp() {
+export function createApp({ supabaseUrl } = {}) {
   const app = express();
+  app.use(cors());
   app.use(express.json());
   app.use(healthRouter);
+
+  const requireAuth = createAuthMiddleware({ supabaseUrl });
+  app.use(createMeRouter(requireAuth));
+
   return app;
 }
 
