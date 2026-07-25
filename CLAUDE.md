@@ -27,3 +27,25 @@ _None yet — no stack chosen. Populate once Phase 0 selects a stack._
 - Non-negotiable guardrails: @.claude/rules/guardrails.md
 - Team context: @docs/engineering/TEAM.md
 - **Current state / what's next / blockers:** @docs/engineering/PROGRESS.md — read this first each session.
+
+## TDD Rules — MANDATORY
+
+This project follows strict Red → Green → Refactor. Test framework: Vitest/Jest.
+Run tests with: `npm test` (or `npx vitest run` / `npx jest`)
+
+1. Never write implementation code without a failing test first.
+2. Before writing any test, announce: "🔴 RED: writing failing test for [feature]"
+3. After writing a test, run it and confirm it fails for the RIGHT reason
+   (missing implementation, not a typo or syntax error). Report the failure output.
+4. Before writing implementation, announce: "🟢 GREEN: implementing minimum code to pass"
+5. Write only enough code to pass the current failing test(s). Do not add
+   functionality nobody asked for yet.
+6. Do NOT edit or delete a test to make it pass. If a test seems wrong,
+   stop and say so — do not silently change its assertions.
+7. After tests pass, announce: "🔵 REFACTOR: cleaning up" and refactor only
+   if needed. Re-run tests after refactoring to confirm they're still green.
+8. Commit after each RED phase (failing test) and each GREEN phase (passing
+   implementation) as separate commits. This gives a reviewable diff trail.
+
+Self-check before writing any code file: "Does a failing test already exist
+for this behavior?" If no, stop and write the test first.

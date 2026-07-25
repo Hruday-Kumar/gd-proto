@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=$(node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d);process.stdout.write((j.tool_input&&j.tool_input.file_path)||(j.tool_response&&j.tool_response.filePath)||'')}catch(e){}})\"); case \"$f\" in *.js|*.jsx|*.ts|*.tsx) (cd \"$CLAUDE_PROJECT_DIR\" && npm test --silent 2>&1 | tail -40) ;; esac",
+            "timeout": 120,
+            "statusMessage": "Running tests..."
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "msg=$(node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d);process.stdout.write((j.message)||'Claude needs your attention')}catch(e){process.stdout.write('Claude needs your attention')}})\"); CLAUDE_HOOK_MSG=\"$msg\" powershell -NoProfile -WindowStyle Hidden -Command 'Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show($env:CLAUDE_HOOK_MSG,\"Claude Code\")'",
+            "timeout": 15,
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}
