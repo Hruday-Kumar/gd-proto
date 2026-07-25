@@ -26,6 +26,7 @@ _None yet — no stack chosen. Populate once Phase 0 selects a stack._
 ## Rules & state
 - Non-negotiable guardrails: @.claude/rules/guardrails.md
 - Team context: @docs/engineering/TEAM.md
+- Branching workflow (branch per task, PR to `dev`, `dev` → `main` for releases): @docs/engineering/BRANCHING.md
 - **Current state / what's next / blockers:** @docs/engineering/PROGRESS.md — read this first each session.
 
 ## TDD Rules — MANDATORY

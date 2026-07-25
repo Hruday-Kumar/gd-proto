@@ -23,3 +23,5 @@ These are hard rules for any agent working on PlaceMe. If a task seems to requir
 10. **Justify, don't invent.** Every non-trivial decision must trace to the vision doc or a fixed constraint. Never invent requirements. When ambiguous or blocked, ask.
 
 11. **Maintain the technology glossary.** The first time any new library, service, or tool is introduced (spike or real build), add an entry to `docs/engineering/LESSONS.md`: what it is (plain language), why we use it, free tier/cost, whether it's open source (+ license), docs link, and any gotchas hit. Do this as you go — don't defer it to Phase 0b research.
+
+12. **Branch per task, PR everything.** Never commit directly to `main` or `dev`. Every feature or chore gets its own branch off `dev`, rebased onto latest `dev` before work starts and again before the PR is opened, merged via PR (squash). `main` only moves via a `dev` → `main` PR. Full flow: `docs/engineering/BRANCHING.md`.
