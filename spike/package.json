@@ -9,6 +9,7 @@
     "agent": "node agent.js",
     "bots": "node bots.js",
     "selftest": "node selftest.js",
+    "selftest:assemblyai": "node selftest-assemblyai.js",
     "gen-voices": "powershell -NoProfile -ExecutionPolicy Bypass -File media/gen-voices.ps1"
   },
   "dependencies": {

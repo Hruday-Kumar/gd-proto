@@ -107,12 +107,26 @@ dependency as Deepgram.
 
 **Docs:** https://www.assemblyai.com/docs
 
-**Gotchas we hit:** None yet — not integrated into code as of this ADR
-(2026-07-25). Per ADR-0002, before Phase 1 build leans on it for real rooms,
-re-run a small smoke test (same shape as `spike/selftest.js`, pointed at
-AssemblyAI's streaming endpoint instead of Deepgram's) to reconfirm
-attribution and latency, since the human-verification gate so far only ran
-against Deepgram.
+**Gotchas we hit:** Integrated 2026-07-25 for the P2 pre-flight smoke test
+(`spike/selftest-assemblyai.js`, `spike/src/assemblyai.js`,
+`spike/src/transcriber-assemblyai.js`) — **PASS, twice, per-speaker
+attribution correct with no leakage**, finalization latency ~0.1–0.4s after
+audio ends (matches the Deepgram spike baseline).
+- **Minimum chunk duration, unlike Deepgram:** AssemblyAI's v3 streaming
+  endpoint rejects any single audio message outside **50–1000ms** of audio
+  (error 3007, `Input Duration Violation`). Deepgram has no such minimum.
+  LiveKit's `AudioStream` delivers ~10ms frames, so sending each frame
+  straight through (the pattern that works for Deepgram) fails immediately.
+  Fix: buffer frames client-side and flush in ~100ms chunks — see the
+  `pending`/`flush` logic in `spike/src/assemblyai.js`. Anything building a
+  new AssemblyAI streaming integration needs this buffering step; it isn't
+  optional.
+- Auth is a raw `Authorization: <api_key>` header (no `Bearer ` prefix) —
+  different from some other vendors' convention.
+- Endpoint is v3: `wss://streaming.assemblyai.com/v3/ws`, with
+  `format_turns=true` for punctuated/cased final text (Deepgram's
+  equivalent is `smart_format`). A `Turn` message with `end_of_turn: true`
+  is the finalized-line signal (Deepgram's equivalent is `is_final`).
 
 ---
 
@@ -206,6 +220,11 @@ processing terms during the build phase.
 
 **Why we use it:** All mainstream, extremely well-documented, huge community —
 exactly what an agent-assisted, stack-new team needs (see `TEAM.md`).
+Also using **npm workspaces** (built into npm itself, no extra tool) to
+manage the monorepo — `apps/web`, `apps/server`, `packages/shared` — so one
+`npm install` at the repo root wires up all three, and a package in one
+workspace can depend on another (e.g. `apps/server` on `@placeme/shared`)
+without publishing anything.
 **Express specifically confirmed as the backend framework in ADR-0005**
 (`docs/engineering/adr/0005-backend-framework.md`), compared against
 Fastify, NestJS, and Hono — none solve a problem this MVP actually has
@@ -223,6 +242,61 @@ services. No usage limits or costs of their own.
 https://github.com/websockets/ws
 
 **Gotchas we hit:** None yet.
+
+---
+
+## Vitest + Supertest (testing)
+**What it is:** Vitest runs our automated tests (the "tests-first" half of
+the project's pragmatic-TDD approach — see guardrail #9 / `TEAM.md` #4).
+Supertest lets a test make fake HTTP requests against an Express app
+in-process (no real port/network needed) and assert on the response.
+
+**Why we use it:** Vitest is the standard test runner in the Vite ecosystem
+we already committed to for the frontend (ADR-0006), so the team learns one
+tool instead of two, and its docs/examples assume Vite-shaped projects.
+Supertest is the long-standing, most-documented way to test an Express app.
+Both are free, MIT-licensed, and require no service account.
+
+**Free tier / cost:** Free — local dev-only tooling, no hosted component.
+
+**Open source?** Yes, both MIT licensed.
+
+**Docs:** https://vitest.dev · https://github.com/ladjs/supertest
+
+**Gotchas we hit:** None yet. First used 2026-07-25 for `apps/server`'s
+`/health` smoke test (W1).
+
+---
+
+## Docker
+**What it is:** Packages `apps/server` (the Express API + LiveKit agent
+worker) and everything it needs to run into one portable image, built from
+the `Dockerfile` at the repo root. Render (ADR-0007) runs that image in
+production; the same image can be built and run identically on a laptop.
+
+**Why we use it:** A fixed project constraint (`CLAUDE.md`: "cloud-agnostic,
+containerized, no hard vendor lock-in") — Docker is the industry-standard
+way to satisfy that, and Render's free tier deploys directly from a
+Dockerfile with no extra glue.
+
+**Free tier / cost:** Free — Docker Desktop/Engine are free for individual
+use. No cost of their own; hosting cost is Render's (see that entry).
+
+**Open source?** Docker Engine itself is Apache-2.0 open source. Docker
+Desktop (the GUI app installed locally on Windows/Mac) is free for
+individual/small-team use but is proprietary, not OSS — worth knowing if
+the team ever grows past Docker's free-usage terms.
+
+**Docs:** https://docs.docker.com
+
+**Gotchas we hit:** The monorepo (npm workspaces) needs every workspace's
+`package.json` present for `npm ci` to resolve correctly inside the image —
+simplest fix was `COPY . .` before `npm ci` (via a `.dockerignore` that
+excludes `node_modules`, `.git`, and `spike/`) rather than trying to
+selectively copy just `apps/server`'s manifest, which breaks workspace
+resolution. Slightly larger image than a hand-tuned multi-stage build, but
+far more robust for a team new to Docker — revisit only if image size or
+build time actually becomes a problem.
 
 ---
 
@@ -342,9 +416,9 @@ for the real product anyway since this tool isn't part of it.
 ---
 
 ## Google Gemini API (Google AI Studio)
-**What it is:** The AI model we call to generate GD topics, and later
-(pending a decision — see below) to write each student's individual
-feedback paragraph.
+**What it is:** The AI model we call to generate GD topics, and — per a
+2026-07-25 decision — also to write each student's individual feedback
+paragraph, both on the free tier for now.
 
 **Why we use it:** Chosen in ADR-0008 (`docs/engineering/adr/0008-llm-
 provider.md`) over OpenAI's and Anthropic's APIs (neither has a permanent
@@ -354,18 +428,19 @@ models (real models, but only 50 requests/day by default, likely too tight
 at our scale). Gemini's free tier is the only one of the group that's
 genuinely free forever with no credit card.
 
-**Important nuance — read before wiring up feedback generation:** on the
-free tier, Google's terms allow prompts/responses to be used to improve
-their products, and human reviewers may see them; the **paid** tier
-explicitly excludes this. For **topic generation** (no personal data
-involved) this doesn't matter. For **feedback generation**, the LLM call
-sends a student's own transcript — a real personal-data question on top of
-guardrail #3's mic-consent requirement. ADR-0008 deliberately leaves this
-as an **open decision for whoever builds the feedback feature**: either
-extend the consent flow to disclose free-tier processing explicitly, or
-switch that specific call to the paid tier (cheap in practice — likely a
-few dollars a month at pilot volume). Don't default to the free tier for
-this call without making that choice consciously.
+**Important nuance — required before wiring up feedback generation, not
+optional:** on the free tier, Google's terms allow prompts/responses to be
+used to improve their products, and human reviewers may see them; the
+**paid** tier explicitly excludes this. For **topic generation** (no
+personal data involved) this doesn't matter. For **feedback generation**,
+the LLM call sends a student's own transcript — a real personal-data
+question on top of guardrail #3's mic-consent requirement. **Decision
+(user, 2026-07-25): stay on the free tier for both, move feedback
+generation to the paid tier later once there's budget.** Because of that,
+the recorded-consent flow (guardrail #3) **must** be extended to disclose
+that session transcripts are processed by Gemini under free-tier terms
+before this feature ships — this isn't a nice-to-have, it's what makes
+staying on the free tier here compliant with "explicit recorded consent."
 
 **Free tier / cost:** Genuinely free forever, no credit card. Generous
 limits for our scale (e.g. Gemini 2.5 Flash: hundreds to ~1,500

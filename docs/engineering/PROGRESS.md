@@ -5,11 +5,23 @@ _Durable state so any session can resume from docs, not conversation memory._
 **Last updated:** 2026-07-25
 
 ## Current phase
+**Phase 1 build — in progress.** Pre-flight P1 + P2 done; W1 (Foundation &
+scaffolding) done 2026-07-25. **Next: W2 — Accounts (ADR-0003)** — see
+"What's next" below. `docs/engineering/PHASE1_PLAN.md` is the durable build
+plan; work from that file, this file stays the "where are we right now"
+record.
+
 **Phase 0b (formal research + ADRs) — ✅ COMPLETE.** All 8 categories done
 (real-time/WebRTC, live STT, auth, DB/storage, backend framework, frontend
 framework, hosting/deployment, LLM provider). Eight ADRs live in
-`docs/engineering/adr/0001–0008-*.md`. Next session: **Phase 1 setup** — see
-"What's next" below before writing any product code.
+`docs/engineering/adr/0001–0008-*.md`.
+
+**Phase 1 is now planned (2026-07-25):** `docs/engineering/PHASE1_PLAN.md`
+is the durable build plan — pre-flight gates, architecture, data model, 8
+dependency-ordered workstreams (each naming its tests-first core vs.
+peripheral units), the 4-week timeline with critical path, and a
+definition-of-done checklist. **Work from that file during Phase 1**; this
+file stays the "where are we right now" record.
 
 **Longevity criterion added 2026-07-25 (per direct user guidance):**
 `adr/METHOD.md` now has a 7th rubric criterion — production stability/
@@ -64,6 +76,9 @@ not a blanket exception to the free-tools-first rule.
 - **ADR-0006 (frontend framework) — Accepted.** `docs/engineering/adr/0006-frontend-framework.md`. Compared React against Vue, Svelte 5, and SolidJS, with longevity weighted explicitly per the new criterion. **Decision: React, built with Vite** (not Create React App — unmaintained since 2023; not Next.js — its SSR/SEO strengths don't apply to a logged-in practice tool with no public content pages). React wins on both the largest example/documentation base (directly useful for an agent-assisted team) and the strongest longevity story of any option: as of Feb 2026 it moved from single-company (Meta) ownership to the independent, multi-company-backed React Foundation under the Linux Foundation — reducing abandonment risk rather than adding it. Added a new React + Vite entry to `LESSONS.md`, including a flag not to default to Create React App out of old habit/tutorials.
 - **ADR-0007 (hosting/deployment) — Accepted.** `docs/engineering/adr/0007-hosting-deployment.md`. Split into two sub-decisions: **frontend → Cloudflare Pages** (free, unlimited bandwidth, no card — easy call). **Backend + LiveKit Agent worker → Render**, deployed via Dockerfile. The hard part: the LiveKit Agent worker must stay continuously connected to receive room dispatches (confirmed from LiveKit's own docs — an unavailable worker means no agent joins the room, a live-room failure), which ruled out every scale-to-zero free tier (Google Cloud Run, Koyeb) and Fly.io (no free tier since 2024). The only option with zero sleep risk by design, Oracle Cloud's Always Free VM, was rejected anyway: it's a self-managed raw server (exactly the "self-manage the hard part" pattern avoided everywhere else in this project) and has documented reports of Oracle reclaiming instances that look "idle" — which matches our worker's actual usage pattern. **Named as an honest near-dead-end, on record.** Landed on Render (managed, free, no card, real Docker support) with its 15-minute sleep neutralized by a free GitHub Actions keep-alive ping — a well-documented pattern, not a fragile hack — with the residual risk stated plainly and a cheap ($7/mo) fix flagged for whenever there's funding. Added Render and Cloudflare Pages entries to `LESSONS.md`.
 - **ADR-0008 (LLM provider) — Accepted. Phase 0b is now COMPLETE (8/8).** `docs/engineering/adr/0008-llm-provider.md`. Compared Google Gemini API against OpenAI and Anthropic (both disqualified outright — neither has a permanent free API tier, only small one-time trial credits requiring a card for continued use), Groq (free but its own docs position it as prototyping-only, not production), and OpenRouter's free models (real but only 50 requests/day by default, likely too tight at our scale). **Decision: Gemini's free tier** — the only major provider with a genuinely indefinite, no-card free API tier, backed by a large stable company. **Split by use case, and one open item flagged rather than resolved:** topic generation (no personal data) uses the free tier with no reservation. Feedback generation sends a student's own transcript, and Gemini's free-tier terms allow that data to be used to improve Google's products with human review — a real privacy question on top of the mic-consent guardrail. This is the project's **second flagged "small real spend may be the honest answer" case** (after STT in ADR-0002): either extend student consent to disclose free-tier processing, or use Gemini's paid tier for that one call (cheap — likely a few dollars/month at pilot volume, and paid-tier prompts are contractually excluded from training use). Left as an explicit decision for whoever builds the feedback feature in Phase 1, not resolved unilaterally here. Added a Gemini entry to `LESSONS.md` with this nuance spelled out.
+- **Version control set up (2026-07-25).** `git init`, verified nothing sensitive staged (`.env` correctly gitignored, no hardcoded keys in source — only `process.env.*` references), initial commit made, pushed to `github.com/Hruday-Kumar/gd-proto` (user confirmed push completed after fixing a stale cached GitHub credential in Windows Credential Manager). Repo is live.
+- **Phase 1 pre-flight started (2026-07-25).** **P1 (old key deletion) confirmed done by user.** **P2 (AssemblyAI smoke test) — PASS, run twice.** Built `spike/selftest-assemblyai.js` + `spike/src/assemblyai.js` + `spike/src/transcriber-assemblyai.js`, parallel to the existing Deepgram path (left untouched — stays the documented ADR-0002 fallback). Per-speaker attribution correct with no leakage on both runs; finalization latency ~0.1–0.4s after audio ends, matching the original Deepgram spike baseline. Hit and fixed one real integration gotcha: AssemblyAI's v3 endpoint requires 50–1000ms of audio per message (Deepgram has no minimum) — LiveKit's ~10ms frames needed client-side buffering first. Documented in `LESSONS.md`'s AssemblyAI entry. **Note:** this smoke test satisfies P2, not guardrail #1 — W5 still needs the full human-verification gate (multiple real people, live room) before shipping real transcription. P3 (remaining account provisioning: Supabase, Google AI Studio, Render, Cloudflare Pages) and P4 (Render keep-alive verification) still outstanding.
+- **W1 (Foundation & scaffolding) — DONE, 2026-07-25.** Skipped straight here from pre-flight per user's explicit choice (P3/P4 don't block local dev). Built the monorepo exactly per `PHASE1_PLAN.md` §4: `apps/web` (React 19 + Vite), `apps/server` (Express 5.2 + a `/health` route + a clearly-labeled agent-worker boot stub, real logic deferred to W5), `packages/shared` (empty placeholder). New test runner: **Vitest + Supertest** (chosen because the frontend already committed to Vite in ADR-0006 — one toolchain, not two; documented in `LESSONS.md`). Root-level `Dockerfile` builds `apps/server`; **verified for real, not just written** — `docker build` succeeded and a container from that image served `{"status":"ok"}` on `/health`. `.github/workflows/ci.yml` added (test job + docker-build job) but not yet observed green on GitHub since nothing's pushed this session. Full detail (including the Docker `COPY . .` gotcha with npm workspaces) is in `PHASE1_PLAN.md`'s W1 section and `LESSONS.md`'s new Vitest/Supertest and Docker entries. `spike/` untouched.
 
 ## Confirmed inputs (user, 2026-07-24)
 | Dimension | Decision |
@@ -78,44 +93,52 @@ not a blanket exception to the free-tools-first rule.
 | Codebase | Fully greenfield; no infra/vendor commitments |
 
 ## What's next
-**Phase 0b is done. The 8 ADRs in `docs/engineering/adr/` are the full tech
-stack: LiveKit Cloud + LiveKit Agents (room/WebRTC), AssemblyAI (STT),
-Supabase (auth + Postgres database), Express 5.x (backend), React + Vite
-(frontend), Render + Cloudflare Pages (hosting), Google Gemini API (LLM).
-Read the ADRs' Decision/Consequences sections, not just this summary, before
-building — each has nuance (e.g. two of them flag a small real cost as the
-honest last resort; see Blockers below.**
+**Phase 1 is underway. Follow `docs/engineering/PHASE1_PLAN.md` §5 from
+here** — one workstream's core units at a time (guardrail #9). Pre-flight
+recap: P1 and P2 done; P3 (Supabase/Google AI Studio/Render/Cloudflare
+Pages accounts) and P4 (Render keep-alive check) are explicitly non-blocking
+for local dev and deferred until the workstream that actually needs them.
+W1 (Foundation & scaffolding) is done — see "What's done" above.
 
-**Before Phase 1 build work starts (per guardrail #9, treat as its own
-session):**
-1. Set up version control (git) before any real build work — currently
-   unset, no safety net for lost work.
-2. Rotate the leaked Deepgram/LiveKit keys (see Blockers) before any public
-   repo.
-3. Run the AssemblyAI smoke test (ADR-0002) — same pattern as
-   `spike/selftest.js`, pointed at AssemblyAI's streaming endpoint instead
-   of Deepgram's — to reconfirm per-speaker attribution and latency, since
-   guardrail #1's human-verification gate so far only ran against Deepgram.
-4. Verify the Render keep-alive pattern (ADR-0007) — deploy a placeholder
-   service, let it sit quiet past 15 minutes, confirm the GitHub Actions
-   ping keeps it awake and a LiveKit job dispatched right after a quiet
-   period still succeeds.
-5. **Decide the feedback-generation LLM data-privacy question (ADR-0008)**
-   before building that specific feature — free tier + expanded consent
-   disclosure, vs. Gemini's paid tier for that one call. Not yet decided;
-   needs the user's input, not just an agent's.
-6. Then start Phase 1 — one feature's core units at a time, tests-first
-   where it's core logic (guardrail #9).
+**Next up: W2 — Accounts (ADR-0003).** Needs a Supabase project (P3, not
+yet provisioned) — get that first, then: Supabase Auth signup/login/logout,
+a `profiles` row on signup, the JWT-verification Express middleware
+(**core, tests-first** — rejects missing/malformed/expired/wrong-signature
+tokens), and a React auth context. See PHASE1_PLAN.md's W2 section for the
+full scope and done-criteria.
+
+**Historical pre-flight items, now closed:**
+1. ~~Set up version control (git)~~ **DONE 2026-07-25** — repo is live at
+   github.com/Hruday-Kumar/gd-proto.
+2. ~~Delete the old Deepgram/LiveKit keys~~ **DONE 2026-07-25.**
+3. ~~Run the AssemblyAI smoke test~~ **DONE 2026-07-25 — PASS, twice.**
+4. Verify the Render keep-alive pattern (ADR-0007) — **still open**, tied
+   to P4/W8, not urgent until there's a real deploy.
+5. ~~Decide the feedback-generation LLM data-privacy question~~ **DECIDED
+   2026-07-25** — free tier + disclosure, see ADR-0008. Required follow-up
+   still pending: the consent copy (W3) must include that disclosure.
+
+**Two things the Phase 1 planning pass surfaced that the ADRs didn't
+settle:**
+- **The Express API and the LiveKit agent worker must run as ONE Render
+  service, in one container.** Render's free tier gives 750 instance-hours/
+  month; one always-on service uses ~720h, so two would exceed it. ADR-0007
+  assumed one service's worth of hours without stating that both processes
+  have to share it. Keep the modules separate in source, share only the
+  entry point, so they can be split when there's budget. (PHASE1_PLAN §3a.)
+- **Raw audio never needs a deletion job** — it's streamed from the LiveKit
+  track straight to AssemblyAI and never written to disk or DB at all, so
+  guardrail #4 is satisfied by construction rather than by remembering to
+  clean up. (PHASE1_PLAN §3b.)
 
 **To resume efficiently next session:** just point the agent at this file (`docs/engineering/PROGRESS.md`) — no need to replay this conversation. `CLAUDE.md` loads automatically and covers the fixed constraints/MVP boundary.
 
 ## Blockers / open items
-- **Security:** the Deepgram key + LiveKit secret were shared in chat / a non-gitignored file. Rotate both before any public repo. Real secrets now live only in `spike/.env` (gitignored).
-- Not yet set up: version control (git), repo hosting.
+- ~~Security — old exposed Deepgram + LiveKit keys still active~~ **DONE 2026-07-25** — user confirmed both old keys deleted from their dashboards.
+- ~~Not yet set up: version control (git), repo hosting.~~ **DONE 2026-07-25** — pushed to github.com/Hruday-Kumar/gd-proto.
 - rtc-node prints `lk-rtc` pino debug lines; set `NODE_ENV=production` to silence.
-- **Two "small real spend may be needed" flags, both deliberately left as open decisions, not resolved by the agent:**
-  - STT (ADR-0002): AssemblyAI's one-time trial credit will eventually run out; card-vs-fresh-trial-account is a build-phase decision (user already deferred this on 2026-07-25).
-  - LLM feedback generation (ADR-0008): Gemini's free tier's data-use terms are a real question for a call that touches student transcripts specifically — free tier + disclosure, or cheap paid tier. Not yet decided.
+- **STT (ADR-0002):** AssemblyAI's one-time trial credit will eventually run out; card-vs-fresh-trial-account is a build-phase decision (user already deferred this on 2026-07-25).
+- ~~LLM feedback generation (ADR-0008): free tier vs. paid tier decision~~ **DECIDED 2026-07-25** — free tier for now, paid tier later once funded. **New follow-up requirement:** consent flow must disclose free-tier processing before feedback generation ships — see "What's next" #5. Don't build this feature without that disclosure added.
 
 ## Deferred (not v1, tracked so they aren't forgotten)
 GD AI Voice Practice · JAM · Aptitude/Technical · 1-on-1 Roleplay · Drive Simulator · payments · notifications/SMS/push · analytics · advanced observability.
