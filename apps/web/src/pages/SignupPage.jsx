@@ -1,12 +1,18 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext.jsx';
+import { AuthShell } from '../components/AuthShell.jsx';
+import { track } from '../lib/analytics.js';
+
+const inputClasses =
+  'w-full rounded-lg border border-border-base bg-surface-container-lowest py-3 pl-10 pr-4 text-body-md text-on-surface outline-none transition-all focus:border-primary focus:ring-2 focus:ring-primary/20';
 
 export function SignupPage() {
   const { signUp } = useAuth();
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -14,41 +20,101 @@ export function SignupPage() {
     e.preventDefault();
     setSubmitting(true);
     setError(null);
+    track('signup_started');
     const { error: signUpError } = await signUp(email, password);
     setSubmitting(false);
     if (signUpError) {
       setError(signUpError.message);
       return;
     }
+    track('signup_completed');
     navigate('/');
   }
 
   return (
-    <section>
-      <h1>Sign up</h1>
-      <form onSubmit={handleSubmit}>
-        <label>
-          Email
-          <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
-        </label>
-        <label>
-          Password
-          <input
-            type="password"
-            required
-            minLength={6}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-        </label>
-        {error && <p role="alert">{error}</p>}
-        <button type="submit" disabled={submitting}>
-          {submitting ? 'Signing up…' : 'Sign up'}
+    <AuthShell>
+      <header className="mb-8 text-center">
+        <h1 className="text-headline-lg font-bold text-on-surface">Create your account</h1>
+        <p className="mt-1 text-body-md text-text-secondary">
+          Practice group discussions live with other students, with per-speaker feedback.
+        </p>
+      </header>
+
+      <form className="space-y-6" onSubmit={handleSubmit}>
+        <div className="space-y-1">
+          <label className="block text-label-md font-medium text-on-surface" htmlFor="email">
+            Email
+          </label>
+          <div className="relative">
+            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline">
+              mail
+            </span>
+            <input
+              id="email"
+              type="email"
+              required
+              autoComplete="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className={inputClasses}
+              placeholder="you@example.com"
+            />
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <label className="block text-label-md font-medium text-on-surface" htmlFor="password">
+            Password
+          </label>
+          <div className="relative">
+            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline">
+              lock
+            </span>
+            <input
+              id="password"
+              type={showPassword ? 'text' : 'password'}
+              required
+              minLength={6}
+              autoComplete="new-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className={`${inputClasses} pr-10`}
+              placeholder="••••••••"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((v) => !v)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-outline transition-colors hover:text-on-surface"
+              aria-label={showPassword ? 'Hide password' : 'Show password'}
+            >
+              <span className="material-symbols-outlined">{showPassword ? 'visibility_off' : 'visibility'}</span>
+            </button>
+          </div>
+          <p className="text-label-sm text-text-secondary">At least 6 characters.</p>
+        </div>
+
+        {error && (
+          <p role="alert" className="rounded-lg bg-danger-container px-3 py-2 text-body-sm text-danger">
+            {error}
+          </p>
+        )}
+
+        <button
+          type="submit"
+          disabled={submitting}
+          className="flex w-full items-center justify-center gap-3 rounded-lg bg-primary py-3 text-label-md font-semibold text-on-primary shadow-sm transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-50"
+        >
+          {submitting ? 'Creating account…' : 'Create account'}
+          {!submitting && <span className="material-symbols-outlined text-base">arrow_forward</span>}
         </button>
       </form>
-      <p>
-        Already have an account? <Link to="/login">Log in</Link>
+
+      <p className="mt-8 text-center text-body-sm text-text-secondary">
+        Already have an account?{' '}
+        <Link to="/login" className="font-semibold text-primary hover:underline">
+          Log in
+        </Link>
       </p>
-    </section>
+    </AuthShell>
   );
 }

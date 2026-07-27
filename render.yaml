@@ -1,0 +1,38 @@
+# Render Blueprint (ADR-0007, PHASE1_PLAN.md §3a) -- one free Web Service
+# running the Dockerfile at the repo root, which starts the Express API
+# and the in-process LiveKit transcription agent together (see §3a for
+# why they must share one container on the free tier's 750 instance-
+# hour/month allowance).
+#
+# Using this file: Render dashboard -> New -> Blueprint -> pick this repo.
+# Render reads this automatically and creates the service below; you'll
+# be prompted to fill in every `sync: false` env var (secrets never live
+# in this file or in git -- see docs/engineering/DEPLOYMENT.md for the
+# full list and where each value comes from).
+services:
+  - type: web
+    name: placeme-server
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: LIVEKIT_URL
+        sync: false
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false
+      - key: ASSEMBLYAI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-3.6-flash

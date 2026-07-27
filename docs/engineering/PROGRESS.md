@@ -2,13 +2,295 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-07-26
+**Last updated:** 2026-07-27 (pilot-readiness pass session)
 
 ## Current phase
+**Pilot-readiness pass, 2026-07-27.** The user asked to make the app
+"pre-production ready apart from deploying — complete rest [that's] in
+your hand." Found a pilot-readiness audit already sitting in an open PR
+(`docs/pilot-readiness-audit`, #48 — apparently produced by an earlier,
+un-recorded session; this file never mentioned it) that verdicted **not
+pilot-ready, ~5–8 working days away**, with a punch list split into
+deploy-dependent blockers (B1/B3/B4/B7 — need dashboard access or real
+humans, not attempted) and everything else. This session cleared the
+backlog and worked the non-deploy items:
+- **Merged the whole stacked backlog into `dev`:** PR #42 (UI redesign,
+  carrying the already-recorded #43/#44) → PR #46 (flows/bug-fix pass,
+  rebased off the squashed #42 with `git rebase --onto`) → PR #47
+  (pr-review skill) → PR #48 (the pilot-readiness audit itself) → PR #49
+  (business planning docs — governance, GTM, revenue, market strategy, CEO
+  dashboard spec). **147 tests green on `dev`** after.
+- **S3 (Node 20 dev footgun):** `apps/server`'s `engines: >=22.0.0` was
+  declared but never enforced — Node 20 silently passed `npm install` and
+  only broke on the first live Supabase query at runtime. Root `engines` +
+  a new root `.npmrc` (`engine-strict=true`) turns this into a loud
+  install-time failure; verified both directions (Node 20 → `EBADENGINE`,
+  Node 22 → clean install). PR #50.
+- **S2 (dead credential):** removed the unused `DEEPGRAM_API_KEY` from
+  this environment's `apps/server/.env` (nothing under `apps/server`
+  references it — Deepgram is spike-only, ADR-0002 superseded it with
+  AssemblyAI). ⚠️ **The key itself still needs revoking in the Deepgram
+  dashboard — user action, not done here.** Also documented
+  `SUPABASE_ANON_KEY` in `.env.example`, which `test/
+  historyRlsIsolation.test.js` needs but which a fresh clone had no way to
+  discover (the test just silently skips without it). PR #51.
+- **B5 (random-match dead end):** random matching was `HomePage`'s third
+  top-level action, but only forms a room when ≥3 students are online at
+  once — rare at pilot scale, so a student's first try was often an
+  infinite queue. New `DELETE /api/rooms/match` (TDD RED→GREEN, idempotent
+  — a no-op on a non-queued user) lets `MatchPage` leave the queue on
+  unmount, so a student who navigates away can't later be matched into a
+  room they're not watching (which would've wasted the whole group's
+  session, not just theirs). `MatchPage` now gives up after 90s with an
+  honest "nobody else is free right now" state pointing at "start a room
+  and share the code" instead of spinning forever. `HomePage` demotes
+  random match to a secondary link under the two paths that always work.
+  **Verified in a real browser** (Playwright, headless Chromium, fresh
+  signup → home → queue → soft landing after timeout, screenshots
+  reviewed, zero console errors). PR #52.
+- **B6 (no DPDP deletion path):** despite the consent copy already
+  promising transcript+feedback are kept only "until you delete your
+  account," no delete path existed anywhere. Found the schema already has
+  every identifying table (`profiles`, `consents`, `room_participants`,
+  `transcript_lines`, `feedback`, `matchmaking_queue`) wired `on delete
+  cascade` back to `auth.users`, and rooms a student *created* wired `on
+  delete set null` — so deleting the `auth.users` row via Supabase's admin
+  API cascades correctly with no orphaned data and no collateral damage to
+  groupmates' history. Core, TDD RED→GREEN: `domain/
+  accountDeletion.js`'s `findUserByEmail()` (paginates `listUsers` since
+  this `supabase-js` version has no `getUserByEmail` — wrong-account risk
+  if this lookup is wrong, so it's tested even though the CLI around it
+  isn't). `scripts/delete-account.js` — dry run by default, `--confirm` to
+  actually delete. `docs/engineering/ACCOUNT_DELETION.md` is the process a
+  founder follows. **Verified for real against the live Supabase
+  project:** ran the dry run and then `--confirm` against a genuine test
+  account, confirmed a follow-up dry run correctly reported no account
+  found. PR #53.
+- **S1 (feedback has no usefulness signal):** the only evidence PlaceMe's
+  feedback is actually useful was one founder's opinion. Core, TDD
+  RED→GREEN: `GET /feedback/mine` now surfaces a prior rating; new `PATCH
+  /feedback/mine/rating` (404 if there's nothing to rate yet, 400 if
+  `rating` isn't a boolean, otherwise records it scoped to the caller's
+  own row — `feedback` has no client-writable RLS policy and none was
+  added; ownership is checked in the route, same pattern as every other
+  mutation in `api/rooms.js`). New web `components/FeedbackRating.jsx` —
+  thumb saves immediately on click, an optional one-line reason saves on
+  blur/Enter. **PR #54 is OPEN, MERGE HELD — see the flag below.**
+- **B2 (zero instrumentation):** `supabase/queries/ceo-dashboard-metrics.sql`
+  packages the four Tier-1 SQL queries from the newly-merged
+  `business/ceo-dashboard.md` §4 (WAD, room fill rate, session-2 return,
+  broken-session rate) as paste-and-run for the Monday dashboard ritual —
+  verified every referenced column exists against the live schema (no
+  raw-SQL execution path available to actually run them here). New
+  `apps/web/src/lib/analytics.js` wires the five Tier-2 PostHog events
+  (`page_viewed`, `signup_started`/`completed`, `consent_viewed`/`granted`,
+  `session_join_failed`) — **no-op with `VITE_POSTHOG_KEY` unset**,
+  confirmed `posthog-js` is fully dead-code-eliminated from the production
+  bundle in that case. Flagged, not decided: the existing consent copy
+  covers mic/Gemini processing, not general behavioural analytics — worth
+  a look before actually setting the key live. Verified in a real browser:
+  signup + consent flows complete with zero console errors, key unset. PR
+  #55, merged.
+
+### ⚠️ PR #54 (S1, feedback rating) is open but NOT merged — read before merging
+Unlike every prior migration in this project (which only added tables new
+endpoints touched), `0007_feedback_rating.sql` adds columns
+(`rating`/`rating_reason`) that an **already-working, already-live**
+endpoint (`GET /api/rooms/:id/feedback/mine`) now selects. Verified live
+against this environment's Supabase project: merging PR #54's server code
+without running the migration first makes that endpoint 500 with `column
+feedback.rating does not exist`. **Run
+`supabase/migrations/0007_feedback_rating.sql` in the Supabase SQL Editor
+first**, same manual step as every other migration, then merge #54. I
+don't have raw-SQL access to the project to run it myself.
+
+### What's still genuinely open (needs the user or real deploy — not attempted)
+Everything else in `PILOT_READINESS.md`'s blocker list needs dashboard
+access or real people, both outside what this session could do:
+- **B1 (deploy):** Render Blueprint (`render.yaml` ready) + Cloudflare
+  Pages project + `RENDER_APP_URL` repo variable — all need the user's
+  dashboard access.
+- **B3:** Supabase "Confirm email" is still OFF — a dashboard toggle.
+- **B4 (highest technical risk):** Render free-tier sleep vs. the
+  transcription agent has never been tested against a real deploy — needs
+  B1 done first.
+- **B7:** guardrail #1's human-verification gate for the UI-redesign +
+  live-room-UX + flows-fix work (PRs #42/#43/#44/#46) has still never run
+  with real multiple humans on real devices — everything so far is
+  solo/headless Playwright verification, which is real evidence but not a
+  substitute for the guardrail. Needs a real multi-device walkthrough
+  before this body of UI work can be called done per guardrail #1.
+
+Once #54 merges (after the migration runs) and B1–B4/B7 are cleared, this
+project should be at or very close to the audit's "Week-0 plan" endpoint.
+
+## Earlier phases
+
+### UI/flows fix pass (superseded — now merged, see Current phase above)
+**2026-07-27, originally recorded as "uncommitted."** This work was
+subsequently committed, branched (`feature/ui-flows-fixes`), opened as PR
+#46, and merged into `dev` in the pilot-readiness pass above. Kept here
+for the detailed by-file breakdown. What changed:
+- **Server (TDD RED→GREEN, 130/130 green):** `GET /api/rooms/:id/status`
+  now requires the caller to be seated in the room (403 otherwise) — that
+  route is *not* read-only (it lazily flips an expired room to `ended` and
+  dispatches feedback generation), so anyone holding a room id could drive
+  another group's session state and read their topic. It also now returns
+  `code`, `topicText`, `durationSeconds`, and `isCreator`; `getRoomById`
+  embeds `topics(text)` on the existing query (no extra round trip), so
+  the lobby survives a browser refresh — previously the room code, topic
+  heading, and creator-only start button all came from react-router
+  navigation state and vanished on reload.
+- **Web flows (the gaps flagged by the previous session's UI review):**
+  catch-all `*` route → new `NotFoundPage`; `ProtectedRoute`/`ConsentPage`
+  render a real `LoadingScreen` instead of a blank white page; a failed
+  consent-status load is now its own retry card instead of letting a
+  student agree into a second failure; the raw seconds duration input is
+  now a minutes picker (`components/DurationPicker.jsx`, 5/10/15/20); the
+  dev "Backend connection: …" diagnostic is gone from `HomePage`,
+  replaced by a plain-language offline banner; a consent-blocked mic error
+  in the live room now links to `/consent` instead of showing a raw
+  `consent_required` string.
+- **Real bugs fixed:** `LiveRoomAudio`'s join effect was keyed on the
+  Supabase `session` object, so a mid-discussion token refresh would have
+  torn down and rejoined the LiveKit room (reads through a ref now, keyed
+  on `roomId` alone); the lobby polled `/status` forever after a room
+  ended; the ended view showed "Loading…" permanently if the transcript
+  fetch failed; feedback polling never gave up (now bounded, ~2 min).
+- **Perf/system:** `LiveRoomAudio` is `React.lazy`-loaded, splitting
+  livekit-client into its own chunk — main bundle 976 kB → **483 kB**
+  (136 kB gzip); `AuthContext`'s value is memoized; dark mode via
+  `prefers-color-scheme` token overrides in `index.css`; global
+  `:focus-visible` rings (several controls set `outline: none` with no
+  replacement) and a `prefers-reduced-motion` block; `display=block` on
+  the Material Symbols font (icons rendered as raw ligature text —
+  "mic_off", "arrow_forward" — while the font loaded); dead
+  `src/App.css`, `public/icons.svg`, and `src/assets/*` deleted.
+- **Not done / still open:** self-hosted fonts and a shared
+  `components/ui/` primitives layer (both recommended by the earlier
+  review) were skipped. **No browser verification this session** —
+  Playwright is not installed in this environment (the previous session
+  used a global install that isn't present here), so `npm run build` +
+  `npm run lint` (both clean) and 130/130 server tests are the only
+  evidence. Dark mode and the new flows have never been looked at by a
+  human. Guardrail #1's multi-device human gate for the live-room UX
+  remains outstanding, unchanged from the previous session.
+
+### Post-W8 UI polish (2026-07-27, now fully merged via the pilot-readiness pass)
+Between W8 (deploy/operate, done) and
+whatever the user picks up next, this session ran a UI review of the app
+(`feature/ui-redesign-refresh`, PR #42, still open against `dev`) and fixed
+the highest-value gap it found: the live room screen showed almost nothing
+during an actual GD. Two stacked branches, both merged into
+`feature/ui-redesign-refresh` (not `dev` yet, since #42 itself hasn't
+merged):
+- **`feature/live-room-participants`, PR #43 (merged)** — core, TDD
+  RED→GREEN. `GET /api/rooms/:id/status` now includes `endsAt` (ms) once a
+  room has started; new `GET /api/rooms/:id/participants` and
+  `GET /api/rooms/:id/transcript` resolve a room's seated user ids to
+  profile display names (reusing the same participants+profiles join the
+  W6 feedback worker already does), both gated on actually being seated in
+  the room. 127/127 server tests green (Node 22).
+- **`feature/live-room-ux`, PR #44 (merged)** — peripheral, no test-first
+  ceremony (same precedent as the existing Login/Signup/Consent pages).
+  `LiveRoomAudio.jsx` now shows real display names in captions (was a
+  truncated user id), a participant list with an active-speaker dot
+  (`RoomEvent.ActiveSpeakersChanged`), a mute/unmute button, `role="log"
+  aria-live="polite"` + auto-scroll on captions, and a real bug fix: the
+  caption list's `key={i}` over a sliding window reused the wrong DOM
+  nodes as it slid — now a monotonic id per caption. `LobbyPage.jsx` shows
+  a countdown to the server-authoritative `endsAt` while live, and the
+  attributed transcript alongside feedback once ended. `HistoryPage.jsx`
+  gets a lazy per-session "View transcript" toggle. New shared
+  `components/TranscriptList.jsx`.
+- **Verified solo via Playwright** (no `chromium-cli` in this environment;
+  used the user's globally-installed `playwright` package directly,
+  headless Chromium with `--use-fake-ui-for-media-stream
+  --use-fake-device-for-media-stream` + granted mic permission) against
+  both dev servers: signup → consent → create room → start → live →
+  ended → history. Zero console errors; countdown, participant list, mute
+  button, and transcript panels (including the correct empty-transcript
+  fallback text) all rendered correctly. **Found, not fixed, this
+  session:** this dev environment's `apps/server/.env` is missing
+  `GEMINI_API_KEY` (feedback generation logged `Missing GEMINI_API_KEY`
+  and the UI correctly showed "Generating your feedback…" indefinitely) —
+  a pre-existing environment gap, not a regression from this session; the
+  key exists in whatever environment W6's original human-verification
+  session ran in, just not in this one. Whoever picks this up next should
+  add it here too if further live testing is needed.
+- **Guardrail #1 still outstanding for this UI work**, same as W5/W6's
+  pattern of merging code first and running the human gate in a follow-up
+  session: multi-speaker audibility and attribution weren't exercised by
+  this solo/headless run (a fake audio device produces no real speech).
+  Needs a real multi-device walkthrough, same shape as the earlier W5/W6
+  sessions, before this can be called fully done.
+- **Not done in this session** (flagged, from the same UI review, for
+  whoever picks this up next): the reviewed "flows" gaps (consent-error
+  dead-end UX, no catch-all route, blank-screen loading states, raw
+  seconds duration input, dev diagnostics leaking to students on
+  `HomePage`) and "system-level" cleanup (dark mode, a shared
+  `components/ui/` primitives layer, self-hosted fonts, focus-visible
+  rings, dead `App.css`/`public/icons.svg`) were recommended as two
+  further follow-up branches, not attempted here.
+
+### W8 and earlier
+**W8 (Deploy & operate) — code/config complete, 2026-07-26; actual deploy
+still needs the user's dashboard access.** Four PRs merged into `dev`
+(#36–#39, plus a docs PR #40): the agent-worker dispatch health tracker
+(`domain/agentWorkerStatus.js`, core/tests-first, exposed at
+`GET /health/agent`), `render.yaml` (Render Blueprint), the GitHub
+Actions keep-alive + agent-health-check workflow, and
+`docs/engineering/DEPLOYMENT.md` (the actual how-to + secrets checklist).
+Also found and fixed a real pre-existing gap: `ci.yml` only triggered on
+`main`, so **no task PR merged into `dev` had ever actually run CI**
+before this session — fixed and verified live on its own PR. **121/121
+server tests green.** Full detail in `PHASE1_PLAN.md`'s W8 section. What's
+left is not more code — see "What's next" below.
+
+**W7 (Session history) — DONE, 2026-07-26 (previous session).** Found and
+fixed a real RLS recursion bug in the process, history list/API/UI built
+and verified against the real running server. Both branches' PRs (#33,
+#34) opened and merged.
+
 **Phase 1 build — in progress.** Pre-flight P1 + P2 done; W1 (Foundation &
 scaffolding) done 2026-07-25; W2 (Accounts) done 2026-07-26; **W3 (Consent)
-— DONE 2026-07-26**, human-verification walkthrough passed. **Next: W4 —
-Topics + rooms + matching** — see "What's next" below.
+— DONE 2026-07-26**, human-verification walkthrough passed. **W6 (Feedback
+generation) — DONE, 2026-07-26** (see below, after W5 — built out of order
+relative to this file's earlier draft since W5 was already DONE and W6 was
+next per `PHASE1_PLAN.md`). Guardrail #1's human gate passed: two real
+devices/accounts over Cloudflare tunnels, a real room, real feedback read
+and confirmed excellent. **W4 (Topics +
+rooms + matching) — code complete 2026-07-26.** `0003_topics_rooms_matching
+.sql` is now confirmed run against the live Supabase project (a real
+policy-ordering bug was hit and fixed along the way — see the migration
+file's history). No Google AI Studio key exists yet so Gemini topic
+generation has never been smoke-tested live, and the room/matching UI has
+not been walked through in a real browser — both still open. **W5 (Live
+room + transcription + attribution) — DONE, 2026-07-26.** All six units
+(transcript schema, attribution mapping, LiveKit join-token route, agent
+worker, web room UI, regression harness) built, tested (78/78 server tests
+green), and merged to `dev` across 6 small PRs (#16–#21). The bot
+regression harness passed against live LiveKit + AssemblyAI credentials
+(3/3 speakers, zero cross-speaker leakage) and both migrations
+(`0003`/`0004`) are confirmed run against the live Supabase project.
+**Guardrail #1's human-verification gate itself then ran in a follow-up
+session (real people, real devices, real room, joining by room code):
+participants could hear each other, transcription quality was good, and
+— the specific thing the gate requires — each speaker's words were
+confirmed attributed to the correct person.** Two real bugs surfaced and
+were fixed during that walkthrough (see "What's done" for detail): remote
+audio tracks were never attached to a playable element on the web client
+(mic worked, but nobody could hear anyone), and the transcription agent's
+LiveKit token had `canPublishData: false` while the code tried to
+broadcast live captions over data messages, so captions silently never
+rendered even when transcription itself was working server-side. **Noted,
+not blocking:** transcription is English-only (expected — not
+investigated further this session), and both STT paths have latency the
+user wants improved, AssemblyAI noticeably more than Deepgram; one root
+cause was found and fixed (see below), the rest is now down to an
+explicit accuracy/latency trade-off that can be revisited if it's still
+not fast enough. **W6 (Feedback generation) — DONE, 2026-07-26; see
+"What's done" below for detail. Next: W7 — Session history.**
 `docs/engineering/PHASE1_PLAN.md` is the durable build plan; work from that
 file, this file stays the "where are we right now" record.
 
@@ -101,6 +383,140 @@ a fresh clone/session hits the same "Cannot find package" error. Also added
 `For_Developers/CONTRIBUTING.md` and `npm run lint`/`npm run
 audit:rls`/`design.md §14`, none of which exist in this repo yet; left
 as-is pending user follow-up.
+- **W4 (Topics + rooms + matching) — core units done, 2026-07-26.** Each
+built and merged into `dev` as its own small task branch/PR per
+`BRANCHING.md`, one at a time, TDD RED→GREEN commits per unit:
+  - **Room code generation** (`feature/w4-room-codes`, PR #5) —
+    `apps/server/src/domain/roomCode.js`. `generateRoomCode()` picks a
+    fixed-length code from an alphabet that excludes visually ambiguous
+    characters (0/O/1/I/L — this is the shareable-link join path, so a
+    misread/mistyped code matters). `generateUniqueRoomCode(codeExists, {
+    maxAttempts })` retries on collision with an injected DB-check
+    function (testable with no live DB) and throws rather than looping
+    forever if attempts are exhausted. 6 tests.
+  - **Matchmaking function** (`feature/w4-matchmaking`, PR #6) —
+    `apps/server/src/domain/matchmaking.js`. `matchmake(queue, joiner, {
+    minGroupSize, maxGroupSize })` is pure — returns `{type: 'queued'}`
+    below threshold or `{type: 'matched', members, remainingQueue}` once
+    enough candidates exist, FIFO-capped at `maxGroupSize`. Deliberately
+    does **not** hardcode the actual group-size numbers (guardrail #10) —
+    those are a product decision still open, to be made when the
+    persistence/wiring layer is built (see "What's next"). Queue storage
+    itself is a separate concern, also still open (§8 of
+    `PHASE1_PLAN.md`). 5 tests.
+  - **Session state machine** (`feature/w4-session-state-machine`, PR #7)
+    — `apps/server/src/domain/sessionStateMachine.js`. `startSession`/
+    `endSession`/`isTimerExpired`: waiting → live → ended, illegal
+    transitions rejected. Timer is server-authoritative by construction —
+    every function takes `now` as an argument rather than reading a clock
+    or trusting any client timestamp; `isTimerExpired` is what the server
+    polls to decide when to end a session, no client vote. 7 tests.
+  - All 35 server tests green after these three merges (verified after
+    each PR, no regressions).
+  - **Queue storage + group size — DECIDED 2026-07-26** (per direct user
+    confirmation): matchmaking queue is **DB-backed** (`matchmaking_queue`
+    table, survives Render restarts/sleep). Group-size numbers set as an
+    interim default, `minGroupSize: 3, maxGroupSize: 6`, anchored to the AI
+    Voice Practice mode's stated participant range since the product doc
+    has no explicit number for real-human multiplayer matching. Recorded
+    in `PHASE1_PLAN.md` §8.
+  - **DB schema** (`feature/w4-topics-rooms-schema`, PR #10) —
+    `supabase/migrations/0003_topics_rooms_matching.sql`: `topics`,
+    `rooms`, `room_participants`, `matchmaking_queue`, all with RLS. **Not
+    yet run against the live Supabase project** — needs the same manual
+    SQL Editor step as `0001`/`0002`.
+  - **Gemini topic generation + custom topic entry**
+    (`feature/w4-gemini-topics`, PR #11) — `src/domain/topicPrompt.js`
+    (pure prompt/response handling), `src/llm/geminiClient.js` (thin fetch
+    wrapper, injectable), `POST /api/topics/custom` and `POST
+    /api/topics/generate`. **Model note:** ADR-0008 picked
+    `gemini-2.5-flash`; a live check this session
+    (ai.google.dev/gemini-api/docs/deprecations) showed it's slated to
+    shut down 2026-10-16, with Google's own recommended replacement being
+    `gemini-3.6-flash` (GA, free tier, launched 2026-07-21) — used as the
+    new default, overridable via `GEMINI_MODEL`, per `PHASE1_PLAN.md`'s own
+    instruction to confirm the current model at build time. **Still
+    blocked:** no Google AI Studio key exists yet (`GEMINI_API_KEY` not in
+    `.env`, pre-flight P3) — this code is unit-tested with an injected
+    fetch/generate function, never smoke-tested against the live API.
+  - **Rooms/matching API** (`feature/w4-rooms-api`, PR #12; `GET
+    /api/rooms/mine/active` added in PR #13) — `src/api/rooms.js` wires all
+    three core functions to persistence: create-by-code, join-by-code,
+    random-match (generates a topic + creates the room + seats every
+    member + clears the queue), creator-only start, and a status-poll
+    endpoint that lazily flips a room to `ended` on read once the server
+    clock says the timer's up — whichever client polls first writes it,
+    so every other poller sees the same answer. A real gap surfaced while
+    building this: a student sitting in the queue had no way to learn that
+    someone else's request completed a match including them (their queue
+    row is just gone) — fixed with `GET /api/rooms/mine/active`
+    (`getActiveRoomForUser`, `db/roomParticipants.js`), tests-first.
+  - **Topic-picker + lobby UI** (`feature/w4-room-ui`, PR #13, peripheral —
+    no test-first ceremony, same precedent as the existing Login/Signup/
+    Consent screens) — `NewRoomPage`, `JoinRoomPage`, `MatchPage` (polls
+    `/api/rooms/mine/active` while queued), `LobbyPage` (polls room
+    status, share code, creator-only start button). `npm run build`/`lint`
+    clean on `apps/web`; dev server boots and serves without crashing.
+    **Not yet walked through in a real browser.**
+  - **64/64 server tests green** after all of the above (verified after
+    each PR, no regressions).
+  - **What's genuinely still open before W4 can be called done:** (1)
+    ~~run `0003_topics_rooms_matching.sql` against the live Supabase
+    project~~ **DONE** — user confirmed it's applied (a policy-ordering
+    bug was hit and fixed in the migration file along the way); (2)
+    provision a Google AI Studio key and smoke-test topic generation
+    live; (3) a human walkthrough in a real browser — create a room, share
+    the code, a second session joins, creator starts it, status reflects
+    live then ended; and separately the random-match path with enough
+    sessions to cross `minGroupSize`.
+- **W5 (Live room + transcription + attribution) — code complete,
+  2026-07-26.** Six units, each its own branch/PR into `dev` per
+  `BRANCHING.md` (#16–#21). Full detail in `PHASE1_PLAN.md`'s W5 section;
+  summary here:
+  - `transcript_lines` schema + db wrapper (own-row RLS; **confirmed run**
+    against the live Supabase project, 2026-07-26 — same manual SQL
+    Editor step as 0001–0003).
+  - **Attribution mapping (core, tests-first):** `domain/attribution.js`'s
+    `resolveSpeakerUserId()` — pure, returns `null` (never a guess) on no
+    match. 4 tests.
+  - **LiveKit join-token route (tests-first):** `POST
+    /api/rooms/:id/token`, gated on the W3 consent gate + a new
+    `isParticipant()` check. Token identity is the student's own
+    `user_id` — already what `room_participants.livekit_identity` stores
+    from W4 — so attribution needs no separate mapping table. 5 tests.
+  - **Agent worker:** `agent/handleTranscript.js`'s
+    `persistAttributedLine()` is the core, tests-first glue between
+    attribution and persistence (3 tests). Peripheral pieces ported from
+    the Phase 0a/P2 spike (`agent/assemblyai.js`, `agent/transcriber.js`)
+    plus new orchestration (`agent/roomAgent.js`): `POST
+    /api/rooms/:id/start` dispatches transcription fire-and-forget right
+    after the room goes live; a dispatch failure logs but never fails the
+    start response. The agent self-disconnects once `durationSeconds`
+    elapses — server-authoritative, no client vote.
+  - **Web room UI (peripheral):** `LobbyPage`'s `live` branch now joins
+    the real LiveKit room and shows live captions. `npm run build`/`lint`
+    clean.
+  - **Regression harness:** `npm run regression:room` exercises the real
+    production agent pipeline (not just the raw LiveKit/AssemblyAI layer)
+    with bots and zero humans. **Ran once against live credentials: PASS**
+    — 3/3 speakers transcribed correctly, zero cross-speaker leakage,
+    latency consistent with the original spike.
+  - **78/78 server tests green** after all six units.
+  - ~~run `0004_transcript_lines.sql` against the live Supabase project~~
+    **DONE, 2026-07-26** — user confirmed it's applied.
+  - **Guardrail #1's human-verification gate — DONE, follow-up session,
+    2026-07-26.** Multiple real people, real devices, a real room, joined
+    by room code: speech confirmed attributed to the correct speaker. Two
+    real bugs surfaced and were fixed in that session — remote audio was
+    never attached to a playable element (`LiveRoomAudio.jsx`, mic worked
+    but nobody could hear anyone), and the transcription agent's LiveKit
+    token had `canPublishData: false` while trying to `publishData(...)`
+    live captions (`roomAgent.js`), so captions silently never rendered.
+    Both fixed; 78/78 server tests still green after. **W5 is DONE.** User
+    also flagged transcription latency (AssemblyAI slower than the earlier
+    Deepgram spike) and English-only transcription — see "What's next" for
+    the latency root-cause and fix; English-only wasn't investigated
+    further this session.
 
 ## Confirmed inputs (user, 2026-07-24)
 | Dimension | Decision |
@@ -115,6 +531,29 @@ as-is pending user follow-up.
 | Codebase | Fully greenfield; no infra/vendor commitments |
 
 ## What's next
+**Immediate next steps from the 2026-07-27 pilot-readiness pass** (see
+"Current phase" above for full detail):
+1. **Run `supabase/migrations/0007_feedback_rating.sql`** in the Supabase
+   SQL Editor, then merge PR #54 (S1, feedback rating) — held open
+   specifically because merging its server code first would 500 the
+   already-working `GET /feedback/mine` endpoint.
+2. **Deploy** (B1): Render Blueprint (`render.yaml` is ready) + Cloudflare
+   Pages project + set the `RENDER_APP_URL` repo variable. Needs the
+   user's dashboard access, not attempted this session.
+3. **Turn Supabase's "Confirm email" back on** (B3) — a dashboard toggle,
+   currently OFF since W2 testing.
+4. **B4, the highest technical risk named in `PILOT_READINESS.md`:** once
+   deployed, let it sit idle >15 min, then confirm a room started right
+   after still gets a transcription agent (Render free-tier sleep vs. the
+   agent worker). Silent total failure if this doesn't hold.
+5. **Guardrail #1's human-verification gate (B7)** for the whole UI-
+   redesign + live-room-UX + flows-fix body of work (PRs #42/#43/#44/#46)
+   — still only solo/headless-verified, never run with real multiple
+   humans on real devices.
+6. `GEMINI_API_KEY` is confirmed present in this environment now (the
+   pilot-readiness audit, PR #48, flagged and corrected an earlier stale
+   note here saying otherwise).
+
 **Phase 1 is underway. Follow `docs/engineering/PHASE1_PLAN.md` §5 from
 here** — one workstream's core units at a time (guardrail #9). Pre-flight
 recap: P1 and P2 done; Supabase (part of P3) now provisioned and wired
@@ -124,11 +563,186 @@ workstream that needs them. W1 and W2 are both done — see "What's done"
 above.
 
 **W3 — Consent (guardrail #3 — hard gate): DONE, 2026-07-26.** Migration
-run, human walkthrough passed (see "What's done" above). PR #1
-(`feature/w3-consent` → `dev`) merge is the last step, then move to **W4 —
-Topics + rooms + matching**. See PHASE1_PLAN.md's W4 section for that
-workstream's scope (Gemini topic generation, room codes, matchmaking,
-server-authoritative session timer).
+run, human walkthrough passed (see "What's done" above).
+
+**W4 — Topics + rooms + matching: code complete, 2026-07-26; verification
+remaining.** Everything named in `PHASE1_PLAN.md` §5 is built, tested, and
+merged (see "What's done" above for the full PR-by-PR breakdown: #5–#13).
+**What's left before this workstream can be called done:**
+1. ~~Run `supabase/migrations/0003_topics_rooms_matching.sql`~~ **DONE** —
+   confirmed applied to the live project.
+2. ~~Provision a Google AI Studio key, smoke-test `POST
+   /api/topics/generate` for real~~ **DONE, 2026-07-26** — live smoke test
+   of `generateTopic` passed (see W6's session entry above for detail).
+3. ~~A human walkthrough in a real browser: create a room, share the
+   code, a second session joins, the creator starts it, status reflects
+   `live` then `ended` for both sessions~~ **DONE, 2026-07-26** —
+   confirmed as a side effect of W6's human-verification walkthrough (two
+   real devices, two real accounts, room created, joined by code,
+   started, timer ended for both). **Still open:** the random-match path
+   specifically, with enough real sessions to cross `minGroupSize`
+   (currently 3) — the walkthrough so far only exercised code/link
+   joining.
+- **Done when** (per `PHASE1_PLAN.md` §5 W4): two browser sessions can
+  join the same room both by code and by random matching, and the timer
+  ends the session for everyone at the same moment. **Code/link path
+  confirmed; random-match path still needs a 3+-session live test.**
+
+**W5 — Live room + transcription + attribution: DONE.** Everything named
+in `PHASE1_PLAN.md` §5 W5 is built, tested (78/78), and merged (PRs
+#16–#21 — see "What's done" above for the per-unit breakdown). Both
+migrations are confirmed run against the live project, and guardrail #1's
+human-verification gate has now run for real: multiple real people, real
+devices, real room, joined by room code, and — the specific thing the
+gate requires — each person's speech was confirmed attributed to the
+correct speaker. **Two real bugs found and fixed during that walkthrough
+(this session):**
+1. `apps/web/src/rooms/LiveRoomAudio.jsx` enabled the local mic and
+   subscribed to the LiveKit room, but never attached any remote
+   participant's audio track to a playable element — so mic capture
+   worked but nobody could hear anyone else. Fixed: `RoomEvent
+   .TrackSubscribed` now calls `track.attach()` into a hidden container
+   (`TrackUnsubscribed` cleans it up).
+2. `apps/server/src/agent/roomAgent.js` minted the transcription agent's
+   LiveKit token with `canPublishData: false`, then called `room
+   .localParticipant.publishData(...)` to broadcast live captions —
+   permission mismatch, so captions silently never reached the browser
+   even when server-side transcription and DB persistence were working.
+   Fixed: `canPublishData: true`.
+- **Done when** (per `PHASE1_PLAN.md` §5 W5): multiple real people in a
+  real room on real devices confirm speech is attributed to the correct
+  speaker. **Confirmed 2026-07-26 — W5 is DONE.**
+
+**Latency, noted not blocking:** the user compared this session's
+AssemblyAI-based transcription against the earlier Deepgram spike and
+found AssemblyAI noticeably slower to finalize captions, on top of both
+having room to improve. One real, fixable cause: our Deepgram config
+explicitly finalizes after 300ms of silence (`endpointing: '300'` in
+`spike/src/deepgram.js`), while `apps/server/src/agent/assemblyai.js` was
+running on AssemblyAI's own defaults (`min_turn_silence` 400ms), plus
+AssemblyAI's v3 API requires ≥50ms of audio per message so we were
+buffering client frames up to `chunkMs = 100` before sending (Deepgram has
+no such minimum, so that path sent every ~10ms frame immediately). Fixed
+this session: `min_turn_silence` now explicitly set to `300` (matching
+Deepgram) and `chunkMs` lowered to `50` (AssemblyAI's own floor). Live
+sources consulted for the current parameter names/defaults (AssemblyAI's
+docs, since these are exactly the kind of numbers guardrail #6 says not to
+recall from training data) — see the AskUserQuestion exchange this session
+for the citations. **Trade-off flagged, not resolved:** AssemblyAI's own
+docs recommend the *opposite* direction (560ms) for multi-speaker
+captioning, to avoid splitting a turn on a mid-sentence pause — 300ms
+trades some of that safety margin for snappier captions, on the theory
+that GD Arena's fast back-and-forth matters more here. **Not yet
+re-verified live** — needs another real-room pass to confirm the tuning
+actually helped and didn't introduce new mid-sentence splitting.
+Transcription being English-only was also noted by the user but not
+investigated this session (not currently blocking — flag if multi-language
+support becomes a real requirement).
+
+**W6 — Feedback generation: DONE, 2026-07-26.** See
+`PHASE1_PLAN.md`'s W6 section for the full five-unit breakdown; summary:
+prompt assembly (core, `domain/feedbackPrompt.js`, 10 tests), the
+`feedback` table + db wrappers (peripheral, migration `0005_feedback.sql`),
+generation orchestration (core, `domain/feedbackGeneration.js`'s
+`generateFeedbackForRoom()` — isolates one student's Gemini failure so it
+can't lose the transcript or block anyone else's feedback, 5 tests),
+Gemini client + worker wiring (peripheral, dispatched fire-and-forget from
+the room-ended transition in `GET /api/rooms/:id/status`, same pattern as
+W5's `/start` → transcription dispatch), and a read endpoint +
+`LobbyPage` display so a human can actually see generated feedback.
+**102/102 server tests green**, `apps/web` build/lint clean. Built as a
+stacked branch chain (`w6-feedback-prompt` → `w6-feedback-schema` →
+`w6-feedback-generation` → `w6-feedback-worker` → `w6-progress-update`,
+plus an unrelated `chore/vite-allowed-hosts` for a pre-existing
+uncommitted change found sitting on `dev`) because `gh` CLI wasn't
+available at first in this session; once the user installed and
+authenticated it mid-session, all six PRs (#25–#30) were opened and merged
+into `dev` in order, so this is now fully on `dev`.
+
+**Both previously-open pre-conditions closed 2026-07-26 (later same
+session):** the user ran `0005_feedback.sql` in the Supabase SQL Editor and
+added a real `GEMINI_API_KEY` to `apps/server/.env`. **Live smoke test —
+PASS:** a one-off script (not committed) called the real Gemini API
+through both existing call sites with the real key — `generateTopic`
+(W4) returned a genuine GD topic, and `generateFeedback` (W6), given a
+synthetic 5-line multi-speaker transcript, returned a well-formed,
+specific, constructive, non-discouraging paragraph referencing the
+target student's actual contributions by name. This closes W4's
+previously-open "smoke-test topic generation live" item too.
+
+**Guardrail #1's human-verification gate for W6 — PASS, 2026-07-26 (later
+same session).** Two real devices, two real accounts, exposed over
+Cloudflare Quick Tunnels (same pattern as the earlier W5 human-verification
+session — `apps/web/vite.config.js`'s `allowedHosts: true` from
+`chore/vite-allowed-hosts` made this possible again): joined a real room by
+code, had a short real discussion, let the server-authoritative timer end
+the session, and watched each device's Lobby page go from "Generating your
+feedback…" to the real Gemini-generated paragraph. **User confirmed: "the
+feedback is excellent."** This is the specific thing guardrail #1 requires
+for a feedback feature — useful and non-discouraging tone, judged by a real
+human reading real output from a real session. **W6 is DONE.**
+
+**W7 — Session history: code complete, 2026-07-26 (later session).** Full
+detail in `PHASE1_PLAN.md`'s W7 section; summary: the core unit
+(`test/historyRlsIsolation.test.js`, two real Supabase Auth users proving
+"own history only" through actual Postgres RLS, not an app-level filter)
+**found a real production bug on its first run** — `rooms` and
+`room_participants`'s SELECT policies (from 0003) recursed infinitely for
+any authenticated-user query, because every existing app read of those
+tables goes through the server's RLS-bypassing service-role client, so
+this was the first thing to ever exercise the policies as a real user.
+Fixed via `supabase/migrations/0006_fix_room_participants_rls_recursion.sql`
+(a `SECURITY DEFINER` helper function) — **user ran it live, all 4
+isolation assertions now pass for real.** Peripheral: `domain/
+sessionHistory.js`'s `buildSessionHistory()`, three new scoped db reads,
+`GET /api/history/mine`, and `HistoryPage.jsx` (linked from `HomePage`).
+Verified against the real running server with a genuine Supabase user and
+real fixture data, not just mocks. **112/112 server tests green** (also
+reconfirmed directly on `dev` after merge), `apps/web` build/lint clean.
+**PR #33** (`feature/w7-history-rls-test` → `dev`) **and PR #34**
+(`feature/w7-session-history` → `feature/w7-history-rls-test`, stacked)
+**are both merged — W7 is fully on `dev`.** (`gh` CLI turned out to be
+installed and authenticated the whole time; it just wasn't on this
+session's tool `PATH` at first — see the `gh-cli-not-persistent` memory.)
+**One thing still open, not blocking further work:** `/history` hasn't
+been looked at by a human in an actual browser window — no Playwright/
+chromium-cli was available this session to screenshot it — worth a quick
+glance, though this isn't a guardrail #1 hard gate since history-viewing
+isn't itself a new mic/audio/attribution surface.
+
+**W8 — Deploy & operate: code/config complete, 2026-07-26.** Everything
+buildable without dashboard access is done and merged — see the "Current
+phase" section above and `PHASE1_PLAN.md`'s W8 section for the full
+breakdown. **What's left needs the user, not more code** (all documented
+step-by-step in `docs/engineering/DEPLOYMENT.md`):
+1. Create the actual Render Blueprint deploy (`render.yaml` is ready —
+   needs a Render account + the secrets checklist).
+2. Create the actual Cloudflare Pages project (needs a Cloudflare account
+   — build settings documented, including the monorepo build-command/
+   output-dir gotcha).
+3. Set the `RENDER_APP_URL` GitHub Actions repository variable once #1
+   is live, then confirm `keepalive.yml` gets a first green run.
+4. Pre-flight **P4**: after a real deploy exists, let it sit quiet
+   >15 minutes with no traffic, then confirm a room started right after
+   still gets a transcription agent (ADR-0007's "Revisit if" risk).
+5. Turn Supabase's "Confirm email" back **on** before real students use
+   the deployed app.
+6. The actual W8 "done when": a full end-to-end pass on the **deployed**
+   stack with real people — not local dev.
+
+Once those are done, Phase 1's full definition-of-done checklist
+(`PHASE1_PLAN.md` §7) can be walked top to bottom.
+
+**Note on how W5 got built this session:** at the user's direction
+(2026-07-26), task granularity changed mid-project — workstreams complex
+enough to have several named core/peripheral units (like W5) still get
+split into small per-unit branches/PRs, but small single-unit tasks no
+longer get artificially sub-divided (see the memory update, [[workstream-
+task-breakdown]]). Also worth knowing: two commits briefly landed
+directly on local `dev` by mistake during this session (guardrail #12
+slips) — both were caught before being pushed to `origin/dev` and moved
+onto their own branches before merging; no bad history reached the
+remote.
 
 **Carry-forward for whoever builds W4/later workstreams:** local dev now
 requires **Node 22+** (a root `.nvmrc` pins `22`; run `nvm use` — or
@@ -170,7 +784,17 @@ settle:**
 - rtc-node prints `lk-rtc` pino debug lines; set `NODE_ENV=production` to silence.
 - **STT (ADR-0002):** AssemblyAI's one-time trial credit will eventually run out; card-vs-fresh-trial-account is a build-phase decision (user already deferred this on 2026-07-25).
 - ~~LLM feedback generation (ADR-0008): free tier vs. paid tier decision~~ **DECIDED 2026-07-25** — free tier for now, paid tier later once funded. **New follow-up requirement:** consent flow must disclose free-tier processing before feedback generation ships — see W3 in "What's next". Don't build this feature without that disclosure added.
-- **Supabase "Confirm email" is currently OFF** (toggled 2026-07-26 for W2 testing — see PHASE1_PLAN.md's W2 section). **Must be turned back on before real students use the app** — right now anyone can sign up with any email, confirmed or not. Add to the W8 (deploy) pre-launch checklist.
+- **Supabase "Confirm email" is currently OFF** (toggled 2026-07-26 for W2 testing — see PHASE1_PLAN.md's W2 section). **Must be turned back on before real students use the app** — right now anyone can sign up with any email, confirmed or not. On the W8 pre-launch checklist in `DEPLOYMENT.md`.
+- ~~`GEMINI_API_KEY` still not provisioned~~ **DONE 2026-07-26** — user provisioned the key, live smoke test of both topic generation and feedback generation passed (see W6 entry above).
+- ~~W6's five branches need PRs opened and merged into `dev`~~ **DONE 2026-07-26** — `gh` CLI installed and authenticated mid-session; all six PRs (#25–#30) merged into `dev` in order.
+- ~~Guardrail #1's human-verification gate for W6~~ **PASS, 2026-07-26** — two real devices/accounts over Cloudflare tunnels, real room, real feedback confirmed excellent. **W6 is DONE.**
+- ~~W7's two branches need PRs opened and merged into `dev`~~ **DONE 2026-07-26** — PR #33 and PR #34 both merged; W7 confirmed fully on `dev` (112/112 tests green there too).
+- **`/history` hasn't been looked at by a human in a real browser yet** — no browser-automation tooling was available this session to screenshot it; build/lint and a real end-to-end API check (real Supabase user, real fixture data) both passed, but a quick human glance is still worth doing.
+- **W8 needs dashboard access the agent doesn't have:** Render account/Blueprint deploy, Cloudflare Pages project, and setting the `RENDER_APP_URL` repo variable are all still open — full checklist in `docs/engineering/DEPLOYMENT.md`. Not blocking further code work, but blocking the actual "real students, deployed" milestone.
+- **CI never ran on any merged task PR until this session** — `ci.yml` only triggered on `main`; fixed 2026-07-26 (verified live on the fix's own PR, #39). Worth knowing if past "green tests" claims in this file were ever based on CI rather than local `npm test` — they weren't; CI simply hadn't been exercised.
+- **PR #54 (S1, feedback rating) is open, not merged — `supabase/migrations/0007_feedback_rating.sql` must run first.** Merging the server code before the migration runs 500s the already-working `GET /api/rooms/:id/feedback/mine` endpoint (`column feedback.rating does not exist`, verified live). See "Current phase" above.
+- **DEEPGRAM_API_KEY still needs revoking in the Deepgram dashboard** — removed from this environment's `.env` (PR #51, S2) since nothing references it, but the key itself is a user action in Deepgram's console, not something this session could do.
+- **B1/B3/B4/B7 from `PILOT_READINESS.md` are still open** — deploy (Render + Cloudflare Pages + `RENDER_APP_URL`), the Supabase "Confirm email" toggle, the post-deploy Render-sleep-vs-agent-worker test, and guardrail #1's human-verification gate for the UI-redesign/live-room-UX/flows-fix body of work. All need dashboard access or real humans, not attempted this session — see "What's next" above.
 
 ## Deferred (not v1, tracked so they aren't forgotten)
 GD AI Voice Practice · JAM · Aptitude/Technical · 1-on-1 Roleplay · Drive Simulator · payments · notifications/SMS/push · analytics · advanced observability.

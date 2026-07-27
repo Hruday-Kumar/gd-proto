@@ -1,0 +1,64 @@
+// Router-level tests for topic creation (W4). requireAuth is stubbed
+// (covered by test/authMiddleware.test.js) and the db/Gemini functions are
+// injected, so this stays fast and offline -- same pattern as
+// test/consentApi.test.js.
+import { describe, it, expect, vi } from 'vitest';
+import express from 'express';
+import request from 'supertest';
+import { createTopicsRouter } from '../src/api/topics.js';
+
+function stubAuth(req, _res, next) {
+  req.userId = 'user-123';
+  next();
+}
+
+function buildApp({ insertCustomTopic, insertGeneratedTopic, generateTopicFn }) {
+  const app = express();
+  app.use(express.json());
+  app.use(createTopicsRouter(stubAuth, { insertCustomTopic, insertGeneratedTopic, generateTopicFn }));
+  return app;
+}
+
+describe('POST /api/topics/custom', () => {
+  it('rejects a blank topic without calling the db', async () => {
+    const insertCustomTopic = vi.fn();
+    const app = buildApp({ insertCustomTopic, insertGeneratedTopic: vi.fn() });
+    const res = await request(app).post('/api/topics/custom').send({ text: '   ' });
+    expect(res.status).toBe(400);
+    expect(insertCustomTopic).not.toHaveBeenCalled();
+  });
+
+  it('inserts a custom topic for the authenticated user and returns it', async () => {
+    const insertCustomTopic = vi.fn().mockResolvedValue({ id: 't1', text: 'AI in education', source: 'custom' });
+    const app = buildApp({ insertCustomTopic, insertGeneratedTopic: vi.fn() });
+    const res = await request(app).post('/api/topics/custom').send({ text: 'AI in education', category: 'tech' });
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({ id: 't1', text: 'AI in education', source: 'custom' });
+    expect(insertCustomTopic).toHaveBeenCalledWith('user-123', { text: 'AI in education', category: 'tech', difficulty: undefined });
+  });
+});
+
+describe('POST /api/topics/generate', () => {
+  it('generates a topic via Gemini, persists it as an llm-sourced topic, and returns it', async () => {
+    const generateTopicFn = vi.fn().mockResolvedValue('Should remote work be the default?');
+    const insertGeneratedTopic = vi.fn().mockResolvedValue({ id: 't2', text: 'Should remote work be the default?', source: 'llm' });
+    const app = buildApp({ insertCustomTopic: vi.fn(), insertGeneratedTopic, generateTopicFn });
+    const res = await request(app).post('/api/topics/generate').send({ category: 'workplace', difficulty: 'medium' });
+    expect(res.status).toBe(201);
+    expect(res.body.source).toBe('llm');
+    expect(generateTopicFn).toHaveBeenCalledWith({ category: 'workplace', difficulty: 'medium' });
+    expect(insertGeneratedTopic).toHaveBeenCalledWith({
+      text: 'Should remote work be the default?',
+      category: 'workplace',
+      difficulty: 'medium',
+    });
+  });
+
+  it('propagates a Gemini failure as a 502 without silently losing it', async () => {
+    const generateTopicFn = vi.fn().mockRejectedValue(new Error('Gemini API error: 429 rate limited'));
+    const app = buildApp({ insertCustomTopic: vi.fn(), insertGeneratedTopic: vi.fn(), generateTopicFn });
+    const res = await request(app).post('/api/topics/generate').send({});
+    expect(res.status).toBe(502);
+    expect(res.body.error).toMatch(/gemini/i);
+  });
+});

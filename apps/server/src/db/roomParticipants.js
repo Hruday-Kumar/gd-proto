@@ -1,0 +1,72 @@
+// Supabase queries for the room_participants table (W4).
+import { getSupabase } from './supabase.js';
+
+// Idempotent on a duplicate join: the table has a unique(room_id, user_id)
+// constraint (Postgres code 23505), so rejoining a room a student is
+// already in is a no-op rather than an error -- callers (the join and
+// match routes) don't need to special-case "already a participant".
+export async function addParticipant(roomId, userId, livekitIdentity, { supabase = getSupabase() } = {}) {
+  const { error } = await supabase
+    .from('room_participants')
+    .insert({ room_id: roomId, user_id: userId, livekit_identity: livekitIdentity });
+  if (error && error.code !== '23505') throw error;
+}
+
+export async function listParticipants(roomId, { supabase = getSupabase() } = {}) {
+  const { data, error } = await supabase
+    .from('room_participants')
+    .select('user_id, livekit_identity, joined_at')
+    .eq('room_id', roomId);
+  if (error) throw error;
+  return data;
+}
+
+// Gate for the LiveKit token-mint route (W5): only someone already seated
+// in the room (creator or joiner) may get a token to join its audio room.
+export async function isParticipant(roomId, userId, { supabase = getSupabase() } = {}) {
+  const { data, error } = await supabase
+    .from('room_participants')
+    .select('user_id')
+    .eq('room_id', roomId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error) throw error;
+  return Boolean(data);
+}
+
+// Every room a student has ever been seated in (W7 session history) --
+// unlike getActiveRoomForUser below, includes ended rooms and isn't
+// limited to one result.
+export async function listRoomIdsForUser(userId, { supabase = getSupabase() } = {}) {
+  const { data, error } = await supabase.from('room_participants').select('room_id').eq('user_id', userId);
+  if (error) throw error;
+  return data.map((row) => row.room_id);
+}
+
+// The student's most recent non-ended room, if any -- lets a queued
+// student (or anyone else) discover a room they're already seated in
+// without needing to know its id or code up front. Two queries rather
+// than a single joined one: simpler to read and correct at the pilot
+// scale where a student is in very few rooms at once.
+export async function getActiveRoomForUser(userId, { supabase = getSupabase() } = {}) {
+  const { data: participantRows, error: participantError } = await supabase
+    .from('room_participants')
+    .select('room_id')
+    .eq('user_id', userId);
+  if (participantError) throw participantError;
+  if (!participantRows.length) return null;
+
+  const { data, error } = await supabase
+    .from('rooms')
+    .select('id, code, status, created_at')
+    .in(
+      'id',
+      participantRows.map((row) => row.room_id)
+    )
+    .neq('status', 'ended')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}

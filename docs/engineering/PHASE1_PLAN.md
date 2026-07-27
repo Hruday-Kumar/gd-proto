@@ -328,30 +328,220 @@ speaker, transcript lines persisted attributed to the right `user_id`.
   real room on real devices, confirming speech is attributed to the correct
   speaker. Automated tests alone cannot close this workstream.
 
+**Status: code complete, 2026-07-26 — guardrail #1's human gate still
+open.** Six small units, each its own branch/PR into `dev` per
+`BRANCHING.md`:
+1. **`transcript_lines` schema + db wrapper** —
+   `supabase/migrations/0004_transcript_lines.sql` (own-row RLS; feedback
+   generation in W6 reads via the service-role key, which bypasses RLS) +
+   `db/transcriptLines.js`. **Confirmed run against the live Supabase
+   project, 2026-07-26.**
+2. **Attribution mapping (core, tests-first)** —
+   `domain/attribution.js`'s `resolveSpeakerUserId(participants,
+   livekitIdentity)`, pure, returns `null` (never a guess) on no match. 4
+   tests.
+3. **LiveKit join-token route (tests-first)** — `POST
+   /api/rooms/:id/token`, gated on the W3 consent gate + a new
+   `isParticipant()` check; 404 unknown room / 403 no consent / 403 not a
+   participant / 409 already ended / 200 mints. Token identity is the
+   student's own `user_id` (already what `room_participants
+   .livekit_identity` stores from W4), so attribution needs no separate
+   identity-mapping table. Added `livekit-server-sdk` +
+   `src/livekit/token.js` (ported from the validated spike). 5 tests.
+4. **Agent worker** — `agent/handleTranscript.js`'s
+   `persistAttributedLine()` (core, tests-first — the glue between
+   attribution and persistence, 3 tests) plus peripheral pieces ported
+   from the Phase 0a/P2 spike (`agent/assemblyai.js`,
+   `agent/transcriber.js`, now also reporting each turn's own
+   `startedAtMs`/`endedAtMs`) and new orchestration
+   (`agent/roomAgent.js`): `POST /api/rooms/:id/start` dispatches
+   `startTranscriptionForRoom()` fire-and-forget right after flipping the
+   room live — a dispatch failure logs but never fails the start response
+   (room still goes live for participants; a dead agent is a silent
+   failure mode flagged for W8 monitoring, per ADR-0007's Consequences).
+   The agent self-disconnects once `durationSeconds` elapses (+ a 4s
+   flush grace) — server-authoritative, no client vote. Added
+   `@livekit/rtc-node` + `ws` (both already validated in the spike). 2
+   more wiring tests on the `/start` route.
+5. **Web room UI (peripheral)** — `LobbyPage`'s `live` branch now renders
+   `LiveRoomAudio.jsx`: fetches a token from the gated route, joins via
+   `livekit-client`, publishes the mic, and renders live captions from
+   the agent's `"transcript"` data broadcasts. `npm run build`/`lint`
+   clean on `apps/web`. **Not yet walked through in a real browser.**
+6. **Regression harness** — `npm run regression:room`
+   (`scripts/regression-room.js`) adapts the spike's bot-driven selftest
+   to exercise the *actual production entry point*
+   (`startTranscriptionForRoom`) rather than the raw LiveKit/AssemblyAI
+   layer directly; only the DB write is faked (in-memory) so it needs no
+   live Supabase room fixture. **Ran once against real credentials: PASS**
+   — 3/3 bot speakers transcribed correctly, zero cross-speaker leakage,
+   first-caption latency ~6–7s, final line within ~1s of audio ending
+   (consistent with the original spike's numbers). Speech clips are
+   generated locally (`scripts/regression/gen-voices.sh`, macOS `say` +
+   `afconvert` — a Mac-native equivalent of the spike's Windows-only
+   `gen-voices.ps1`) and gitignored, not committed — regenerate before
+   running.
+
+**78/78 server tests green** after all six units (verified after each
+merge, no regressions).
+
+**What's genuinely still open before W5 can be called done** (this is the
+one workstream where automated tests + a bot regression pass are
+explicitly *not* enough — guardrail #1):
+1. ~~Run `0004_transcript_lines.sql` against the live Supabase
+   project~~ **DONE, 2026-07-26.**
+2. **Guardrail #1's human-verification gate itself: multiple real people,
+   real devices, a real room** — confirming speech is attributed to the
+   correct speaker and the live captions/mic experience actually works
+   outside a bot simulation. The regression harness (unit 6) proves the
+   code path is correct; it does not and cannot satisfy this gate. **This
+   is the only thing left before W5 is done.**
+
 ### W6 — Feedback generation
-On session end, generate one plain-paragraph feedback per student from the
-session transcript.
-- **Blocked by W3's consent-copy update** (ADR-0008) — the disclosure must
-  ship *before* the first transcript is sent to Gemini, not alongside it.
-- **Core (tests-first):** **prompt assembly** — given a session's transcript
-  lines, build that one student's prompt. Two properties to test hard:
-  (a) it includes enough group context to judge "did they let others speak,"
-  (b) **it never produces or exposes another student's feedback**. Also test
-  the failure path: a Gemini error must not lose the transcript or block the
-  other students' feedback.
-- **Peripheral:** Gemini client, feedback display UI.
+
+**Status: DONE, 2026-07-26.** Five units, each its own branch/PR (stacked,
+since `gh` CLI wasn't available at first in this session to open PRs
+directly — see note below):
+1. **Prompt assembly (core, tests-first)** — `domain/feedbackPrompt.js`'s
+   `buildFeedbackPrompt()` + `parseFeedbackResponse()`
+   (`feature/w6-feedback-prompt`). Attributes the full transcript by
+   speaker name for group context, but scopes the actual feedback request
+   to exactly one target student per call and asks for a single plain
+   paragraph, no scores, constructive/non-discouraging tone. 10 tests.
+2. **Feedback table schema + db wrappers (peripheral)** —
+   `supabase/migrations/0005_feedback.sql` (own-row RLS, unique per
+   room+user, insert-only via service role) + `db/feedback.js` + new
+   `db/profiles.js` (feedback generation needs display names, not just
+   user_ids) (`feature/w6-feedback-schema`). **Confirmed run against the
+   live Supabase project, 2026-07-26.**
+3. **Generation orchestration (core, tests-first)** —
+   `domain/feedbackGeneration.js`'s `generateFeedbackForRoom()`
+   (`feature/w6-feedback-generation`). This is the failure-path property
+   named above: one student's Gemini error must not lose the shared
+   transcript or block any other student's feedback, and must never leak
+   into another student's result. Per-student try/catch inside
+   `Promise.all`, keyed by `userId` regardless of outcome. 5 tests.
+4. **Gemini client + worker wiring (peripheral)** —
+   `llm/geminiClient.js`'s `generateFeedback(prompt, opts)` (takes an
+   already-built prompt string, not structured filters like
+   `generateTopic`, since the orchestrator builds the prompt itself;
+   factored the shared fetch/error-status handling into a `callGemini()`
+   helper both functions now use) + `agent/feedbackWorker.js`'s
+   `generateAndPersistFeedbackForRoom()` (fetches topic/participants/
+   transcript, calls the orchestrator, persists each successful result,
+   logs — doesn't throw — on a failed generation or a failed insert) +
+   dispatched fire-and-forget from `GET /api/rooms/:id/status` exactly
+   when a poll flips a room to `ended`, mirroring how `/start` dispatches
+   transcription (`feature/w6-feedback-worker`). 7 new Gemini-client tests
+   + 3 new wiring tests on the status route.
+5. **Read endpoint + UI (peripheral)** — `GET
+   /api/rooms/:id/feedback/mine` (scoped to `req.userId` explicitly, not
+   just the room, so it can never return another participant's paragraph
+   even though the server-side client bypasses RLS) + `LobbyPage`'s
+   `ended` branch polls it and shows the paragraph, with a "Generating…"
+   placeholder until it lands (`feature/w6-feedback-worker`, same branch
+   as unit 4). 3 more wiring tests.
+
+**102/102 server tests green** after all five units. `npm run build`/`lint`
+clean on `apps/web`.
+
+**Note on branch stacking this session:** `gh` (GitHub CLI) wasn't
+available at first in this environment, so the five units above were built
+as a **stacked** chain (`w6-feedback-prompt` → `w6-feedback-schema` →
+`w6-feedback-generation` → `w6-feedback-worker` → `w6-progress-update`)
+rather than each branching independently from `dev`, to keep dependent
+work unblocked. Once the user installed and authenticated `gh` mid-session,
+all six PRs (#25–#30, including the unrelated `chore/vite-allowed-hosts`)
+were opened and merged into `dev` in order — **this is all on `dev` now.**
+
+**Both pre-conditions below closed 2026-07-26 (later same session):**
+1. ~~Run `supabase/migrations/0005_feedback.sql`~~ **DONE** — user ran it
+   against the live Supabase project.
+2. ~~`GEMINI_API_KEY` not provisioned~~ **DONE** — user added a real key.
+   **Live smoke test — PASS:** a one-off script (not committed) called
+   `generateTopic` and `generateFeedback` through the real API with the
+   real key; both returned genuine, well-formed responses — feedback in
+   particular came back specific, constructive, and non-discouraging on a
+   synthetic 5-line test transcript. Closes W4's equivalent open item too.
+
+**Guardrail #1's human-verification gate — DONE, 2026-07-26 (same
+session).** Two real devices, two real accounts, over Cloudflare Quick
+Tunnels (same pattern as W5's human-verification session): joined a real
+room by code, had a short real discussion, let the server-authoritative
+timer end the session, and each device's Lobby page showed "Generating
+your feedback…" followed by the real Gemini-generated paragraph. **User
+confirmed the feedback was excellent** — useful, specific to what was
+actually said, and non-discouraging in tone. **W6 is DONE.**
 - **Done when:** a human reads real generated feedback and confirms it is
   useful **and non-discouraging** (guardrail #1 names this explicitly —
-  tone is a correctness property here, not polish).
+  tone is a correctness property here, not polish). **Confirmed
+  2026-07-26.**
 
 ### W7 — Session history
-Per-student list of past sessions with topic, date, and their own feedback.
-- **Core (tests-first):** the own-history-only guarantee — an integration
-  test with **two real users** proving user A cannot read user B's sessions,
-  transcript lines, or feedback, exercised through RLS rather than trusting
-  an application-level `where` clause.
-- **Peripheral:** history list and detail UI.
-- **Done when:** the two-user isolation test passes and history renders.
+
+**Status: DONE, 2026-07-26.** Two stacked branches, both merged into
+`dev` (PR #33, then #34 — confirmed 112/112 server tests green directly
+on `dev` after merge):
+- **`feature/w7-history-rls-test`** — **core, tests-first:**
+  `test/historyRlsIsolation.test.js`. Two *real* Supabase Auth users
+  (admin-created, signed in for real access tokens) queried via clients
+  scoped to their own JWTs — not the server's service-role client, which
+  bypasses RLS entirely and would pass even if the policies were broken.
+  Proves user A cannot read user B's rooms, transcript lines, or feedback
+  through Postgres RLS itself. **Skipped when live Supabase credentials
+  aren't set** (e.g. CI has none configured) — same reasoning as
+  `npm run regression:room` needing live LiveKit/AssemblyAI creds; runs
+  for real locally against `apps/server/.env`.
+  - **Found and fixed a real production bug along the way:** the first
+    run failed with `infinite recursion detected in policy for relation
+    "room_participants"` — `rooms_select_participant_or_creator` and
+    `room_participants_select_fellow_participants` (0003) each query
+    `room_participants` from inside their own `USING` clause, which
+    re-triggers the same RLS-protected query forever. This was never hit
+    before because every existing app read of these tables goes through
+    the server's service-role client (bypasses RLS) — this test is the
+    first thing to ever exercise these policies as a real user. Fixed via
+    `supabase/migrations/0006_fix_room_participants_rls_recursion.sql`, a
+    `SECURITY DEFINER` helper function whose internal query runs as the
+    table owner (exempt from the table's own RLS by default), breaking the
+    recursion. **User ran the migration live; all 4 isolation assertions
+    now pass for real.**
+- **`feature/w7-session-history`** (stacked on the above) — **peripheral:**
+  `domain/sessionHistory.js`'s `buildSessionHistory()` (pure assembly, unit
+  tested), three new scoped db reads (`listRoomIdsForUser`,
+  `listRoomsByIds`, `listFeedbackForUserAndRooms`), `GET /api/history/mine`
+  (router-level tests, same pattern as `roomsApi.test.js`), and
+  `HistoryPage.jsx` (linked from `HomePage`, new `/history` route).
+  **Verified against the real running server**, not just mocks: a genuine
+  Supabase user (admin-created), a fixture room/feedback row inserted via
+  the service-role client, and a real HTTP call to `/api/history/mine`
+  with that user's real JWT returned the correctly assembled session
+  (topic text, status, feedback body). `npm run build`/`lint` clean on
+  `apps/web`. **Not walked through by a human in an actual browser
+  window** — no browser-automation tooling (Playwright/chromium-cli) was
+  available in this session to screenshot it, and this isn't itself a new
+  mic/audio/attribution surface so guardrail #1's hard human gate doesn't
+  strictly apply, but a quick human look before calling this fully done is
+  still worthwhile.
+
+**112/112 server tests green** (102 going into this session + 4 RLS
+isolation + 3 `sessionHistory` unit + 3 `historyApi` wiring).
+
+**What's left, not blocking:** a human should glance at `/history` in a
+real browser at least once — no browser-automation tooling was available
+this session to screenshot it, and this isn't a guardrail #1 hard gate for
+this particular feature (history-viewing isn't a new mic/audio/attribution
+surface), but it's still worth a quick look before treating the UI as
+fully proven.
+
+- **Original plan (for reference):** Per-student list of past sessions
+  with topic, date, and their own feedback.
+  - **Core (tests-first):** the own-history-only guarantee — an
+    integration test with **two real users** proving user A cannot read
+    user B's sessions, transcript lines, or feedback, exercised through
+    RLS rather than trusting an application-level `where` clause.
+  - **Peripheral:** history list and detail UI.
+  - **Done when:** the two-user isolation test passes and history renders.
 
 ### W8 — Deploy & operate
 Cloudflare Pages for the frontend, Render for the single backend container,
@@ -369,6 +559,65 @@ environment.
   Blockers section so it isn't missed.
 - **Done when:** the deployed stack passes a full end-to-end run with real
   people, including a session started right after a >15-minute quiet period.
+
+**Status: code/config complete, 2026-07-26 — actual deploy still needs the
+user's dashboard access.** Four small PRs, each its own branch per
+`BRANCHING.md` (#36–#39, all merged into `dev`):
+1. **Agent worker dispatch status tracker (core, tests-first)** —
+   `domain/agentWorkerStatus.js`'s `createAgentWorkerStatus()`: pure,
+   tracks active-room count and dispatch success/failure, with a
+   `healthy` flag driven by *sequence order* (not wall-clock time, so
+   same-millisecond calls still order correctly) rather than a raw
+   failure count — one old failure followed by a working dispatch
+   shouldn't keep paging anyone forever. 7 tests. Wired into
+   `agent/roomAgent.js`'s `startTranscriptionForRoom`/
+   `stopTranscriptionForRoom` (both call sites named "degraded state to
+   alert on (W8)" directly in `rooms.js`'s existing comments — this
+   closes that gap) and exposed at `GET /health/agent` via
+   `createHealthRouter()` (2 more tests, injectable like every other
+   router).
+2. **`render.yaml`** — a Render Blueprint for the single free Docker Web
+   Service (Express + in-process agent, PHASE1_PLAN.md §3a), health
+   check on `/health`, every secret `sync: false` (never in git).
+3. **`.github/workflows/keepalive.yml`** — pings `/health` every 10
+   minutes (ADR-0007's sleep mitigation) and checks `/health/agent`;
+   fails the run (→ GitHub's default failure email to watchers) if the
+   dispatch tracker reports unhealthy. No-ops safely if the
+   `RENDER_APP_URL` repo variable isn't set yet, so it merged before
+   any real deploy exists.
+4. **`docs/engineering/DEPLOYMENT.md`** — the actual how-to: Render
+   Blueprint setup + secrets checklist, Cloudflare Pages build
+   settings + env vars (this is a monorepo — build command
+   `npm run build --workspace=@placeme/web`, output `apps/web/dist`,
+   **not** a root-directory override), setting `RENDER_APP_URL`, and
+   the pre-launch checklist (Confirm-email toggle, pre-flight P4's
+   quiet-period smoke test, first green keep-alive run, full deployed
+   E2E pass).
+
+**Also fixed along the way:** `.github/workflows/ci.yml` triggered only on
+`main`, but every task PR in this project merges into `dev`
+(`BRANCHING.md`) — meaning **CI had never actually run on any merged task
+PR up to this point**, only local `npm test`. Fixed to trigger on both
+`main` and `dev`; verified live on the fix's own PR (#39) before merging
+it — both `test` and `docker-build` jobs ran and passed for the first
+time.
+
+**121/121 server tests green** after all of the above.
+
+**What's still open — needs the user, not more code:**
+1. Actually create the Render Blueprint deploy (`render.yaml` is ready,
+   needs a Render account + the secrets checklist in `DEPLOYMENT.md`).
+2. Actually create the Cloudflare Pages project (needs a Cloudflare
+   account; build settings documented in `DEPLOYMENT.md`).
+3. Set the `RENDER_APP_URL` GitHub Actions repository variable once #1
+   is done, then confirm `keepalive.yml` gets a first green run.
+4. Pre-flight **P4**: after a real deploy exists, let it sit quiet
+   >15 minutes and confirm a room started right after still gets a
+   transcription agent (ADR-0007's "Revisit if" risk).
+5. Turn Supabase's "Confirm email" back **on** before real students use
+   the deployed app (still off from W2 testing).
+6. The actual W8 "done when": a full end-to-end pass on the **deployed**
+   stack with real people, not local dev.
 
 ---
 
@@ -434,8 +683,24 @@ product.
 Recorded here so they're made deliberately and written down, not discovered
 late. Update this section with the answer when each is decided.
 
-1. **Matchmaking queue storage** — in-memory vs. DB-backed (W4). Leaning
-   DB-backed for restart-survival on Render's free tier.
+1. **Matchmaking queue storage — DECIDED 2026-07-26: DB-backed.** Per
+   direct user confirmation. Survives Render free-tier restarts/sleep
+   (§3a risk) at the cost of a polling loop instead of instant in-memory
+   matching — an acceptable tradeoff at pilot scale (~5–10 concurrent
+   rooms). A `matchmaking_queue` table (user_id, joined_at) backs it; the
+   pure `matchmake()` function (already built, `src/domain/
+   matchmaking.js`) stays storage-agnostic — the API layer reads the
+   queue, calls `matchmake()`, and writes back the result.
+   **Group-size numbers** (also required by `matchmake()`): the product
+   doc doesn't specify a minimum/maximum for real-human multiplayer
+   matching (only the *AI Voice Practice* mode states min 3 / max 5–6
+   participants — PlaceMe_Product_Context_v2.md). Using that as the
+   closest available anchor, **`minGroupSize: 3, maxGroupSize: 6`** for
+   random-matched rooms as an interim default — easy to tune later since
+   it's a config value passed into a pure function, not hardcoded logic.
+   Code/link-created rooms have **no cap** (per the product doc: "no
+   fixed cap on how many students can be in a room" for multiplayer) —
+   the group-size limit applies only to the random-matching path.
 2. **AssemblyAI trial credit exhaustion** — card vs. fresh trial account.
    Explicitly deferred by the user on 2026-07-25 (ADR-0002); decide when the
    credit actually runs low, not before.

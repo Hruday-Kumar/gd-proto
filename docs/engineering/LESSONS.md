@@ -519,5 +519,14 @@ lock-in risk here is low.
 
 **Docs:** https://ai.google.dev/gemini-api/docs
 
-**Gotchas we hit:** None yet — not integrated into code as of this ADR
-(2026-07-25).
+**Gotchas we hit:** Google's model lineup moves fast — worth checking
+live before trusting any hardcoded model name. When W4 actually wired up
+`src/llm/geminiClient.js` (2026-07-26), a live check of
+ai.google.dev/gemini-api/docs/deprecations showed ADR-0008's pick,
+`gemini-2.5-flash`, is slated to shut down 2026-10-16, with Google's own
+recommended replacement being `gemini-3.6-flash` (GA, launched just days
+before, free tier available). Used `gemini-3.6-flash` as the new default,
+kept overridable via a `GEMINI_MODEL` env var rather than hardcoded, since
+this is clearly going to keep happening. Not yet smoke-tested against the
+live API — no Google AI Studio key provisioned yet (pre-flight P3); all
+tests so far use an injected fetch function.

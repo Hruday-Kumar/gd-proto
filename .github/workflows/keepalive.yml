@@ -1,0 +1,34 @@
+name: Render keep-alive + agent health check
+
+# ADR-0007's mitigation for Render free tier's 15-minute sleep: ping the
+# deployed service often enough that it never goes idle long enough to
+# nap. Also checks GET /health/agent (W8) so a silently-failing
+# transcription dispatch shows up as a failed GitHub Actions run --
+# free alerting, no extra service needed. See docs/engineering/DEPLOYMENT.md
+# for how to set the RENDER_APP_URL repository variable this workflow
+# needs.
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Ping /health (keeps the free-tier service awake)
+        run: |
+          if [ -z "${{ vars.RENDER_APP_URL }}" ]; then
+            echo "::warning::RENDER_APP_URL repository variable isn't set yet -- nothing to ping. See docs/engineering/DEPLOYMENT.md."
+            exit 0
+          fi
+          curl -sf "${{ vars.RENDER_APP_URL }}/health"
+
+      - name: Check transcription agent dispatch health
+        if: ${{ vars.RENDER_APP_URL != '' }}
+        run: |
+          status=$(curl -sf "${{ vars.RENDER_APP_URL }}/health/agent")
+          echo "$status"
+          echo "$status" | jq -e '.healthy == true' > /dev/null \
+            || { echo "::error::Transcription agent is reporting an unhealthy dispatch (see .lastFailure above) -- a room may have gone live with no transcription."; exit 1; }
