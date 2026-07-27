@@ -17,6 +17,7 @@ import { persistAttributedLine } from './handleTranscript.js';
 import { listParticipants } from '../db/roomParticipants.js';
 import { insertTranscriptLine } from '../db/transcriptLines.js';
 import { createAgentWorkerStatus } from '../domain/agentWorkerStatus.js';
+import { withRetry } from '../domain/retry.js';
 
 // One tracker for the whole process (W8) -- api/health.js reads it at
 // GET /health/agent. Exported via a getter, not the object itself, so
@@ -41,6 +42,14 @@ export async function startTranscriptionForRoom(
     mintTokenFn = mintToken,
     liveKitUrl = process.env.LIVEKIT_URL,
     assemblyaiApiKey = process.env.ASSEMBLYAI_API_KEY,
+    roomFactory = () => new Room(),
+    // A transient network blip on the connect call (confirmed live:
+    // "failed to retrieve region info: error sending request for url")
+    // used to permanently kill transcription for the whole room with no
+    // recovery attempt. Bounded retry absorbs that class of one-off
+    // failure instead of giving up on the first hiccup.
+    connectRetryAttempts = 3,
+    connectRetryDelayMs = 1000,
   } = {}
 ) {
   if (activeRooms.has(roomId)) return; // already transcribing this room
@@ -55,8 +64,13 @@ export async function startTranscriptionForRoom(
       hidden: true,
     });
 
-    const room = new Room();
-    await room.connect(liveKitUrl, token, { autoSubscribe: true, dynacast: true });
+    const room = roomFactory();
+    await withRetry(() => room.connect(liveKitUrl, token, { autoSubscribe: true, dynacast: true }), {
+      attempts: connectRetryAttempts,
+      delayMs: connectRetryDelayMs,
+      onRetry: (err, attempt) =>
+        console.warn(`[agent] room.connect attempt ${attempt} failed for room ${roomId}: ${err.message}`),
+    });
 
     const encoder = new TextEncoder();
     attachTranscriber(room, {

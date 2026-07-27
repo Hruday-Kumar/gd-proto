@@ -82,4 +82,28 @@ describe('generateFeedbackForRoom', () => {
     await generateFeedbackForRoom({ topic: 'Remote work', transcriptLines, participants }, { generate });
     expect(transcriptLines).toEqual(original);
   });
+
+  // Bug fix, 2026-07-27: when transcription fails for a whole room (agent
+  // never joined, a network blip, etc.), transcriptLines is empty and the
+  // old code still called Gemini with "(no speech was transcribed)" --
+  // which the model reasonably read as "this student didn't participate"
+  // and said so. That's not true; it's a technical failure, not the
+  // student's fault, and must never be presented as feedback on their
+  // performance (guardrail #1: feedback must never be discouraging or
+  // misleading). An empty transcript must short-circuit before Gemini is
+  // ever called, for every participant, every time.
+  it('never calls generate and returns an honest technical-issue message when transcriptLines is empty', async () => {
+    const generate = vi.fn();
+    const results = await generateFeedbackForRoom(
+      { topic: 'Remote work', transcriptLines: [], participants },
+      { generate }
+    );
+    expect(generate).not.toHaveBeenCalled();
+    expect(results).toHaveLength(3);
+    for (const r of results) {
+      expect(r.status).toBe('ok');
+      expect(r.body).toMatch(/technical issue/i);
+      expect(r.body).not.toMatch(/speak (up|more)|should have (said|spoken)|next time.*speak/i);
+    }
+  });
 });

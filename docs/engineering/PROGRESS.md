@@ -2,9 +2,79 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-07-27 (pilot-readiness pass session)
+**Last updated:** 2026-07-27 (transcription-resilience bug-fix session)
 
 ## Current phase
+**Transcription-resilience bug fix, 2026-07-27 (separate session, after the
+pilot-readiness pass below).** User report: "the room sharing and code
+works, but the transcription fails, since the transcription is failing the
+feedback is assuming we are not participating." Diagnosed with real
+credentials, not guessed:
+- Isolated AssemblyAI auth (direct WS test) and the LiveKit connect path
+  (direct connect test) both worked individually; the full production
+  pipeline (`npm run regression:room`, real LiveKit + AssemblyAI, 3 bots)
+  passed end-to-end too — so the agent pipeline itself was sound.
+- Found this environment's `apps/web`/root `node_modules` were stale
+  (`@tailwindcss/vite` missing, blocking `npm run dev` entirely) —
+  unrelated to the bug, fixed with `npm install` so local dev works here
+  again.
+- **User then supplied the real server log from their own repro:** `[agent]
+  failed to start transcription for room ...: engine: signal failure:
+  failed to retrieve region info: error sending request for url
+  (https://.../settings/regions)`. This is `@livekit/rtc-node`'s Rust
+  engine failing the region-pinning HTTP request it makes before actually
+  connecting — confirmed transient, not a config/credentials problem: the
+  user's own browser connected fine to the same LiveKit project seconds
+  apart (console log showed a successful `region: India South` connect),
+  and this exact error **reproduced again, spontaneously, during this
+  session's own regression-harness re-run** (`region fetch timed out`).
+  `startTranscriptionForRoom()` had zero retry, so one blip permanently
+  killed transcription for the whole room -- silently, since the room and
+  its audio keep working fine (the browser SDK connects independently of
+  the server-side agent).
+- **Root cause, two layers, both fixed (TDD RED→GREEN, branch
+  `fix/transcription-resilience`):**
+  1. `domain/retry.js`'s `withRetry()` (new, small, generic, tested) is now
+     wrapped around the agent's `room.connect()` call in
+     `agent/roomAgent.js` (3 attempts, 1s backoff by default). Also made
+     `startTranscriptionForRoom()` unit-testable for the first time — it
+     previously constructed a real, un-injectable `Room()` inline, which is
+     exactly why this had zero test coverage before a live failure exposed
+     it. **Verified live:** the fix caught and recovered from the exact
+     same transient failure when it recurred during this session's own
+     regression re-run, and the pipeline then passed end-to-end (3/3
+     speakers, correct attribution).
+  2. Independent of *why* transcription fails, `domain/feedbackGeneration.js`
+     used to send Gemini "(no speech was transcribed in this session)" and
+     ask it to write feedback anyway whenever `transcriptLines` was empty —
+     which the model reasonably (and wrongly) read as "this student didn't
+     participate" and said so. That's the literal mechanism producing the
+     misleading feedback in the bug report, and it would recur for *any*
+     future transcription failure (network blip, STT outage, anything), not
+     just this one. Fixed: an empty transcript now short-circuits before
+     Gemini is ever called, returning a fixed, honest, non-blaming
+     "technical issue on our end, not a reflection of your participation"
+     message for every participant instead.
+- Also hit and documented (not fixed, self-inflicted test load not a real
+  usage pattern): AssemblyAI's free dev tier rate-limits to 5 new
+  connections/minute; ~10 rapid diagnostic/regression runs in a few minutes
+  produced one run with zero transcription and zero logged errors (our WS
+  code only logs on the `error` event, not an unexpected `close` code). See
+  `LESSONS.md`'s AssemblyAI entry.
+- **151 tests (147 passing + 4 pre-existing skipped) green** after the fix,
+  `apps/server` full suite. No migration needed — this is pure application
+  logic, nothing schema-related.
+- **Not yet done:** PR opened and merged into `dev`; guardrail #1's
+  human-verification gate for this specific fix (a real person hitting the
+  actual retry path live, not just the regression harness) — the
+  regression-harness catch of the real recurrence is strong evidence but
+  isn't a substitute per guardrail #1's letter for a *feedback*-adjacent
+  change. Recommend a quick real-room human check next time this comes up
+  naturally, not necessarily its own dedicated session.
+
+## Earlier phases
+
+### Pilot-readiness pass (2026-07-27, previous session)
 **Pilot-readiness pass, 2026-07-27.** The user asked to make the app
 "pre-production ready apart from deploying — complete rest [that's] in
 your hand." Found a pilot-readiness audit already sitting in an open PR
@@ -123,8 +193,6 @@ access or real people, both outside what this session could do:
 
 Once #54 merges (after the migration runs) and B1–B4/B7 are cleared, this
 project should be at or very close to the audit's "Week-0 plan" endpoint.
-
-## Earlier phases
 
 ### UI/flows fix pass (superseded — now merged, see Current phase above)
 **2026-07-27, originally recorded as "uncommitted."** This work was

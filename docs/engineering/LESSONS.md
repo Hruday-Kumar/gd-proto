@@ -40,6 +40,20 @@ on top of that open-source core.
 - `AccessToken.toJwt()` (server-side token minting) is **async** — needs `await`.
 - The SDK prints noisy `lk-rtc` debug logs by default; set `NODE_ENV=production`
   to quiet them.
+- **The Node client's `room.connect()` can throw `engine: signal failure:
+  failed to retrieve region info: ...` on a transient network blip** (seen
+  live, twice, 2026-07-27: `error sending request for url` once, `region
+  fetch timed out` another time) — before actually joining, the client
+  fetches LiveKit Cloud's region-pinning info over plain HTTP, and if that
+  one request has a bad moment the whole `connect()` throws, even though
+  the exact same URL/credentials succeed again seconds later (confirmed:
+  the browser's own connection, and repeat connect attempts, weren't
+  affected). Since our agent (`agent/roomAgent.js`) previously had zero
+  retry, one of these blips permanently killed transcription for the whole
+  room — the room and its audio kept working fine (the browser SDK
+  connects independently), so this failed **silently** from a student's
+  point of view. Fixed by wrapping `room.connect()` in a bounded retry
+  (`domain/retry.js`, 3 attempts / 1s backoff by default).
 
 ---
 
@@ -101,6 +115,17 @@ per minute and benchmarks competitively on accuracy.
 billed per second, same price for all supported languages. Free plan exists
 for development (rate-limited to 5 new connections/minute); pay-as-you-go
 removes that limit.
+
+**Note (2026-07-27):** hit this 5-connections/minute dev-tier limit myself
+while debugging the LiveKit connect issue below -- ~10 rapid regression-
+harness/diagnostic runs in a few minutes produced one run with **zero
+transcription and zero logged errors** (agent joined fine, tracks
+subscribed fine, AssemblyAI just never returned a `Turn`). Our WS handling
+(`agent/assemblyai.js`) only logs on the `error` event, not on an
+unexpected `close` code, so a rate-limit rejection can currently be
+silent. Didn't chase a fix -- this was self-inflicted test load, not a
+real usage pattern -- but worth knowing if "everything connects but
+nothing transcribes, no errors at all" recurs.
 
 **Open source?** No — proprietary SaaS API, same category of vendor
 dependency as Deepgram.
