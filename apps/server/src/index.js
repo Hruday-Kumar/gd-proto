@@ -72,3 +72,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   app.listen(PORT, () => console.log(`[server] listening on :${PORT}`));
   startAgentWorker();
 }
+
+// Vercel's Node runtime imports this file directly and requires a default
+// export that's callable — build the app lazily (only on first real request,
+// never at import time) so importing this module for the named createApp
+// export in tests never triggers it.
+let _serverlessApp;
+export default function handler(req, res) {
+  if (!_serverlessApp) _serverlessApp = createApp();
+  return _serverlessApp(req, res);
+}
