@@ -19,3 +19,17 @@ export async function removeFromQueue(userIds, { supabase = getSupabase() } = {}
   const { error } = await supabase.from('matchmaking_queue').delete().in('user_id', userIds);
   if (error) throw error;
 }
+
+// H7 (audit 2026-07-28): atomic claim for claimMatchOrQueue
+// (domain/matchmakingClaim.js). Unlike removeFromQueue above, this reports
+// which ids were actually deleted -- Postgres serializes concurrent deletes
+// row-by-row, so if another request already claimed one of these ids for a
+// different match, it's simply absent from RETURNING rather than erroring.
+// The caller compares the returned ids against what it asked for to detect
+// a lost race.
+export async function claimFromQueue(userIds, { supabase = getSupabase() } = {}) {
+  if (userIds.length === 0) return [];
+  const { data, error } = await supabase.from('matchmaking_queue').delete().in('user_id', userIds).select('user_id');
+  if (error) throw error;
+  return data.map((row) => row.user_id);
+}

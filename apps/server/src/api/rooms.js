@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { generateUniqueRoomCode } from '../domain/roomCode.js';
-import { matchmake } from '../domain/matchmaking.js';
+import { claimMatchOrQueue } from '../domain/matchmakingClaim.js';
 import { startSession, endSession, isTimerExpired } from '../domain/sessionStateMachine.js';
 import { isValidDurationSeconds, MIN_DURATION_SECONDS, MAX_DURATION_SECONDS } from '../domain/roomDuration.js';
 import { generateTopic } from '../llm/geminiClient.js';
@@ -45,6 +45,8 @@ export function createRoomsRouter(requireAuth, deps) {
     listQueue,
     addToQueue,
     removeFromQueue,
+    claimFromQueue,
+    claimMatchOrQueueFn = claimMatchOrQueue,
     insertGeneratedTopic,
     generateTopicFn = generateTopic,
     getActiveRoomForUser,
@@ -147,15 +149,13 @@ export function createRoomsRouter(requireAuth, deps) {
       return res.status(400).json({ error: INVALID_DURATION_ERROR });
     }
 
-    const queue = await listQueue();
-    if (queue.some((p) => p.id === req.userId)) {
-      return res.status(200).json({ status: 'queued' });
-    }
+    // H7 (audit 2026-07-28): claimMatchOrQueue wraps the pure matchmake()
+    // decision in a race-safe claim -- see domain/matchmakingClaim.js. The
+    // members it returns are already atomically removed from the queue, so
+    // no further removeFromQueue call is needed for a match.
+    const claim = await claimMatchOrQueueFn(req.userId, { listQueue, addToQueue, claimFromQueue, minGroupSize, maxGroupSize });
 
-    const result = matchmake(queue, { id: req.userId }, { minGroupSize, maxGroupSize });
-
-    if (result.type === 'queued') {
-      await addToQueue(req.userId);
+    if (claim.type === 'already_queued' || claim.type === 'queued') {
       return res.status(200).json({ status: 'queued' });
     }
 
@@ -167,17 +167,16 @@ export function createRoomsRouter(requireAuth, deps) {
     const topic = await insertGeneratedTopic({ text: topicText });
     const code = await generateUniqueRoomCode(roomCodeExists);
     const room = await insertRoom({ code, topicId: topic.id, durationSeconds, joinMode: 'random', createdBy: req.userId });
-    for (const member of result.members) {
+    for (const member of claim.members) {
       await addParticipant(room.id, member.id, member.id);
     }
-    await removeFromQueue(result.members.map((m) => m.id));
 
     res.status(201).json({
       id: room.id,
       code: room.code,
       status: room.status,
       topicId: topic.id,
-      members: result.members.map((m) => m.id),
+      members: claim.members.map((m) => m.id),
     });
   });
 

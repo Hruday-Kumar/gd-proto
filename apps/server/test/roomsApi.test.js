@@ -40,6 +40,10 @@ function baseDeps(overrides = {}) {
     listQueue: vi.fn().mockResolvedValue([]),
     addToQueue: vi.fn(),
     removeFromQueue: vi.fn(),
+    // H7: claimFromQueue defaults to "claim succeeded in full" -- echoes
+    // back whatever ids it was asked to claim, matching the real
+    // db/matchmakingQueue.js contract when nobody else is racing.
+    claimFromQueue: vi.fn((ids) => Promise.resolve(ids)),
     insertGeneratedTopic: vi.fn(),
     generateTopicFn: vi.fn(),
     getActiveRoomForUser: vi.fn().mockResolvedValue(null),
@@ -182,7 +186,43 @@ describe('POST /api/rooms/match', () => {
       expect.objectContaining({ topicId: 'topic-1', durationSeconds: 300, joinMode: 'random', createdBy: 'c' })
     );
     expect(deps.addParticipant).toHaveBeenCalledTimes(3);
-    expect(deps.removeFromQueue).toHaveBeenCalledWith(expect.arrayContaining(['a', 'b', 'c']));
+    // H7: only the pre-existing queue members are claimed -- 'c' (the
+    // joiner) was never in the queue table, so there's nothing to remove
+    // for them; claimMatchOrQueue's atomic claim already handled this.
+    expect(deps.claimFromQueue).toHaveBeenCalledWith(expect.arrayContaining(['a', 'b']));
+    expect(deps.removeFromQueue).not.toHaveBeenCalled();
+  });
+
+  // H7 (engineering audit, 2026-07-28): two students hitting /match near-
+  // simultaneously must not both complete the same match by claiming the
+  // same pre-existing queue members -- see domain/matchmakingClaim.js and
+  // its own dedicated test suite (matchmakingClaim.test.js) for the full
+  // race-retry behavior. This just confirms the route is actually wired to
+  // that race-safe path rather than the old plain read-then-write.
+  it('retries the match claim when a concurrent request already took a queued member', async () => {
+    const deps = baseDeps({
+      // Attempt 1: queue looks like [a, b] -- with joiner 'c' that's enough
+      // to match (minGroupSize 3). But claiming ['a', 'b'] only succeeds for
+      // 'a' -- a concurrent request already took 'b' for a different match.
+      // Attempt 2 (fresh read): 'a' has been re-queued by the failed
+      // attempt, and 'd' joined independently meanwhile -- enough to match
+      // again, and this time the claim succeeds in full.
+      listQueue: vi
+        .fn()
+        .mockResolvedValueOnce([{ id: 'a' }, { id: 'b' }])
+        .mockResolvedValueOnce([{ id: 'a' }, { id: 'd' }]),
+      claimFromQueue: vi.fn().mockResolvedValueOnce(['a']).mockResolvedValueOnce(['a', 'd']),
+      generateTopicFn: vi.fn().mockResolvedValue('Should AI grade exams?'),
+      insertGeneratedTopic: vi.fn().mockResolvedValue({ id: 'topic-1', text: 'Should AI grade exams?' }),
+      insertRoom: vi.fn().mockResolvedValue({ id: 'r1', code: 'MATCHD', status: 'waiting', topic_id: 'topic-1', duration_seconds: 300 }),
+    });
+    const app = buildApp(deps, 'c');
+    const res = await request(app).post('/api/rooms/match').send({ durationSeconds: 300 });
+    expect(res.status).toBe(201);
+    expect(res.body.members.sort()).toEqual(['a', 'c', 'd']);
+    expect(deps.listQueue).toHaveBeenCalledTimes(2);
+    // 'a' was re-queued after the lost race, not silently dropped.
+    expect(deps.addToQueue).toHaveBeenCalledWith('a');
   });
 
   it('requires durationSeconds', async () => {

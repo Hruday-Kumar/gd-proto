@@ -12,7 +12,7 @@ import { insertCustomTopic, insertGeneratedTopic } from './db/topics.js';
 import { createRoomsRouter } from './api/rooms.js';
 import { roomCodeExists, insertRoom, getRoomByCode, getRoomById, updateRoomStatus } from './db/rooms.js';
 import { addParticipant, getActiveRoomForUser, isParticipant, listRoomIdsForUser } from './db/roomParticipants.js';
-import { listQueue, addToQueue, removeFromQueue } from './db/matchmakingQueue.js';
+import { listQueue, addToQueue, removeFromQueue, claimFromQueue } from './db/matchmakingQueue.js';
 import { listRoomsByIds } from './db/rooms.js';
 import { listFeedbackForUserAndRooms } from './db/feedback.js';
 import { createHistoryRouter } from './api/history.js';
@@ -43,6 +43,7 @@ export function createApp({ supabaseUrl, consentDb, topicsDb, roomsDb, historyDb
         listQueue,
         addToQueue,
         removeFromQueue,
+        claimFromQueue,
         insertGeneratedTopic,
         getActiveRoomForUser,
         isParticipant,
