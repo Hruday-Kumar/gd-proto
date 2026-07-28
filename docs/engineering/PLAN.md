@@ -114,6 +114,7 @@ Audit findings closed, newest first. Evidence and root causes are in
 
 | ID | What | Where |
 |---|---|---|
+| **H7** | Matchmaking claim is now race-safe — atomic `DELETE...RETURNING` claim + retry loop, `matchmake()` itself untouched/pure. Caught and fixed its own data-loss bug (a partially-claimed member silently dropped) before merge | `domain/matchmakingClaim.js`, `db/matchmakingQueue.js` |
 | **H8** | Dropped `room_participants`' client-facing insert policy — any authenticated student could self-seat into any room via a direct PostgREST call, reproduced live before fixing, re-verified blocked after | migration `0011`, `test/roomParticipantsRlsIsolation.test.js` |
 | **M1** | Student LiveKit tokens no longer grant `canPublishData` — could forge live-caption data messages attributed to a classmate | `api/rooms.js`, `test/roomsApi.test.js` |
 | **M11** | LLM fan-out bounded — worker pool, concurrency 2, order + failure-isolation preserved | `domain/feedbackGeneration.js` |
@@ -124,8 +125,12 @@ Audit findings closed, newest first. Evidence and root causes are in
 | **C1** | `rooms.created_by` no longer blocks account deletion | migration `0008` |
 
 **Note on ordering:** H2 is an audit *Phase 4* item, pulled forward ahead of
-Phase 3 by direct instruction. The audit's phase numbering and the order we
-actually worked in differ — trust this file.
+Phase 3 by direct instruction. H7 is a *Phase 5* item, pulled forward to run
+alongside Phase 3's access-control work per the 2026-07-28 pilot-readiness
+roadmap review (a matchmaking race is exactly the failure mode a real pilot
+kickoff — several students joining at once — would trigger). The audit's
+phase numbering and the order we actually worked in differ — trust this
+file.
 
 ---
 
@@ -167,7 +172,7 @@ Work top to bottom. Each row is one branch, one PR.
 | ✅ | ID | Task | Owner | Notes |
 |---|---|---|---|---|
 | ☐ | **H6** | CI never builds or lints the frontend | — | Two lines in `ci.yml`; protects half the product. Do early — it's nearly free. |
-| ☐ | **H7** | Matchmaking is check-then-act with no lock | — | `SELECT … FOR UPDATE SKIP LOCKED` or an advisory lock. Keep `matchmake()` pure. |
+| ✅ | **H7** | Matchmaking is check-then-act with no lock | — | **DONE, PR #11.** See §4. Pulled forward ahead of Phase 5 — see the ordering note in §4. |
 | ☐ | **M10** | `GET /status` performs writes | — | Still open — C3 made the write *conditional*, but it's still a GET with side effects. |
 | ☐ | **M3** | `/health/agent` unauthenticated, in-memory only | — | Leaks `roomId` + raw error text; always reports healthy after a restart. |
 | ☐ | **M5** | Sleep mitigation rests on one GitHub Actions cron | — | Best-effort, auto-disabled after 60 days idle, currently no-ops. |
