@@ -114,6 +114,8 @@ Audit findings closed, newest first. Evidence and root causes are in
 
 | ID | What | Where |
 |---|---|---|
+| **H5** | Custom topic length capped (200 chars) + the topic (and topic-generation's category/difficulty) delimited and explicitly framed as data, not instructions, in both Gemini prompts — defense-in-depth against a student's custom topic hijacking every participant's feedback in the room | `domain/topicText.js`, `domain/feedbackPrompt.js`, `domain/topicPrompt.js`, `api/topics.js` |
+| **H4** | Rate-limited the two Gemini-backed routes (topic generation, random matching) — keyed per-user, not IP; wiring confirmed via dedicated route-level tests, not just the limiter in isolation | `api/rateLimit.js`, `api/topics.js`, `api/rooms.js` |
 | **H7** | Matchmaking claim is now race-safe — atomic `DELETE...RETURNING` claim + retry loop, `matchmake()` itself untouched/pure. Caught and fixed its own data-loss bug (a partially-claimed member silently dropped) before merge | `domain/matchmakingClaim.js`, `db/matchmakingQueue.js` |
 | **H8** | Dropped `room_participants`' client-facing insert policy — any authenticated student could self-seat into any room via a direct PostgREST call, reproduced live before fixing, re-verified blocked after | migration `0011`, `test/roomParticipantsRlsIsolation.test.js` |
 | **M1** | Student LiveKit tokens no longer grant `canPublishData` — could forge live-caption data messages attributed to a classmate | `api/rooms.js`, `test/roomsApi.test.js` |
@@ -154,8 +156,8 @@ Work top to bottom. Each row is one branch, one PR.
 |---|---|---|---|---|
 | ✅ | **H8** | RLS lets any student seat themselves in any room | — | **DONE, PR #9.** See §4. |
 | ✅ | **M1** | Student LiveKit tokens grant `canPublishData` | — | **DONE, PR #9.** See §4. |
-| ☐ | **H4** | No rate limiting on metered LLM routes | — | `express-rate-limit` keyed on `req.userId`, strictest on the two Gemini routes. |
-| ☐ | **H5** | Prompt injection via custom topic | — | Cap topic length (~200 chars), delimit untrusted spans, instruct the model to treat the topic as data. |
+| ✅ | **H4** | No rate limiting on metered LLM routes | — | **DONE, PR #13.** See §4. |
+| ✅ | **H5** | Prompt injection via custom topic | — | **DONE, PR #14.** See §4. Also applied the same delimiting to topic-generation's category/difficulty (not reachable via the current web UI, but the API accepts them directly — same vulnerability class). |
 | ☐ | **M6** | Wide-open CORS | — | Origin allowlist. |
 | ☐ | **M7** | No security headers | — | `helmet`. |
 

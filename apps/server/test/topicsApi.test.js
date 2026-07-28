@@ -29,6 +29,17 @@ describe('POST /api/topics/custom', () => {
     expect(insertCustomTopic).not.toHaveBeenCalled();
   });
 
+  // H5 (audit 2026-07-28): a custom topic is embedded verbatim into the
+  // Gemini feedback prompt for every participant in the room -- unbounded
+  // text gives a hostile submission room to break out of that framing.
+  it('rejects a topic longer than 200 characters without calling the db', async () => {
+    const insertCustomTopic = vi.fn();
+    const app = buildApp({ insertCustomTopic, insertGeneratedTopic: vi.fn() });
+    const res = await request(app).post('/api/topics/custom').send({ text: 'a'.repeat(201) });
+    expect(res.status).toBe(400);
+    expect(insertCustomTopic).not.toHaveBeenCalled();
+  });
+
   it('inserts a custom topic for the authenticated user and returns it', async () => {
     const insertCustomTopic = vi.fn().mockResolvedValue({ id: 't1', text: 'AI in education', source: 'custom' });
     const app = buildApp({ insertCustomTopic, insertGeneratedTopic: vi.fn() });
