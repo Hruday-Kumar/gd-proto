@@ -4,6 +4,12 @@ _Durable state so any session can resume from docs, not conversation memory._
 
 **Last updated:** 2026-07-28 (audit remediation — Phase 2 reliability)
 
+> **Two people work this repo.** `docs/engineering/PLAN.md` is the shared
+> checklist and ownership board — what's done, what's next, who has it, and
+> the repo hazards to know before branching. **Claim your task there before
+> writing code.** This file stays the narrative record: *why* things were
+> done and what was actually verified. PLAN.md says what and who.
+
 ## Current phase
 
 **Audit remediation, Phase 2 (Reliability), 2026-07-28.** Working the
@@ -88,6 +94,13 @@ C1/C3/C2 work (which is **not yet merged into `dev`** — see below).
    during the next real-room session: start a room, restart the server
    mid-discussion, confirm transcription resumes.
 5. Next in the roadmap after this: **Phase 3** (H8, M1, H4, H5, M6, M7).
+6. **`origin/dev` is 3 commits behind `origin/main`** — the `dev` → `main`
+   release ran but `BRANCHING.md` step 6c (hard-reset `dev` to `main`) never
+   did. Anyone branching off `origin/dev` silently misses the
+   `ca-certificates` Docker fix. Reset it before the next branch.
+7. **Migration `0008` (C1) has never been confirmed applied** — account
+   deletion stays broken until it is. `0007` *was* verified applied this
+   session; see `PLAN.md` §3 for the full migration table.
 
 ## Earlier phases
 
@@ -249,7 +262,17 @@ backlog and worked the non-deploy items:
   signup + consent flows complete with zero console errors, key unset. PR
   #55, merged.
 
-### ⚠️ PR #54 (S1, feedback rating) is open but NOT merged — read before merging
+### ~~⚠️ PR #54 (S1, feedback rating) is open but NOT merged~~ — RESOLVED, see below
+
+**Superseded 2026-07-28.** Verified directly against the live Supabase
+project: `feedback.rating` and `feedback.rating_reason` both exist, so
+`0007_feedback_rating.sql` **has been run** and the S1 code shipped. The
+warning below is kept only as the record of why the migration had to go
+first; it is no longer an action item. (Note the repo also moved remotes
+since — the PR numbers in this file refer to the old
+`Hruday-Kumar/gd-proto` repo and no longer resolve. See `BRANCHING.md`.)
+
+<details><summary>Original warning (historical)</summary>
 Unlike every prior migration in this project (which only added tables new
 endpoints touched), `0007_feedback_rating.sql` adds columns
 (`rating`/`rating_reason`) that an **already-working, already-live**
@@ -260,6 +283,8 @@ feedback.rating does not exist`. **Run
 `supabase/migrations/0007_feedback_rating.sql` in the Supabase SQL Editor
 first**, same manual step as every other migration, then merge #54. I
 don't have raw-SQL access to the project to run it myself.
+
+</details>
 
 ### What's still genuinely open (needs the user or real deploy — not attempted)
 Everything else in `PILOT_READINESS.md`'s blocker list needs dashboard
@@ -947,7 +972,7 @@ settle:**
 - **`/history` hasn't been looked at by a human in a real browser yet** — no browser-automation tooling was available this session to screenshot it; build/lint and a real end-to-end API check (real Supabase user, real fixture data) both passed, but a quick human glance is still worth doing.
 - **W8 needs dashboard access the agent doesn't have:** Render account/Blueprint deploy, Cloudflare Pages project, and setting the `RENDER_APP_URL` repo variable are all still open — full checklist in `docs/engineering/DEPLOYMENT.md`. Not blocking further code work, but blocking the actual "real students, deployed" milestone.
 - **CI never ran on any merged task PR until this session** — `ci.yml` only triggered on `main`; fixed 2026-07-26 (verified live on the fix's own PR, #39). Worth knowing if past "green tests" claims in this file were ever based on CI rather than local `npm test` — they weren't; CI simply hadn't been exercised.
-- **PR #54 (S1, feedback rating) is open, not merged — `supabase/migrations/0007_feedback_rating.sql` must run first.** Merging the server code before the migration runs 500s the already-working `GET /api/rooms/:id/feedback/mine` endpoint (`column feedback.rating does not exist`, verified live). See "Current phase" above.
+- ~~**PR #54 (S1, feedback rating) is open, not merged — `supabase/migrations/0007_feedback_rating.sql` must run first.**~~ **CLOSED 2026-07-28** — probed the live project directly: `feedback.rating` and `feedback.rating_reason` both exist, so the migration ran and the S1 code shipped. Migration status for every file now lives in `PLAN.md` §3.
 - **DEEPGRAM_API_KEY still needs revoking in the Deepgram dashboard** — removed from this environment's `.env` (PR #51, S2) since nothing references it, but the key itself is a user action in Deepgram's console, not something this session could do.
 - **B1/B3/B4/B7 from `PILOT_READINESS.md` are still open** — deploy (Render + Cloudflare Pages + `RENDER_APP_URL`), the Supabase "Confirm email" toggle, the post-deploy Render-sleep-vs-agent-worker test, and guardrail #1's human-verification gate for the UI-redesign/live-room-UX/flows-fix body of work. All need dashboard access or real humans, not attempted this session — see "What's next" above.
 
