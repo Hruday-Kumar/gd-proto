@@ -28,6 +28,7 @@ _None yet — no stack chosen. Populate once Phase 0 selects a stack._
 - Team context: @docs/engineering/TEAM.md
 - Branching workflow (branch per task, PR to `dev`, `dev` → `main` for releases): @docs/engineering/BRANCHING.md
 - **Current state / what's next / blockers:** @docs/engineering/PROGRESS.md — read this first each session.
+- **Shared task checklist + who owns what:** @docs/engineering/PLAN.md — two people work this repo; claim a task there before starting it.
 
 ## TDD Rules — MANDATORY
 

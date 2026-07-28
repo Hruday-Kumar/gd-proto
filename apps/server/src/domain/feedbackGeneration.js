@@ -17,19 +17,56 @@ import { buildFeedbackPrompt } from './feedbackPrompt.js';
 export const TRANSCRIPTION_FAILED_MESSAGE =
   "We weren't able to capture a transcript for this session due to a technical issue on our end -- this isn't a reflection of your participation. Please try another session, and let us know if this keeps happening.";
 
-export async function generateFeedbackForRoom({ topic, transcriptLines, participants }, { generate }) {
+// How many Gemini calls may be in flight at once (M11, audit 2026-07-28).
+// Every participant's call used to go out in a single Promise.all -- six at
+// once for a full room (maxGroupSize, api/rooms.js), against a free tier with
+// a per-minute request limit. A rate-limited call falls into the per-student
+// error path below, so the student silently receives no feedback at all: the
+// one output this product exists to deliver.
+//
+// Two is a deliberate compromise, not a measured optimum: it smooths a full
+// room into three small waves instead of one burst, while keeping total
+// generation time well inside the ~2 minute window the lobby polls for
+// feedback. Overridable per call, and worth raising once the project is on a
+// paid Gemini tier with a known quota.
+export const DEFAULT_FEEDBACK_CONCURRENCY = 2;
+
+export async function generateFeedbackForRoom(
+  { topic, transcriptLines, participants },
+  { generate, concurrency = DEFAULT_FEEDBACK_CONCURRENCY }
+) {
   if (transcriptLines.length === 0) {
     return participants.map(({ userId }) => ({ userId, status: 'ok', body: TRANSCRIPTION_FAILED_MESSAGE }));
   }
-  return Promise.all(
-    participants.map(async ({ userId }) => {
-      try {
-        const prompt = buildFeedbackPrompt({ topic, transcriptLines, participants, targetUserId: userId });
-        const body = await generate(prompt);
-        return { userId, status: 'ok', body };
-      } catch (err) {
-        return { userId, status: 'error', error: err.message };
-      }
-    })
-  );
+
+  // Never throws: one student's failure becomes that student's result, so it
+  // can't lose the shared transcript, abort the pool, or leak into anyone
+  // else's feedback -- the same isolation the old Promise.all had, preserved
+  // now that the calls are batched.
+  async function generateForParticipant({ userId }) {
+    try {
+      const prompt = buildFeedbackPrompt({ topic, transcriptLines, participants, targetUserId: userId });
+      const body = await generate(prompt);
+      return { userId, status: 'ok', body };
+    } catch (err) {
+      return { userId, status: 'error', error: err.message };
+    }
+  }
+
+  // Fixed-size worker pool over a shared cursor. Results are written back by
+  // index, so the returned order matches `participants` regardless of which
+  // calls finish first -- batching stays invisible to callers.
+  const results = Array.from({ length: participants.length });
+  let nextIndex = 0;
+
+  async function worker() {
+    for (let index = nextIndex++; index < participants.length; index = nextIndex++) {
+      results[index] = await generateForParticipant(participants[index]);
+    }
+  }
+
+  const workerCount = Math.max(1, Math.min(concurrency, participants.length));
+  await Promise.all(Array.from({ length: workerCount }, worker));
+
+  return results;
 }

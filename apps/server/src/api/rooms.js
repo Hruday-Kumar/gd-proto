@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { generateUniqueRoomCode } from '../domain/roomCode.js';
 import { matchmake } from '../domain/matchmaking.js';
 import { startSession, endSession, isTimerExpired } from '../domain/sessionStateMachine.js';
+import { isValidDurationSeconds, MIN_DURATION_SECONDS, MAX_DURATION_SECONDS } from '../domain/roomDuration.js';
 import { generateTopic } from '../llm/geminiClient.js';
 import { createConsentGate } from './consentGate.js';
 import { mintToken } from '../livekit/token.js';
@@ -19,6 +20,8 @@ import { listTranscriptLinesForRoom } from '../db/transcriptLines.js';
 // apply to the /match path.
 const DEFAULT_MIN_GROUP_SIZE = 3;
 const DEFAULT_MAX_GROUP_SIZE = 6;
+
+const INVALID_DURATION_ERROR = `durationSeconds must be a whole number of seconds between ${MIN_DURATION_SECONDS} and ${MAX_DURATION_SECONDS}`;
 
 // Maps a DB room row (snake_case) to the shape sessionStateMachine.js
 // expects (camelCase, millisecond timestamps).
@@ -96,6 +99,12 @@ export function createRoomsRouter(requireAuth, deps) {
     if (!topicId || !durationSeconds) {
       return res.status(400).json({ error: 'topicId and durationSeconds are required' });
     }
+    // H3: bound the duration before it reaches the database. An out-of-range
+    // value leaves the room live forever AND overflows the agent's stop timer
+    // -- see domain/roomDuration.js.
+    if (!isValidDurationSeconds(durationSeconds)) {
+      return res.status(400).json({ error: INVALID_DURATION_ERROR });
+    }
     const code = await generateUniqueRoomCode(roomCodeExists);
     const room = await insertRoom({ code, topicId, durationSeconds, joinMode: 'code', createdBy: req.userId });
     await addParticipant(room.id, req.userId, req.userId);
@@ -127,6 +136,12 @@ export function createRoomsRouter(requireAuth, deps) {
   router.post('/api/rooms/match', requireAuth, async (req, res) => {
     const { durationSeconds } = req.body || {};
     if (!durationSeconds) return res.status(400).json({ error: 'durationSeconds is required' });
+    // Same H3 check as POST /api/rooms, and it matters more here: the matched
+    // room's duration comes from whichever caller completed the group, so one
+    // bad value would break the session for every member, not just its sender.
+    if (!isValidDurationSeconds(durationSeconds)) {
+      return res.status(400).json({ error: INVALID_DURATION_ERROR });
+    }
 
     const queue = await listQueue();
     if (queue.some((p) => p.id === req.userId)) {
@@ -215,21 +230,43 @@ export function createRoomsRouter(requireAuth, deps) {
 
     let session = toSessionShape(room);
     // Server-authoritative: whichever client polls first after ends_at
-    // passes is the one that flips the room to 'ended' for everyone else
-    // too, since the write lands in the DB before any other poller reads it.
+    // passes is the one that flips the room to 'ended' for everyone else.
+    //
+    // That claim has to be made by the database, not by this read (C3,
+    // audit 2026-07-28). Every client polls on the same interval and the
+    // timer expires for all of them at the same instant, so several
+    // pollers really do read 'live' here before any of them has written
+    // 'ended' -- an earlier version of this comment assumed the write
+    // always landed before the next read, which measurement disproved.
+    // Passing expectedStatus makes the update conditional on the room
+    // still being 'live', so Postgres picks exactly one winner.
     if (isTimerExpired(session, Date.now())) {
       session = endSession(session, Date.now());
-      await updateRoomStatus(room.id, { status: session.status, endedAt: new Date(session.endedAt).toISOString() });
+      const claimed = await updateRoomStatus(room.id, {
+        status: session.status,
+        endedAt: new Date(session.endedAt).toISOString(),
+        expectedStatus: 'live',
+      });
 
-      // Fire-and-forget, same reasoning as /start's transcription dispatch:
-      // generating feedback is real LLM network time and must not delay the
-      // status response to whichever client happened to poll first. A
-      // failure here must not fail the response -- the room still shows
-      // 'ended' even if feedback generation has a problem; that's a
-      // degraded state to alert on (W8), not a reason to error this poll.
-      generateFeedbackFn(room.id).catch((e) =>
-        console.error(`[feedback] failed to generate feedback for room ${room.id}: ${e.message}`)
-      );
+      // Only the poller that actually won the transition dispatches
+      // feedback. Losing is normal and not an error -- the room is ended
+      // either way, and this response still reports 'ended' below.
+      // Dispatching unconditionally meant N participants triggered N
+      // feedback runs, each fanning out one Gemini call per participant:
+      // N*N calls against a rate-limited free tier, where the students
+      // whose calls were throttled silently got no feedback at all.
+      //
+      // Fire-and-forget, same reasoning as /start's transcription
+      // dispatch: generating feedback is real LLM network time and must
+      // not delay the status response. A failure here must not fail the
+      // response -- the room still shows 'ended' even if feedback
+      // generation has a problem; that's a degraded state to alert on
+      // (W8), not a reason to error this poll.
+      if (claimed) {
+        generateFeedbackFn(room.id).catch((e) =>
+          console.error(`[feedback] failed to generate feedback for room ${room.id}: ${e.message}`)
+        );
+      }
     }
 
     // code/topicText/isCreator come from the room itself rather than from

@@ -62,6 +62,18 @@ async function main() {
   const { error } = await supabase.auth.admin.deleteUser(user.id);
   if (error) {
     console.error('Deletion failed:', error.message);
+    // C1 (audit 2026-07-28): before migration 0008, rooms.created_by was
+    // NOT NULL with no ON DELETE clause, so this call failed for any
+    // student who had ever created a room -- with a raw FK error that
+    // gives a founder no idea what to do about it. Name the fix instead.
+    if (/rooms_created_by_fkey|violates foreign key/i.test(error.message)) {
+      console.error(
+        '\nThis looks like the C1 foreign-key defect: rooms.created_by still\n' +
+          'blocks deleting a student who created a room. Run\n' +
+          'supabase/migrations/0008_rooms_created_by_on_delete_set_null.sql in the\n' +
+          'Supabase SQL Editor, then re-run this command.'
+      );
+    }
     process.exit(1);
   }
   console.log(`\nDeleted account ${email} (id ${user.id}).`);

@@ -29,7 +29,13 @@ function baseDeps(overrides = {}) {
     insertRoom: vi.fn(),
     getRoomByCode: vi.fn(),
     getRoomById: vi.fn(),
-    updateRoomStatus: vi.fn(),
+    // Echoes back an updated row, like the real db/rooms.js
+    // updateRoomStatus does via .select(). The return value used to be
+    // ignored by every caller, so a bare vi.fn() was enough; since C3 the
+    // /status route reads it to decide whether it won the ended-transition
+    // claim, so the stub has to honour that contract. Tests that care about
+    // *losing* the claim override this with one returning null.
+    updateRoomStatus: vi.fn(async (id, patch) => ({ id, ...patch })),
     addParticipant: vi.fn(),
     listQueue: vi.fn().mockResolvedValue([]),
     addToQueue: vi.fn(),
@@ -59,6 +65,25 @@ describe('POST /api/rooms (create by code)', () => {
     const deps = baseDeps();
     const app = buildApp(deps);
     const res = await request(app).post('/api/rooms').send({ topicId: 't1' });
+    expect(res.status).toBe(400);
+    expect(deps.insertRoom).not.toHaveBeenCalled();
+  });
+
+  // H3 (audit 2026-07-28). `!durationSeconds` was the only check, so every
+  // one of these reached the database. A room created with an out-of-range
+  // duration never expires (no feedback is ever dispatched) and its agent's
+  // stop timer overflows int32, disconnecting the transcriber at 1ms -- so
+  // the session runs indefinitely with no transcript.
+  it.each([
+    ['above the maximum', 2_000_000_000],
+    ['negative', -5],
+    ['fractional', 0.5],
+    ['below the minimum', 30],
+    ['a numeric string', '600'],
+  ])('rejects a %s durationSeconds without touching the database', async (_label, durationSeconds) => {
+    const deps = baseDeps();
+    const app = buildApp(deps);
+    const res = await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds });
     expect(res.status).toBe(400);
     expect(deps.insertRoom).not.toHaveBeenCalled();
   });
@@ -104,6 +129,24 @@ describe('POST /api/rooms/join', () => {
 });
 
 describe('POST /api/rooms/match', () => {
+  // Same H3 hole as POST /api/rooms: this route also only checked
+  // `!durationSeconds`, and it's worse here -- the duration a matched room
+  // gets is whichever caller happened to complete the group, so one bad
+  // value takes down a session for up to six students, not just its sender.
+  it.each([
+    ['above the maximum', 2_000_000_000],
+    ['negative', -5],
+    ['fractional', 0.5],
+    ['a numeric string', '600'],
+  ])('rejects a %s durationSeconds without queueing or creating a room', async (_label, durationSeconds) => {
+    const deps = baseDeps({ listQueue: vi.fn().mockResolvedValue([{ id: 'a' }, { id: 'b' }]) });
+    const app = buildApp(deps, 'c');
+    const res = await request(app).post('/api/rooms/match').send({ durationSeconds });
+    expect(res.status).toBe(400);
+    expect(deps.addToQueue).not.toHaveBeenCalled();
+    expect(deps.insertRoom).not.toHaveBeenCalled();
+  });
+
   it('queues the caller when below the matching threshold', async () => {
     const deps = baseDeps({ listQueue: vi.fn().mockResolvedValue([{ id: 'a' }]) });
     const app = buildApp(deps, 'c');
@@ -221,6 +264,24 @@ describe('POST /api/rooms/:id/start', () => {
     const res = await request(app).post('/api/rooms/r1/start').send();
     expect(res.status).toBe(409);
   });
+
+  // C1 (audit 2026-07-28): migration 0008 makes rooms.created_by
+  // `on delete set null`, so a room outlives the student who created it
+  // once they exercise their right to erasure. Nobody may then start it --
+  // the creator-only gate is an equality check against req.userId, and a
+  // NULL creator must never accidentally match. Pinned here because the
+  // safety of that migration depends on this behaviour, and nothing else
+  // in the suite covers a null creator.
+  it('403s when the room has no creator (creator account was deleted)', async () => {
+    const deps = baseDeps({
+      getRoomById: vi.fn().mockResolvedValue({ id: 'r1', status: 'waiting', duration_seconds: 300, created_by: null }),
+    });
+    const app = buildApp(deps);
+    const res = await request(app).post('/api/rooms/r1/start').send();
+    expect(res.status).toBe(403);
+    expect(deps.updateRoomStatus).not.toHaveBeenCalled();
+    expect(deps.startTranscriptionFn).not.toHaveBeenCalled();
+  });
 });
 
 describe('GET /api/rooms/:id/status', () => {
@@ -233,6 +294,27 @@ describe('GET /api/rooms/:id/status', () => {
     const res = await request(app).get('/api/rooms/r1/status');
     expect(res.body.status).toBe('live');
     expect(deps.updateRoomStatus).not.toHaveBeenCalled();
+  });
+
+  // C1 (audit 2026-07-28), same reasoning as the /start case above: after
+  // migration 0008 a room can outlive its creator with created_by NULL.
+  // isCreator must be false for everyone then, so the lobby never renders
+  // a start button nobody is allowed to press.
+  it('reports isCreator false when the room has no creator', async () => {
+    const endsAt = Date.now() + 60_000;
+    const deps = baseDeps({
+      getRoomById: vi.fn().mockResolvedValue({
+        id: 'r1',
+        status: 'live',
+        duration_seconds: 300,
+        created_by: null,
+        ends_at: new Date(endsAt).toISOString(),
+      }),
+    });
+    const app = buildApp(deps);
+    const res = await request(app).get('/api/rooms/r1/status');
+    expect(res.status).toBe(200);
+    expect(res.body.isCreator).toBe(false);
   });
 
   // The lobby needs this to render a countdown -- without it, a
@@ -333,6 +415,65 @@ describe('GET /api/rooms/:id/status', () => {
     const app = buildApp(deps);
     await request(app).get('/api/rooms/r1/status');
     expect(deps.generateFeedbackFn).toHaveBeenCalledWith('r1');
+  });
+
+  // C3 (audit 2026-07-28). Every client in a room polls /status on the same
+  // 3-second interval and the timer expires for all of them at the same
+  // instant, so several pollers routinely read `status: 'live'` before any
+  // of them has written 'ended'. Each one then dispatched its own full
+  // feedback run, and generateFeedbackForRoom fans out one Gemini call per
+  // participant -- so N participants produced N*N calls against a
+  // rate-limited free tier, and the students whose calls got 429'd silently
+  // received no feedback at all. Reproduced 4/4 at 0ms, 5ms and 25ms of
+  // simulated DB latency.
+  //
+  // The transition must therefore be *claimed*, not just written: the
+  // update carries a precondition on the room still being 'live', and only
+  // the caller whose update actually matched a row dispatches feedback.
+  // The mock below models exactly what Postgres does with that
+  // precondition -- the first caller matches a row, everyone after gets
+  // null.
+  it('dispatches feedback only once when several participants poll an expired room together', async () => {
+    const endsAt = Date.now() - 1_000;
+    let claimed = false;
+    const deps = baseDeps({
+      getRoomById: vi.fn().mockResolvedValue({ id: 'r1', status: 'live', duration_seconds: 300, ends_at: new Date(endsAt).toISOString() }),
+      updateRoomStatus: vi.fn(async (id) => {
+        if (claimed) return null;
+        claimed = true;
+        return { id, status: 'ended' };
+      }),
+    });
+    const app = buildApp(deps);
+
+    const responses = await Promise.all([
+      request(app).get('/api/rooms/r1/status'),
+      request(app).get('/api/rooms/r1/status'),
+      request(app).get('/api/rooms/r1/status'),
+      request(app).get('/api/rooms/r1/status'),
+    ]);
+
+    // Every poller still gets a correct answer -- losing the race is not an
+    // error, it just means someone else already ended the room.
+    expect(responses.map((r) => r.status)).toEqual([200, 200, 200, 200]);
+    expect(responses.map((r) => r.body.status)).toEqual(['ended', 'ended', 'ended', 'ended']);
+    expect(deps.generateFeedbackFn).toHaveBeenCalledTimes(1);
+  });
+
+  // The claim has to be enforced by Postgres, not by JS state: under the
+  // deployment target (Render, one container) module state would happen to
+  // work, but the precondition is what makes this correct at all, and it's
+  // the only thing that keeps it correct if this ever runs as more than one
+  // instance.
+  it('claims the ended transition with a precondition on the room still being live', async () => {
+    const endsAt = Date.now() - 1_000;
+    const deps = baseDeps({
+      getRoomById: vi.fn().mockResolvedValue({ id: 'r1', status: 'live', duration_seconds: 300, ends_at: new Date(endsAt).toISOString() }),
+      updateRoomStatus: vi.fn().mockResolvedValue({ id: 'r1', status: 'ended' }),
+    });
+    const app = buildApp(deps);
+    await request(app).get('/api/rooms/r1/status');
+    expect(deps.updateRoomStatus).toHaveBeenCalledWith('r1', expect.objectContaining({ status: 'ended', expectedStatus: 'live' }));
   });
 
   it('does not dispatch feedback generation when the room is not yet ended', async () => {
