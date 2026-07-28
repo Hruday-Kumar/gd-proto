@@ -69,6 +69,25 @@ describe('POST /api/rooms (create by code)', () => {
     expect(deps.insertRoom).not.toHaveBeenCalled();
   });
 
+  // H3 (audit 2026-07-28). `!durationSeconds` was the only check, so every
+  // one of these reached the database. A room created with an out-of-range
+  // duration never expires (no feedback is ever dispatched) and its agent's
+  // stop timer overflows int32, disconnecting the transcriber at 1ms -- so
+  // the session runs indefinitely with no transcript.
+  it.each([
+    ['above the maximum', 2_000_000_000],
+    ['negative', -5],
+    ['fractional', 0.5],
+    ['below the minimum', 30],
+    ['a numeric string', '600'],
+  ])('rejects a %s durationSeconds without touching the database', async (_label, durationSeconds) => {
+    const deps = baseDeps();
+    const app = buildApp(deps);
+    const res = await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds });
+    expect(res.status).toBe(400);
+    expect(deps.insertRoom).not.toHaveBeenCalled();
+  });
+
   it('generates a code, creates the room, and seats the creator as a participant', async () => {
     const deps = baseDeps({
       insertRoom: vi.fn().mockResolvedValue({ id: 'r1', code: 'ABCXYZ', status: 'waiting', topic_id: 't1', duration_seconds: 300 }),
@@ -110,6 +129,24 @@ describe('POST /api/rooms/join', () => {
 });
 
 describe('POST /api/rooms/match', () => {
+  // Same H3 hole as POST /api/rooms: this route also only checked
+  // `!durationSeconds`, and it's worse here -- the duration a matched room
+  // gets is whichever caller happened to complete the group, so one bad
+  // value takes down a session for up to six students, not just its sender.
+  it.each([
+    ['above the maximum', 2_000_000_000],
+    ['negative', -5],
+    ['fractional', 0.5],
+    ['a numeric string', '600'],
+  ])('rejects a %s durationSeconds without queueing or creating a room', async (_label, durationSeconds) => {
+    const deps = baseDeps({ listQueue: vi.fn().mockResolvedValue([{ id: 'a' }, { id: 'b' }]) });
+    const app = buildApp(deps, 'c');
+    const res = await request(app).post('/api/rooms/match').send({ durationSeconds });
+    expect(res.status).toBe(400);
+    expect(deps.addToQueue).not.toHaveBeenCalled();
+    expect(deps.insertRoom).not.toHaveBeenCalled();
+  });
+
   it('queues the caller when below the matching threshold', async () => {
     const deps = baseDeps({ listQueue: vi.fn().mockResolvedValue([{ id: 'a' }]) });
     const app = buildApp(deps, 'c');
