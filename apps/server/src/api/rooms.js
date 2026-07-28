@@ -80,7 +80,11 @@ export function createRoomsRouter(requireAuth, deps) {
     const participant = await isParticipant(room.id, req.userId);
     if (!participant) return res.status(403).json({ error: 'Not a participant of this room' });
 
-    const token = await mintTokenFn(req.userId, room.id, { name: req.userId });
+    // M1 (audit 2026-07-28): a student's token must never carry
+    // canPublishData -- only the transcription agent's own token
+    // (agent/roomAgent.js) needs it, to broadcast real captions. A student
+    // token that had it could forge caption data over the same channel.
+    const token = await mintTokenFn(req.userId, room.id, { name: req.userId, canPublishData: false });
     res.status(200).json({ token, url: liveKitUrl, identity: req.userId, roomName: room.id });
   });
 

@@ -636,6 +636,21 @@ describe('POST /api/rooms/:id/token', () => {
     });
     expect(deps.mintTokenFn).toHaveBeenCalledWith('user-1', 'r1', expect.objectContaining({ name: 'user-1' }));
   });
+
+  // M1 (engineering audit, 2026-07-28): a student token that grants
+  // canPublishData lets any student forge live-caption data messages over
+  // the room's data channel -- the same channel the transcription agent
+  // uses to broadcast real captions -- undermining the attribution the
+  // whole product is built on. Only the agent worker's own token needs
+  // canPublishData:true (agent/roomAgent.js); a student's never does.
+  it('mints a student token with canPublishData explicitly false', async () => {
+    const deps = baseDeps({
+      getRoomById: vi.fn().mockResolvedValue({ id: 'r1', status: 'live', created_by: 'user-1' }),
+    });
+    const app = buildApp(deps);
+    await request(app).post('/api/rooms/r1/token').send();
+    expect(deps.mintTokenFn).toHaveBeenCalledWith('user-1', 'r1', expect.objectContaining({ canPublishData: false }));
+  });
 });
 
 describe('GET /api/rooms/:id/participants', () => {
