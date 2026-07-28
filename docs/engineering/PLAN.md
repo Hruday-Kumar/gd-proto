@@ -101,9 +101,9 @@ C2) — this only concerns the static frontend build.
 |---|---|---|
 | `0001`–`0006` | ✅ Yes | Confirmed in earlier sessions |
 | `0007_feedback_rating.sql` | ✅ **Yes — verified live 2026-07-28** | `feedback.rating` present. PROGRESS.md's old "PR #54 held, don't merge" warning is **stale**; the code shipped and the column exists. |
-| `0008_rooms_created_by_on_delete_set_null.sql` | ❓ **Unverified** | Written for C1, merged to `main` 2026-07-28 (PR #5, commit `a877734`). Someone must confirm it's been run and record it here. **Account deletion (DPDP, guardrail #4) stays broken until it runs.** |
-| `0009_rooms_duration_seconds_bounds.sql` | ❓ **Unverified** | Written 2026-07-28 for H3 (60–3600s bound). Defence in depth only — the route validation is already live in code. Superseded in intent by `0010` below (60–1500s) — if applying now, apply both in order, or just `0010` if `0009` was never run. |
-| `0010_tighten_rooms_duration_seconds_bounds.sql` | ❓ **Unverified** | Written 2026-07-28, merged same day (PR #5). Tightens the max from 60min to 25min per direct user request — a GD Arena round was never meant to run that long. `domain/roomDuration.js`'s `MAX_DURATION_SECONDS` is already `1500` in code. |
+| `0008_rooms_created_by_on_delete_set_null.sql` | ✅ **Confirmed applied — live-tested 2026-07-28** | Re-verified after the user ran it: deleting a scratch user who'd created a room now succeeds (was `23503` FK violation before), and the room survives with `created_by` set to `NULL`. Account deletion (DPDP, guardrail #4) is fixed for real. |
+| `0009_rooms_duration_seconds_bounds.sql` | ✅ **Confirmed applied — live-tested 2026-07-28** | |
+| `0010_tighten_rooms_duration_seconds_bounds.sql` | ✅ **Confirmed applied — live-tested 2026-07-28** | Re-verified after the user ran both: a scratch room now rejects `duration_seconds` updates at both 5000 and 2000 (proving 0010's tighter 1500 ceiling is live, not just 0009's original 3600), and accepts a valid 900. Check constraint `rooms_duration_seconds_bounds` confirmed enforcing 60–1500 in the live DB. |
 
 ---
 
@@ -139,7 +139,7 @@ Work top to bottom. Each row is one branch, one PR.
 | ✅ | Push the branch stack, open PRs, run `pr-review` on each | — | PRs #4, #5, #6 all merged into `placemestudy1/gd-proto`. |
 | ✅ | Decide the frontend host | — | Vercel, decided 2026-07-28. See §2. `_redirects` deleted. |
 | ✅ | Land the `LobbyPage` `beforeunload` work | — | Landed in commit `2d2b0ac`, before this update. |
-| ☐ | Verify migrations `0008`, `0009`, `0010` are applied live | — | §3. Account deletion (0008) and the duration cap (0009/0010) stay only code-level-enforced until confirmed. |
+| ✅ | Verify migrations `0008`, `0009`, `0010` are applied live | — | §3. **Confirmed applied, live-tested 2026-07-28** (two rounds: first confirmed all three were missing, user ran them, re-test confirmed all three now enforced) — see §3 for the evidence. |
 
 ### 5b. Audit Phase 3 — access control & abuse (next real work)
 
