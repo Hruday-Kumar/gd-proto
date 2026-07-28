@@ -6,16 +6,17 @@ import { describe, it, expect, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { createTopicsRouter } from '../src/api/topics.js';
+import { createLlmRateLimiter } from '../src/api/rateLimit.js';
 
 function stubAuth(req, _res, next) {
   req.userId = 'user-123';
   next();
 }
 
-function buildApp({ insertCustomTopic, insertGeneratedTopic, generateTopicFn }) {
+function buildApp({ insertCustomTopic, insertGeneratedTopic, generateTopicFn, llmRateLimiter }) {
   const app = express();
   app.use(express.json());
-  app.use(createTopicsRouter(stubAuth, { insertCustomTopic, insertGeneratedTopic, generateTopicFn }));
+  app.use(createTopicsRouter(stubAuth, { insertCustomTopic, insertGeneratedTopic, generateTopicFn, llmRateLimiter }));
   return app;
 }
 
@@ -24,6 +25,17 @@ describe('POST /api/topics/custom', () => {
     const insertCustomTopic = vi.fn();
     const app = buildApp({ insertCustomTopic, insertGeneratedTopic: vi.fn() });
     const res = await request(app).post('/api/topics/custom').send({ text: '   ' });
+    expect(res.status).toBe(400);
+    expect(insertCustomTopic).not.toHaveBeenCalled();
+  });
+
+  // H5 (audit 2026-07-28): a custom topic is embedded verbatim into the
+  // Gemini feedback prompt for every participant in the room -- unbounded
+  // text gives a hostile submission room to break out of that framing.
+  it('rejects a topic longer than 200 characters without calling the db', async () => {
+    const insertCustomTopic = vi.fn();
+    const app = buildApp({ insertCustomTopic, insertGeneratedTopic: vi.fn() });
+    const res = await request(app).post('/api/topics/custom').send({ text: 'a'.repeat(201) });
     expect(res.status).toBe(400);
     expect(insertCustomTopic).not.toHaveBeenCalled();
   });
@@ -60,5 +72,21 @@ describe('POST /api/topics/generate', () => {
     const res = await request(app).post('/api/topics/generate').send({});
     expect(res.status).toBe(502);
     expect(res.body.error).toMatch(/gemini/i);
+  });
+
+  // H4 (audit 2026-07-28): confirms the limiter is actually attached to
+  // this route, not just correct in isolation (see llmRateLimit.test.js
+  // for the limiter's own behavior).
+  it('is rate-limited per user', async () => {
+    const app = buildApp({
+      insertCustomTopic: vi.fn(),
+      insertGeneratedTopic: vi.fn().mockResolvedValue({ id: 't', text: 'x', source: 'llm' }),
+      generateTopicFn: vi.fn().mockResolvedValue('x'),
+      llmRateLimiter: createLlmRateLimiter({ windowMs: 60_000, max: 2 }),
+    });
+    await request(app).post('/api/topics/generate').send({});
+    await request(app).post('/api/topics/generate').send({});
+    const res = await request(app).post('/api/topics/generate').send({});
+    expect(res.status).toBe(429);
   });
 });

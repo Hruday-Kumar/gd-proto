@@ -1,6 +1,8 @@
 # PLAN — audit remediation & road to pilot
 
-**Last updated:** 2026-07-28
+**Last updated:** 2026-07-28 (doc-sync pass — §2/§3/§4 brought in line with
+what's actually on `dev`/`main`; see `PROGRESS.md`'s "Second-session work
+landed same day" + doc-sync entries for the full why)
 
 This is the **shared checklist and ownership board** for two people working
 this repo at the same time. It answers: what is done, what is next, who has
@@ -45,7 +47,7 @@ how it was verified*. Don't duplicate one into the other.
 **Test commands** (from repo root, on Node 22):
 
 ```
-npx vitest run --root apps/server    # 191 tests, all must pass
+npx vitest run --root apps/server    # 192 tests, all must pass
 npx oxlint apps/server/src           # 1 known pre-existing warning (L5)
 npm run build --workspace=apps/web   # must build clean
 ```
@@ -54,38 +56,42 @@ npm run build --workspace=apps/web   # must build clean
 
 ## 2. Repo state right now — ⚠️ read before branching
 
-### The branch stack
+**Updated 2026-07-28.** The three hazards this section used to describe
+(branch stack unpushed, `dev` behind `main`, uncommitted `LobbyPage`/vercel
+work) are **all resolved** — an intervening commit (`2d2b0ac`) landed the
+uncommitted work, and PR #4 plus a second, previously-undocumented PR #5/#6
+pushed and merged everything into `placemestudy1/gd-proto`. This section
+had never been updated to say so; corrected now rather than left to mislead
+the next session. See `PROGRESS.md`'s "Second-session work landed same day"
+entry for what PR #5/#6 actually contained.
 
-All audit remediation so far is **stacked on one chain and none of it is
-pushed or merged.** 11 commits, 6 findings fixed:
+### Repo identity — read this first if anything below looks wrong
+The canonical remote is now **`placemestudy1/gd-proto`** (the repo moved
+twice: `Hruday-Kumar/gd-proto` → `Place-Me-study/gd-proto` →
+`placemestudy1/gd-proto`). `origin` in most local clones still points at
+the first, personal repo — **don't trust `origin` for `gh` commands**, pass
+`--repo placemestudy1/gd-proto` explicitly (same fix already applied to
+`.claude/skills/pr-review/SKILL.md`). As of this update, `dev`, `main`, and
+`placemestudy1/dev`/`placemestudy1/main` are all fully in sync (verified
+via `git rev-list --left-right --count`) — there is currently no
+branch-stack hazard to warn about. If that's no longer true when you read
+this, treat this section as stale and check `git log`/`git branch -a`
+yourself rather than trusting it blindly.
 
-```
-origin/main ─── = local dev (22871fd)
-                   └── chore/c2-remove-vercel-serverless-handler   [C1, C3, C2, AUDIT.md]
-                         └── fix/h2-graceful-shutdown-boot-recovery [H2, H3, M11, docs]  <- HEAD
-```
+### Frontend host — decided 2026-07-28
+**Vercel**, not Cloudflare Pages — ADR-0007 updated (see its "Superseded
+2026-07-28" section), `apps/web/public/_redirects` deleted,
+`apps/web/vercel.json` is the live config. M12 is resolved. Reason on
+record: exploratory, per direct user instruction, not a technical failure
+of Cloudflare Pages. The **backend** stays Render-only regardless (ADR-0009,
+C2) — this only concerns the static frontend build.
 
-### Three hazards, in order of how easily they bite
-
-1. **`origin/dev` is 3 commits BEHIND `origin/main`.** The `dev` → `main`
-   release happened (PRs #1, #3) but step 6c of `BRANCHING.md` — hard-resetting
-   `dev` to `main` — was never done. **If you branch off `origin/dev` you will
-   silently miss the `ca-certificates` Docker fix**, without which LiveKit's
-   native engine fails TLS in the container. Fix once, before anyone branches:
-   `git checkout dev && git reset --hard origin/main && git push origin dev --force-with-lease`
-2. **Nothing above is on the remote.** Both task branches are local-only, and
-   no PRs are open. Until they're pushed, the other person cannot see six
-   fixes and will re-diagnose bugs that are already solved.
-3. **Uncommitted work sits in the working tree** (audit L8) and is invisible
-   to everyone else:
-   - `apps/web/src/pages/LobbyPage.jsx` — a real `beforeunload` guard warning
-     a student before they refresh out of a live session. **Untracked feature
-     work, deliberately left alone by the audit sessions.** Needs an owner,
-     a branch and a test.
-   - `apps/web/vercel.json` + `apps/web/public/_redirects` — SPA-routing
-     configs for **two different frontend hosts at once**. See M12: ADR-0007
-     chose Cloudflare Pages, ADR-0009 confirmed the backend is Render-only.
-     Someone must decide the frontend host and delete the loser.
+### What's still genuinely open from the old §2 (not resolved by the above)
+- **Migration `0008` (C1) still needs live-application confirmed** — see §3.
+  The code/schema fix is real and merged; whether it's been run against the
+  live Supabase project is unverified from here (no raw-SQL access).
+- **Migrations `0009` and `0010` (H3, duration bounds) also unverified live**
+  — see §3.
 
 ---
 
@@ -95,8 +101,9 @@ origin/main ─── = local dev (22871fd)
 |---|---|---|
 | `0001`–`0006` | ✅ Yes | Confirmed in earlier sessions |
 | `0007_feedback_rating.sql` | ✅ **Yes — verified live 2026-07-28** | `feedback.rating` present. PROGRESS.md's old "PR #54 held, don't merge" warning is **stale**; the code shipped and the column exists. |
-| `0008_rooms_created_by_on_delete_set_null.sql` | ❓ **Unverified** | Written for C1. Someone must confirm and record it here. **Account deletion (DPDP, guardrail #4) stays broken until it runs.** |
-| `0009_rooms_duration_seconds_bounds.sql` | ❌ **No** | Written 2026-07-28 for H3. Defence in depth only — the route validation is already live in code, so this is not a merge blocker. |
+| `0008_rooms_created_by_on_delete_set_null.sql` | ✅ **Confirmed applied — live-tested 2026-07-28** | Re-verified after the user ran it: deleting a scratch user who'd created a room now succeeds (was `23503` FK violation before), and the room survives with `created_by` set to `NULL`. Account deletion (DPDP, guardrail #4) is fixed for real. |
+| `0009_rooms_duration_seconds_bounds.sql` | ✅ **Confirmed applied — live-tested 2026-07-28** | |
+| `0010_tighten_rooms_duration_seconds_bounds.sql` | ✅ **Confirmed applied — live-tested 2026-07-28** | Re-verified after the user ran both: a scratch room now rejects `duration_seconds` updates at both 5000 and 2000 (proving 0010's tighter 1500 ceiling is live, not just 0009's original 3600), and accepts a valid 900. Check constraint `rooms_duration_seconds_bounds` confirmed enforcing 60–1500 in the live DB. |
 
 ---
 
@@ -107,16 +114,26 @@ Audit findings closed, newest first. Evidence and root causes are in
 
 | ID | What | Where |
 |---|---|---|
+| **M6/M7** | CORS is now an origin allowlist (was wide open) + helmet security headers on every response. `ALLOWED_ORIGINS` (comma-separated) must be set on Render once the frontend's real origin is known — see `DEPLOYMENT.md`'s secrets checklist. Local Vite dev origins always allowed regardless | `domain/corsConfig.js`, `index.js`, `.env.example`, `DEPLOYMENT.md` |
+| **H5** | Custom topic length capped (200 chars) + the topic (and topic-generation's category/difficulty) delimited and explicitly framed as data, not instructions, in both Gemini prompts — defense-in-depth against a student's custom topic hijacking every participant's feedback in the room | `domain/topicText.js`, `domain/feedbackPrompt.js`, `domain/topicPrompt.js`, `api/topics.js` |
+| **H4** | Rate-limited the two Gemini-backed routes (topic generation, random matching) — keyed per-user, not IP; wiring confirmed via dedicated route-level tests, not just the limiter in isolation | `api/rateLimit.js`, `api/topics.js`, `api/rooms.js` |
+| **H7** | Matchmaking claim is now race-safe — atomic `DELETE...RETURNING` claim + retry loop, `matchmake()` itself untouched/pure. Caught and fixed its own data-loss bug (a partially-claimed member silently dropped) before merge | `domain/matchmakingClaim.js`, `db/matchmakingQueue.js` |
+| **H8** | Dropped `room_participants`' client-facing insert policy — any authenticated student could self-seat into any room via a direct PostgREST call, reproduced live before fixing, re-verified blocked after | migration `0011`, `test/roomParticipantsRlsIsolation.test.js` |
+| **M1** | Student LiveKit tokens no longer grant `canPublishData` — could forge live-caption data messages attributed to a classmate | `api/rooms.js`, `test/roomsApi.test.js` |
 | **M11** | LLM fan-out bounded — worker pool, concurrency 2, order + failure-isolation preserved | `domain/feedbackGeneration.js` |
-| **H3** | `durationSeconds` validated (whole seconds, 60–3600) at **both** `/api/rooms` and `/api/rooms/match`, plus a schema check constraint | `domain/roomDuration.js`, `api/rooms.js`, migration `0009` |
+| **H3** | `durationSeconds` validated (whole seconds, 60–1500 i.e. up to 25min — tightened from an initial 60–3600 by `0010`, a same-day follow-up product decision, not a second bug) at **both** `/api/rooms` and `/api/rooms/match`, plus a schema check constraint | `domain/roomDuration.js`, `api/rooms.js`, migrations `0009`, `0010` |
 | **H2** | Graceful SIGTERM/SIGINT shutdown + boot recovery of live rooms, re-dispatching with time **remaining**. Also closes the per-speaker AssemblyAI sockets that were being leaked | `shutdown.js`, `domain/roomRecovery.js`, `agent/roomAgent.js`, `db/rooms.js`, `index.js` |
 | **C2** | Vercel serverless handler removed; ADR-0009 records why this app cannot run on a function runtime | `index.js`, `adr/0009-*.md` |
 | **C3** | Ended-transition is now a conditional claim, so only one poller dispatches feedback | `db/rooms.js`, `api/rooms.js` |
 | **C1** | `rooms.created_by` no longer blocks account deletion | migration `0008` |
 
 **Note on ordering:** H2 is an audit *Phase 4* item, pulled forward ahead of
-Phase 3 by direct instruction. The audit's phase numbering and the order we
-actually worked in differ — trust this file.
+Phase 3 by direct instruction. H7 is a *Phase 5* item, pulled forward to run
+alongside Phase 3's access-control work per the 2026-07-28 pilot-readiness
+roadmap review (a matchmaking race is exactly the failure mode a real pilot
+kickoff — several students joining at once — would trigger). The audit's
+phase numbering and the order we actually worked in differ — trust this
+file.
 
 ---
 
@@ -124,26 +141,26 @@ actually worked in differ — trust this file.
 
 Work top to bottom. Each row is one branch, one PR.
 
-### 5a. Unblock the repo (do this first — it costs minutes and blocks everyone)
+### 5a. Unblock the repo — mostly done as of 2026-07-28, see §2
 
 | ✅ | Task | Owner | Notes |
 |---|---|---|---|
-| ☐ | Reset `origin/dev` to `origin/main` | — | §2 hazard 1. Do before anyone branches. |
-| ☐ | Push the branch stack, open PRs, run `pr-review` on each | — | §2 hazard 2. Six fixes are invisible until this happens. |
-| ☐ | Verify migration `0008` is applied | — | §3. Account deletion is broken until it is. |
-| ☐ | Decide the frontend host; delete `vercel.json` **or** `public/_redirects` | — | M12. ADR-0007 says Cloudflare Pages. |
-| ☐ | Branch + test + land the `LobbyPage` `beforeunload` work | — | L8. Real feature sitting untracked. |
+| ✅ | Reset `dev` to match `main` | — | Done via an intervening commit before this update; verified in sync 2026-07-28. |
+| ✅ | Push the branch stack, open PRs, run `pr-review` on each | — | PRs #4, #5, #6 all merged into `placemestudy1/gd-proto`. |
+| ✅ | Decide the frontend host | — | Vercel, decided 2026-07-28. See §2. `_redirects` deleted. |
+| ✅ | Land the `LobbyPage` `beforeunload` work | — | Landed in commit `2d2b0ac`, before this update. |
+| ✅ | Verify migrations `0008`, `0009`, `0010` are applied live | — | §3. **Confirmed applied, live-tested 2026-07-28** (two rounds: first confirmed all three were missing, user ran them, re-test confirmed all three now enforced) — see §3 for the evidence. |
 
 ### 5b. Audit Phase 3 — access control & abuse (next real work)
 
 | ✅ | ID | Task | Owner | Fix per audit |
 |---|---|---|---|---|
-| ☐ | **H8** | RLS lets any student seat themselves in any room | — | Drop the client insert policy on `room_participants` — every real seat is written by the service-role client. Re-run `test/historyRlsIsolation.test.js`. **Needs a live DB re-check.** |
-| ☐ | **M1** | Student LiveKit tokens grant `canPublishData` | — | Pass `canPublishData: false` for student tokens (`api/rooms.js:80`). Lets any student forge captions attributed to a classmate. **Needs a live re-check.** |
-| ☐ | **H4** | No rate limiting on metered LLM routes | — | `express-rate-limit` keyed on `req.userId`, strictest on the two Gemini routes. |
-| ☐ | **H5** | Prompt injection via custom topic | — | Cap topic length (~200 chars), delimit untrusted spans, instruct the model to treat the topic as data. |
-| ☐ | **M6** | Wide-open CORS | — | Origin allowlist. |
-| ☐ | **M7** | No security headers | — | `helmet`. |
+| ✅ | **H8** | RLS lets any student seat themselves in any room | — | **DONE, PR #9.** See §4. |
+| ✅ | **M1** | Student LiveKit tokens grant `canPublishData` | — | **DONE, PR #9.** See §4. |
+| ✅ | **H4** | No rate limiting on metered LLM routes | — | **DONE, PR #13.** See §4. |
+| ✅ | **H5** | Prompt injection via custom topic | — | **DONE, PR #14.** See §4. Also applied the same delimiting to topic-generation's category/difficulty (not reachable via the current web UI, but the API accepts them directly — same vulnerability class). |
+| ✅ | **M6** | Wide-open CORS | — | **DONE, PR #15.** See §4. |
+| ✅ | **M7** | No security headers | — | **DONE, PR #15.** See §4. |
 
 ### 5c. Audit Phase 4 — make failure visible (H2 already done)
 
@@ -158,7 +175,7 @@ Work top to bottom. Each row is one branch, one PR.
 | ✅ | ID | Task | Owner | Notes |
 |---|---|---|---|---|
 | ☐ | **H6** | CI never builds or lints the frontend | — | Two lines in `ci.yml`; protects half the product. Do early — it's nearly free. |
-| ☐ | **H7** | Matchmaking is check-then-act with no lock | — | `SELECT … FOR UPDATE SKIP LOCKED` or an advisory lock. Keep `matchmake()` pure. |
+| ✅ | **H7** | Matchmaking is check-then-act with no lock | — | **DONE, PR #11.** See §4. Pulled forward ahead of Phase 5 — see the ordering note in §4. |
 | ☐ | **M10** | `GET /status` performs writes | — | Still open — C3 made the write *conditional*, but it's still a GET with side effects. |
 | ☐ | **M3** | `/health/agent` unauthenticated, in-memory only | — | Leaks `roomId` + raw error text; always reports healthy after a restart. |
 | ☐ | **M5** | Sleep mitigation rests on one GitHub Actions cron | — | Best-effort, auto-disabled after 60 days idle, currently no-ops. |
@@ -192,7 +209,7 @@ parallel without stepping on each other:
 
 - **Track A — server hardening (§5b + M2):** `api/`, `index.js`, `domain/`.
   Mostly offline-testable, TDD-shaped, no dashboard needed.
-- **Track B — infra, record & cleanup (§5a, H6, M4, H1, L1):** CI, Docker,
+- **Track B — infra, record & cleanup (§5a leftovers, H6, M4, L1):** CI, Docker,
   docs, the frontend-host decision. Unblocks Track A's PRs and the deploy.
 
 **Do not both take H8 and M1** — both need the same live DB / live room

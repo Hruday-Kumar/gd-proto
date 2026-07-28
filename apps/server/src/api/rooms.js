@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { generateUniqueRoomCode } from '../domain/roomCode.js';
-import { matchmake } from '../domain/matchmaking.js';
+import { claimMatchOrQueue } from '../domain/matchmakingClaim.js';
 import { startSession, endSession, isTimerExpired } from '../domain/sessionStateMachine.js';
 import { isValidDurationSeconds, MIN_DURATION_SECONDS, MAX_DURATION_SECONDS } from '../domain/roomDuration.js';
 import { generateTopic } from '../llm/geminiClient.js';
@@ -12,6 +12,7 @@ import { getFeedbackForRoomAndUser, rateFeedback } from '../db/feedback.js';
 import { listParticipants } from '../db/roomParticipants.js';
 import { listProfiles } from '../db/profiles.js';
 import { listTranscriptLinesForRoom } from '../db/transcriptLines.js';
+import { createLlmRateLimiter } from './rateLimit.js';
 
 // Interim group-size default for random matching (PHASE1_PLAN.md §8,
 // decided 2026-07-26: anchored to the AI Voice Practice mode's stated
@@ -45,6 +46,8 @@ export function createRoomsRouter(requireAuth, deps) {
     listQueue,
     addToQueue,
     removeFromQueue,
+    claimFromQueue,
+    claimMatchOrQueueFn = claimMatchOrQueue,
     insertGeneratedTopic,
     generateTopicFn = generateTopic,
     getActiveRoomForUser,
@@ -61,6 +64,7 @@ export function createRoomsRouter(requireAuth, deps) {
     listParticipantsFn = listParticipants,
     listProfilesFn = listProfiles,
     listTranscriptLinesForRoomFn = listTranscriptLinesForRoom,
+    llmRateLimiter = createLlmRateLimiter(),
   } = deps;
 
   const router = Router();
@@ -80,7 +84,11 @@ export function createRoomsRouter(requireAuth, deps) {
     const participant = await isParticipant(room.id, req.userId);
     if (!participant) return res.status(403).json({ error: 'Not a participant of this room' });
 
-    const token = await mintTokenFn(req.userId, room.id, { name: req.userId });
+    // M1 (audit 2026-07-28): a student's token must never carry
+    // canPublishData -- only the transcription agent's own token
+    // (agent/roomAgent.js) needs it, to broadcast real captions. A student
+    // token that had it could forge caption data over the same channel.
+    const token = await mintTokenFn(req.userId, room.id, { name: req.userId, canPublishData: false });
     res.status(200).json({ token, url: liveKitUrl, identity: req.userId, roomName: room.id });
   });
 
@@ -133,7 +141,9 @@ export function createRoomsRouter(requireAuth, deps) {
     res.status(200).json({ id: room.id, code: room.code, status: room.status });
   });
 
-  router.post('/api/rooms/match', requireAuth, async (req, res) => {
+  // H4 (audit 2026-07-28): rate-limited -- a formed match calls Gemini for
+  // the room's topic, same shared-quota risk as /api/topics/generate.
+  router.post('/api/rooms/match', requireAuth, llmRateLimiter, async (req, res) => {
     const { durationSeconds } = req.body || {};
     if (!durationSeconds) return res.status(400).json({ error: 'durationSeconds is required' });
     // Same H3 check as POST /api/rooms, and it matters more here: the matched
@@ -143,15 +153,13 @@ export function createRoomsRouter(requireAuth, deps) {
       return res.status(400).json({ error: INVALID_DURATION_ERROR });
     }
 
-    const queue = await listQueue();
-    if (queue.some((p) => p.id === req.userId)) {
-      return res.status(200).json({ status: 'queued' });
-    }
+    // H7 (audit 2026-07-28): claimMatchOrQueue wraps the pure matchmake()
+    // decision in a race-safe claim -- see domain/matchmakingClaim.js. The
+    // members it returns are already atomically removed from the queue, so
+    // no further removeFromQueue call is needed for a match.
+    const claim = await claimMatchOrQueueFn(req.userId, { listQueue, addToQueue, claimFromQueue, minGroupSize, maxGroupSize });
 
-    const result = matchmake(queue, { id: req.userId }, { minGroupSize, maxGroupSize });
-
-    if (result.type === 'queued') {
-      await addToQueue(req.userId);
+    if (claim.type === 'already_queued' || claim.type === 'queued') {
       return res.status(200).json({ status: 'queued' });
     }
 
@@ -163,17 +171,16 @@ export function createRoomsRouter(requireAuth, deps) {
     const topic = await insertGeneratedTopic({ text: topicText });
     const code = await generateUniqueRoomCode(roomCodeExists);
     const room = await insertRoom({ code, topicId: topic.id, durationSeconds, joinMode: 'random', createdBy: req.userId });
-    for (const member of result.members) {
+    for (const member of claim.members) {
       await addParticipant(room.id, member.id, member.id);
     }
-    await removeFromQueue(result.members.map((m) => m.id));
 
     res.status(201).json({
       id: room.id,
       code: room.code,
       status: room.status,
       topicId: topic.id,
-      members: result.members.map((m) => m.id),
+      members: claim.members.map((m) => m.id),
     });
   });
 

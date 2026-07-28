@@ -1,7 +1,9 @@
 import 'dotenv/config';
 import cors from 'cors';
+import helmet from 'helmet';
 import express from 'express';
 import { pathToFileURL } from 'node:url';
+import { isAllowedOrigin, parseAllowedOrigins } from './domain/corsConfig.js';
 import { createHealthRouter } from './api/health.js';
 import { createAuthMiddleware } from './api/authMiddleware.js';
 import { createMeRouter } from './api/me.js';
@@ -12,7 +14,7 @@ import { insertCustomTopic, insertGeneratedTopic } from './db/topics.js';
 import { createRoomsRouter } from './api/rooms.js';
 import { roomCodeExists, insertRoom, getRoomByCode, getRoomById, updateRoomStatus } from './db/rooms.js';
 import { addParticipant, getActiveRoomForUser, isParticipant, listRoomIdsForUser } from './db/roomParticipants.js';
-import { listQueue, addToQueue, removeFromQueue } from './db/matchmakingQueue.js';
+import { listQueue, addToQueue, removeFromQueue, claimFromQueue } from './db/matchmakingQueue.js';
 import { listRoomsByIds } from './db/rooms.js';
 import { listFeedbackForUserAndRooms } from './db/feedback.js';
 import { createHistoryRouter } from './api/history.js';
@@ -20,9 +22,28 @@ import { startAgentWorker } from './agent/worker.js';
 import { getAgentWorkerStatus, recoverLiveRooms, stopAllTranscriptions } from './agent/roomAgent.js';
 import { createGracefulShutdown } from './shutdown.js';
 
-export function createApp({ supabaseUrl, consentDb, topicsDb, roomsDb, historyDb, agentStatus } = {}) {
+// M6 (audit 2026-07-28): local Vite dev server default -- kept even once
+// ALLOWED_ORIGINS is set in production, so local dev never breaks.
+const DEFAULT_DEV_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173'];
+
+export function createApp({ supabaseUrl, consentDb, topicsDb, roomsDb, historyDb, agentStatus, allowedOrigins } = {}) {
+  const origins = allowedOrigins ?? [...DEFAULT_DEV_ORIGINS, ...parseAllowedOrigins(process.env.ALLOWED_ORIGINS)];
+
   const app = express();
-  app.use(cors());
+  // M7 (audit 2026-07-28): standard hardening headers (nosniff, no
+  // X-Powered-By, etc.). One default needs overriding: helmet's
+  // Cross-Origin-Resource-Policy defaults to "same-origin", which the
+  // browser enforces independently of CORS -- left alone, it would
+  // silently block the real frontend's cross-origin requests (Vercel
+  // calling this Render-hosted API) even with a correct
+  // Access-Control-Allow-Origin header, defeating the M6 CORS allowlist
+  // right below. Confirmed live before fixing, not assumed.
+  app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
+  // M6 (audit 2026-07-28): origin allowlist, not open CORS. `callback(null,
+  // false)` (not an Error) for a disallowed origin -- CORS is enforced by
+  // the browser reading the response, not by the server refusing to answer,
+  // so there's nothing here for a future error-handling middleware to catch.
+  app.use(cors({ origin: (origin, callback) => callback(null, isAllowedOrigin(origin, origins)) }));
   app.use(express.json());
   app.use(createHealthRouter(agentStatus ?? getAgentWorkerStatus()));
 
@@ -43,6 +64,7 @@ export function createApp({ supabaseUrl, consentDb, topicsDb, roomsDb, historyDb
         listQueue,
         addToQueue,
         removeFromQueue,
+        claimFromQueue,
         insertGeneratedTopic,
         getActiveRoomForUser,
         isParticipant,

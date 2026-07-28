@@ -8,6 +8,7 @@ import { describe, it, expect, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { createRoomsRouter } from '../src/api/rooms.js';
+import { createLlmRateLimiter } from '../src/api/rateLimit.js';
 
 function stubAuth(userId) {
   return (req, _res, next) => {
@@ -40,6 +41,10 @@ function baseDeps(overrides = {}) {
     listQueue: vi.fn().mockResolvedValue([]),
     addToQueue: vi.fn(),
     removeFromQueue: vi.fn(),
+    // H7: claimFromQueue defaults to "claim succeeded in full" -- echoes
+    // back whatever ids it was asked to claim, matching the real
+    // db/matchmakingQueue.js contract when nobody else is racing.
+    claimFromQueue: vi.fn((ids) => Promise.resolve(ids)),
     insertGeneratedTopic: vi.fn(),
     generateTopicFn: vi.fn(),
     getActiveRoomForUser: vi.fn().mockResolvedValue(null),
@@ -182,7 +187,43 @@ describe('POST /api/rooms/match', () => {
       expect.objectContaining({ topicId: 'topic-1', durationSeconds: 300, joinMode: 'random', createdBy: 'c' })
     );
     expect(deps.addParticipant).toHaveBeenCalledTimes(3);
-    expect(deps.removeFromQueue).toHaveBeenCalledWith(expect.arrayContaining(['a', 'b', 'c']));
+    // H7: only the pre-existing queue members are claimed -- 'c' (the
+    // joiner) was never in the queue table, so there's nothing to remove
+    // for them; claimMatchOrQueue's atomic claim already handled this.
+    expect(deps.claimFromQueue).toHaveBeenCalledWith(expect.arrayContaining(['a', 'b']));
+    expect(deps.removeFromQueue).not.toHaveBeenCalled();
+  });
+
+  // H7 (engineering audit, 2026-07-28): two students hitting /match near-
+  // simultaneously must not both complete the same match by claiming the
+  // same pre-existing queue members -- see domain/matchmakingClaim.js and
+  // its own dedicated test suite (matchmakingClaim.test.js) for the full
+  // race-retry behavior. This just confirms the route is actually wired to
+  // that race-safe path rather than the old plain read-then-write.
+  it('retries the match claim when a concurrent request already took a queued member', async () => {
+    const deps = baseDeps({
+      // Attempt 1: queue looks like [a, b] -- with joiner 'c' that's enough
+      // to match (minGroupSize 3). But claiming ['a', 'b'] only succeeds for
+      // 'a' -- a concurrent request already took 'b' for a different match.
+      // Attempt 2 (fresh read): 'a' has been re-queued by the failed
+      // attempt, and 'd' joined independently meanwhile -- enough to match
+      // again, and this time the claim succeeds in full.
+      listQueue: vi
+        .fn()
+        .mockResolvedValueOnce([{ id: 'a' }, { id: 'b' }])
+        .mockResolvedValueOnce([{ id: 'a' }, { id: 'd' }]),
+      claimFromQueue: vi.fn().mockResolvedValueOnce(['a']).mockResolvedValueOnce(['a', 'd']),
+      generateTopicFn: vi.fn().mockResolvedValue('Should AI grade exams?'),
+      insertGeneratedTopic: vi.fn().mockResolvedValue({ id: 'topic-1', text: 'Should AI grade exams?' }),
+      insertRoom: vi.fn().mockResolvedValue({ id: 'r1', code: 'MATCHD', status: 'waiting', topic_id: 'topic-1', duration_seconds: 300 }),
+    });
+    const app = buildApp(deps, 'c');
+    const res = await request(app).post('/api/rooms/match').send({ durationSeconds: 300 });
+    expect(res.status).toBe(201);
+    expect(res.body.members.sort()).toEqual(['a', 'c', 'd']);
+    expect(deps.listQueue).toHaveBeenCalledTimes(2);
+    // 'a' was re-queued after the lost race, not silently dropped.
+    expect(deps.addToQueue).toHaveBeenCalledWith('a');
   });
 
   it('requires durationSeconds', async () => {
@@ -190,6 +231,18 @@ describe('POST /api/rooms/match', () => {
     const app = buildApp(deps);
     const res = await request(app).post('/api/rooms/match').send({});
     expect(res.status).toBe(400);
+  });
+
+  // H4 (audit 2026-07-28): confirms the limiter is actually attached to
+  // this route, not just correct in isolation (see llmRateLimit.test.js
+  // for the limiter's own behavior).
+  it('is rate-limited per user', async () => {
+    const deps = baseDeps({ llmRateLimiter: createLlmRateLimiter({ windowMs: 60_000, max: 2 }) });
+    const app = buildApp(deps, 'c');
+    await request(app).post('/api/rooms/match').send({ durationSeconds: 300 });
+    await request(app).post('/api/rooms/match').send({ durationSeconds: 300 });
+    const res = await request(app).post('/api/rooms/match').send({ durationSeconds: 300 });
+    expect(res.status).toBe(429);
   });
 });
 
@@ -635,6 +688,21 @@ describe('POST /api/rooms/:id/token', () => {
       roomName: 'r1',
     });
     expect(deps.mintTokenFn).toHaveBeenCalledWith('user-1', 'r1', expect.objectContaining({ name: 'user-1' }));
+  });
+
+  // M1 (engineering audit, 2026-07-28): a student token that grants
+  // canPublishData lets any student forge live-caption data messages over
+  // the room's data channel -- the same channel the transcription agent
+  // uses to broadcast real captions -- undermining the attribution the
+  // whole product is built on. Only the agent worker's own token needs
+  // canPublishData:true (agent/roomAgent.js); a student's never does.
+  it('mints a student token with canPublishData explicitly false', async () => {
+    const deps = baseDeps({
+      getRoomById: vi.fn().mockResolvedValue({ id: 'r1', status: 'live', created_by: 'user-1' }),
+    });
+    const app = buildApp(deps);
+    await request(app).post('/api/rooms/r1/token').send();
+    expect(deps.mintTokenFn).toHaveBeenCalledWith('user-1', 'r1', expect.objectContaining({ canPublishData: false }));
   });
 });
 

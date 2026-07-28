@@ -76,12 +76,32 @@ funding — which fits the "prove it, then fund it" plan directly.
 Vercel, Netlify, and Cloudflare Pages are all genuinely free, well-
 documented, and stable choices for a static build — this half of the
 decision is low-stakes, since a static site has no "must stay connected"
-requirement. **Cloudflare Pages** is the pick: free tier is unlimited
-bandwidth with no card required [[10]](https://www.cloudflare.com/plans/free/),
+requirement. **Cloudflare Pages** was the original pick: free tier is
+unlimited bandwidth with no card required [[10]](https://www.cloudflare.com/plans/free/),
 matching the zero-out-of-pocket bar most cleanly of the three (Vercel's
 free Hobby tier is comparatively more restrictive), and Cloudflare is a
 large, financially stable company with a long track record — a solid
 longevity bet.
+
+### Superseded 2026-07-28 — switched to Vercel
+**Decision: Vercel**, for the frontend static build only, per direct user
+instruction. **Reason on record: exploratory, not a technical failure of
+Cloudflare Pages** — no incident or blocker forced this switch, the user
+wanted to try Vercel. Both remain genuinely free/no-card options per the
+comparison above, so this is a low-stakes swap within the already-vetted
+set, not a re-opening of the ADR's actual hard decision (the backend/agent
+worker half, which stays on Render — unchanged).
+
+**Worth distinguishing from an unrelated, earlier Vercel episode:** a
+Vercel *serverless function* deploy of the **backend** was attempted and
+reverted (PR #2), then formally closed out by C2/ADR-0009 — a persistent
+LiveKit Agent worker cannot run on a function runtime at all. This
+supersession is unrelated to that: it only concerns the static frontend
+build, which has no such constraint. `apps/web/vercel.json` is the live
+config; `apps/web/public/_redirects` (the Cloudflare Pages SPA-routing
+config) is deleted to avoid two hosts' configs drifting silently (audit
+finding M12). `.vercel/` (the local CLI project link) is gitignored, not
+committed — matches the existing pattern for other local/generated state.
 
 ## Consequences
 - **Positive:** Fully containerized, portable deployment (Dockerfile),

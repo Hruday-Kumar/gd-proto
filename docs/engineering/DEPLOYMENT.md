@@ -41,6 +41,7 @@ is one Docker service, not two.
 | `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | LiveKit Cloud project → Settings → Keys |
 | `ASSEMBLYAI_API_KEY` | AssemblyAI dashboard |
 | `GEMINI_API_KEY` | Google AI Studio |
+| `ALLOWED_ORIGINS` | The deployed frontend's real origin(s) (M6, audit 2026-07-28) — comma-separated if there's more than one (e.g. a production domain plus a Vercel preview URL). No trailing slash, scheme required (`https://your-app.vercel.app`). Without this set, only the local Vite dev origins (`localhost:5173`) are allowed — the deployed frontend's requests would be silently missing CORS headers until this is set. |
 
 Same values already sitting in `apps/server/.env` locally — this is
 copying them into Render's dashboard, not generating new ones.
@@ -105,12 +106,15 @@ workflow already no-ops safely if that variable isn't set yet.
 
 ## Notes
 
-- **CORS is currently open** (`app.use(cors())` with no origin
-  restriction in `apps/server/src/index.js`). Not a guardrail violation —
-  auth is bearer-token (`Authorization` header), not cookies, so this
-  isn't CSRF-exploitable the way open CORS + cookie auth would be — but
-  worth tightening to the Cloudflare Pages origin once that URL is known,
-  as routine hardening rather than a blocking fix.
+- **CORS is now an allowlist** (M6, audit 2026-07-28; was previously wide
+  open) — set `ALLOWED_ORIGINS` (see the secrets checklist above) to the
+  real deployed frontend origin(s) once known, or requests from the
+  deployed frontend will be missing CORS headers (local dev is unaffected
+  either way — `localhost:5173` is always allowed). This doc's frontend
+  section below still says Cloudflare Pages; the project has since moved
+  to Vercel (see `PROGRESS.md`'s 2026-07-28 entry and ADR-0007's
+  "Superseded" section) — this section needs a rewrite, not attempted
+  here since it's out of scope for the CORS fix.
 - Render's free Web Service restarts (cold start) on every deploy and
   after any sleep period. `domain/agentWorkerStatus.js`'s counters reset
   on restart — that's fine, it's meant to answer "is dispatch healthy
