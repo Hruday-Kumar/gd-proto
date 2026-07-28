@@ -114,6 +114,7 @@ Audit findings closed, newest first. Evidence and root causes are in
 
 | ID | What | Where |
 |---|---|---|
+| **M6/M7** | CORS is now an origin allowlist (was wide open) + helmet security headers on every response. `ALLOWED_ORIGINS` (comma-separated) must be set on Render once the frontend's real origin is known — see `DEPLOYMENT.md`'s secrets checklist. Local Vite dev origins always allowed regardless | `domain/corsConfig.js`, `index.js`, `.env.example`, `DEPLOYMENT.md` |
 | **H5** | Custom topic length capped (200 chars) + the topic (and topic-generation's category/difficulty) delimited and explicitly framed as data, not instructions, in both Gemini prompts — defense-in-depth against a student's custom topic hijacking every participant's feedback in the room | `domain/topicText.js`, `domain/feedbackPrompt.js`, `domain/topicPrompt.js`, `api/topics.js` |
 | **H4** | Rate-limited the two Gemini-backed routes (topic generation, random matching) — keyed per-user, not IP; wiring confirmed via dedicated route-level tests, not just the limiter in isolation | `api/rateLimit.js`, `api/topics.js`, `api/rooms.js` |
 | **H7** | Matchmaking claim is now race-safe — atomic `DELETE...RETURNING` claim + retry loop, `matchmake()` itself untouched/pure. Caught and fixed its own data-loss bug (a partially-claimed member silently dropped) before merge | `domain/matchmakingClaim.js`, `db/matchmakingQueue.js` |
@@ -158,8 +159,8 @@ Work top to bottom. Each row is one branch, one PR.
 | ✅ | **M1** | Student LiveKit tokens grant `canPublishData` | — | **DONE, PR #9.** See §4. |
 | ✅ | **H4** | No rate limiting on metered LLM routes | — | **DONE, PR #13.** See §4. |
 | ✅ | **H5** | Prompt injection via custom topic | — | **DONE, PR #14.** See §4. Also applied the same delimiting to topic-generation's category/difficulty (not reachable via the current web UI, but the API accepts them directly — same vulnerability class). |
-| ☐ | **M6** | Wide-open CORS | — | Origin allowlist. |
-| ☐ | **M7** | No security headers | — | `helmet`. |
+| ✅ | **M6** | Wide-open CORS | — | **DONE, PR #15.** See §4. |
+| ✅ | **M7** | No security headers | — | **DONE, PR #15.** See §4. |
 
 ### 5c. Audit Phase 4 — make failure visible (H2 already done)
 
