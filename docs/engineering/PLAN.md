@@ -114,6 +114,7 @@ Audit findings closed, newest first. Evidence and root causes are in
 
 | ID | What | Where |
 |---|---|---|
+| **M2** | Global Express error-handling middleware, registered last — an uncaught route error now returns the same JSON `{error}` shape every other endpoint uses (was Express's default HTML error page) with a structured JSON log line, instead of vanishing with nothing logged anywhere the team would see it during a live pilot session | `api/errorHandler.js`, `index.js` |
 | **M6/M7** | CORS is now an origin allowlist (was wide open) + helmet security headers on every response. `ALLOWED_ORIGINS` (comma-separated) must be set on Render once the frontend's real origin is known — see `DEPLOYMENT.md`'s secrets checklist. Local Vite dev origins always allowed regardless | `domain/corsConfig.js`, `index.js`, `.env.example`, `DEPLOYMENT.md` |
 | **H5** | Custom topic length capped (200 chars) + the topic (and topic-generation's category/difficulty) delimited and explicitly framed as data, not instructions, in both Gemini prompts — defense-in-depth against a student's custom topic hijacking every participant's feedback in the room | `domain/topicText.js`, `domain/feedbackPrompt.js`, `domain/topicPrompt.js`, `api/topics.js` |
 | **H4** | Rate-limited the two Gemini-backed routes (topic generation, random matching) — keyed per-user, not IP; wiring confirmed via dedicated route-level tests, not just the limiter in isolation | `api/rateLimit.js`, `api/topics.js`, `api/rooms.js` |
@@ -166,9 +167,15 @@ Work top to bottom. Each row is one branch, one PR.
 
 | ✅ | ID | Task | Owner | Fix per audit |
 |---|---|---|---|---|
-| ☐ | **M2** | No Express error-handling middleware | — | Error handler + structured logging; every route is `async` with no try/catch. |
+| ✅ | **M2** | No Express error-handling middleware | — | **DONE, PR #17.** See §4. |
 | ☐ | **H1** | PROGRESS.md records the wrong root cause for the transcription outage | — | Name the CA-certificate cause; note the retry covers a *different* failure. Add the "native addons don't use Node's cert store" lesson to `LESSONS.md`. |
 | ☐ | **M4** | Docker image ships the whole frontend toolchain | — | Production-only deps; directly worsens the B4 cold-start risk. |
+
+**Deliberate stopping point, 2026-07-28:** M2 (the only Phase 3-adjacent
+item still open at session start) is now done and released to `main`.
+H1 and M4 above, and all of Phase 5 below, were explicitly held back per
+direct user instruction this session ("just do not start phase 4/5") —
+not forgotten, not blocked on anything. Pick up at H1 next.
 
 ### 5d. Audit Phase 5 — guard what exists, then tidy
 

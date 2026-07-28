@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import express from 'express';
 import { pathToFileURL } from 'node:url';
 import { isAllowedOrigin, parseAllowedOrigins } from './domain/corsConfig.js';
+import { createErrorHandler } from './api/errorHandler.js';
 import { createHealthRouter } from './api/health.js';
 import { createAuthMiddleware } from './api/authMiddleware.js';
 import { createMeRouter } from './api/me.js';
@@ -82,6 +83,11 @@ export function createApp({ supabaseUrl, consentDb, topicsDb, roomsDb, historyDb
       }
     )
   );
+
+  // M2 (audit 2026-07-28): must be the LAST app.use() -- Express only
+  // routes a 4-arg function to the error path, and only for errors raised
+  // by middleware/routers registered before it.
+  app.use(createErrorHandler());
 
   return app;
 }
