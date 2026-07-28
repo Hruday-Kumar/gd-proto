@@ -5,13 +5,29 @@
 // introduce with a naive loop, same reasoning as W5's persistAttributedLine.
 // `generate` (the network call) is injected, no live Gemini key or network.
 import { describe, it, expect, vi } from 'vitest';
-import { generateFeedbackForRoom } from '../src/domain/feedbackGeneration.js';
+import { generateFeedbackForRoom, DEFAULT_FEEDBACK_CONCURRENCY } from '../src/domain/feedbackGeneration.js';
 
 const participants = [
   { userId: 'user-a', displayName: 'Asha' },
   { userId: 'user-b', displayName: 'Bilal' },
   { userId: 'user-c', displayName: 'Chen' },
 ];
+
+// A `generate` stub that records the highest number of calls ever in flight
+// at the same moment, so a test can assert the fan-out was actually bounded
+// rather than just eventually completing.
+function concurrencyTrackingGenerate({ resolveWith = 'feedback text' } = {}) {
+  let inFlight = 0;
+  let peak = 0;
+  const generate = vi.fn(async () => {
+    inFlight += 1;
+    peak = Math.max(peak, inFlight);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    inFlight -= 1;
+    return resolveWith;
+  });
+  return { generate, getPeak: () => peak };
+}
 
 const transcriptLines = [
   { userId: 'user-a', text: 'I think remote work improves productivity.' },
@@ -74,6 +90,78 @@ describe('generateFeedbackForRoom', () => {
     const byUser = Object.fromEntries(results.map((r) => [r.userId, r]));
     expect(byUser['user-a'].error).toBeUndefined();
     expect(byUser['user-c'].error).toBeUndefined();
+  });
+
+  // M11 (audit 2026-07-28): every participant's Gemini call went out in a
+  // single Promise.all with no cap -- six at once for a full room, against a
+  // free tier with a per-minute request limit. Whoever got rate-limited fell
+  // into the existing per-student error path and silently received no
+  // feedback at all, which is the one output this whole product exists to
+  // deliver. Bounding the fan-out is what stops a full room from tripping the
+  // limit in the first place.
+  it('never has more than the configured number of Gemini calls in flight at once', async () => {
+    const sixParticipants = ['a', 'b', 'c', 'd', 'e', 'f'].map((s) => ({ userId: `user-${s}`, displayName: s.toUpperCase() }));
+    const { generate, getPeak } = concurrencyTrackingGenerate();
+
+    const results = await generateFeedbackForRoom(
+      { topic: 'Remote work', transcriptLines, participants: sixParticipants },
+      { generate, concurrency: 2 }
+    );
+
+    expect(getPeak()).toBeLessThanOrEqual(2);
+    expect(generate).toHaveBeenCalledTimes(6);
+    expect(results).toHaveLength(6);
+    expect(results.every((r) => r.status === 'ok')).toBe(true);
+  });
+
+  it('bounds the fan-out by default, without the caller having to ask', async () => {
+    // The worker (agent/feedbackWorker.js) passes no concurrency option, so
+    // the default is what actually protects a real room.
+    const sixParticipants = ['a', 'b', 'c', 'd', 'e', 'f'].map((s) => ({ userId: `user-${s}`, displayName: s.toUpperCase() }));
+    const { generate, getPeak } = concurrencyTrackingGenerate();
+
+    await generateFeedbackForRoom({ topic: 'Remote work', transcriptLines, participants: sixParticipants }, { generate });
+
+    expect(DEFAULT_FEEDBACK_CONCURRENCY).toBeLessThan(6);
+    expect(getPeak()).toBeLessThanOrEqual(DEFAULT_FEEDBACK_CONCURRENCY);
+  });
+
+  it('returns results in participant order regardless of completion order', async () => {
+    // Callers (agent/feedbackWorker.js) match results back to students by the
+    // userId on each result, but a stable order keeps logs and tests readable
+    // and makes the batching invisible to every caller.
+    const generate = vi.fn(async (prompt) => {
+      // Asha's call finishes last, so completion order != participant order.
+      if (prompt.includes('only for Asha')) await new Promise((resolve) => setTimeout(resolve, 20));
+      return 'feedback text';
+    });
+
+    const results = await generateFeedbackForRoom(
+      { topic: 'Remote work', transcriptLines, participants },
+      { generate, concurrency: 3 }
+    );
+
+    expect(results.map((r) => r.userId)).toEqual(['user-a', 'user-b', 'user-c']);
+  });
+
+  it('keeps generating for the remaining students when an early batch fails', async () => {
+    // The isolation guarantee has to survive batching: a rejected call must
+    // not abort the pool and leave later students with no feedback.
+    const { generate: ok } = concurrencyTrackingGenerate();
+    const generate = vi.fn(async (prompt) => {
+      if (prompt.includes('only for Asha')) throw new Error('gemini quota exceeded');
+      return ok(prompt);
+    });
+
+    const results = await generateFeedbackForRoom(
+      { topic: 'Remote work', transcriptLines, participants },
+      { generate, concurrency: 1 }
+    );
+
+    const byUser = Object.fromEntries(results.map((r) => [r.userId, r]));
+    expect(byUser['user-a'].status).toBe('error');
+    expect(byUser['user-b'].status).toBe('ok');
+    expect(byUser['user-c'].status).toBe('ok');
   });
 
   it('does not mutate the transcript lines it was given', async () => {

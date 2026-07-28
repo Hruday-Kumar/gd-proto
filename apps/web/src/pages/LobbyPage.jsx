@@ -140,6 +140,25 @@ export function LobbyPage() {
     };
   }, [status, feedback, session, id]);
 
+  // A refresh/close mid-session doesn't lose any server-side state (the
+  // poll above re-derives everything from the room id in the URL), but it
+  // does tear down this student's LiveKit connection and miss part of the
+  // discussion -- so warn before that happens. Browsers can't actually
+  // block a refresh, only prompt to confirm it; this is the standard
+  // mechanism for that. Window: from the moment the session goes live
+  // until this student's feedback has actually loaded (or definitively
+  // failed) -- not during the waiting room, which is safe to leave.
+  useEffect(() => {
+    const sessionInProgress = status === 'live' || (status === 'ended' && !feedback && !feedbackFailed);
+    if (!sessionInProgress) return undefined;
+    function handleBeforeUnload(e) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [status, feedback, feedbackFailed]);
+
   async function handleStart() {
     setStarting(true);
     setError(null);

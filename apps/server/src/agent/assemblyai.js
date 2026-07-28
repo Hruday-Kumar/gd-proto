@@ -13,6 +13,13 @@ export function openAssemblyAI({ sampleRate, apiKey, onFinal, onError, chunkMs =
     sample_rate: String(sampleRate),
     encoding: 'pcm_s16le',
     format_turns: 'true',
+    // Explicit English-only model (2026-07-28 fix): AssemblyAI's own
+    // default when speech_model is omitted is now "universal-3-5-pro",
+    // which code-switches across 18 languages -- that's what was causing
+    // GD sessions (spoken in English, sometimes with an Indian accent) to
+    // come back transcribed in other languages. "universal-streaming-
+    // english" is the only model AssemblyAI's docs describe as English-only.
+    speech_model: 'universal-streaming-english',
     // AssemblyAI's own defaults (min_turn_silence 400ms) finalize a turn
     // noticeably slower than the 300ms endpointing we use for Deepgram
     // (spike/src/deepgram.js) -- matched here so the two paths are
