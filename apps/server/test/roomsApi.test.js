@@ -8,6 +8,7 @@ import { describe, it, expect, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { createRoomsRouter } from '../src/api/rooms.js';
+import { createLlmRateLimiter } from '../src/api/rateLimit.js';
 
 function stubAuth(userId) {
   return (req, _res, next) => {
@@ -230,6 +231,18 @@ describe('POST /api/rooms/match', () => {
     const app = buildApp(deps);
     const res = await request(app).post('/api/rooms/match').send({});
     expect(res.status).toBe(400);
+  });
+
+  // H4 (audit 2026-07-28): confirms the limiter is actually attached to
+  // this route, not just correct in isolation (see llmRateLimit.test.js
+  // for the limiter's own behavior).
+  it('is rate-limited per user', async () => {
+    const deps = baseDeps({ llmRateLimiter: createLlmRateLimiter({ windowMs: 60_000, max: 2 }) });
+    const app = buildApp(deps, 'c');
+    await request(app).post('/api/rooms/match').send({ durationSeconds: 300 });
+    await request(app).post('/api/rooms/match').send({ durationSeconds: 300 });
+    const res = await request(app).post('/api/rooms/match').send({ durationSeconds: 300 });
+    expect(res.status).toBe(429);
   });
 });
 

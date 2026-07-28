@@ -1,10 +1,14 @@
 import { Router } from 'express';
 import { generateTopic } from '../llm/geminiClient.js';
+import { createLlmRateLimiter } from './rateLimit.js';
 
 // W4: custom topic entry + Gemini-generated topics. Custom topics are
 // attributed to the student who entered them; generated topics have no
 // creator (source: 'llm', created_by null -- see the 0003 migration).
-export function createTopicsRouter(requireAuth, { insertCustomTopic, insertGeneratedTopic, generateTopicFn = generateTopic }) {
+export function createTopicsRouter(
+  requireAuth,
+  { insertCustomTopic, insertGeneratedTopic, generateTopicFn = generateTopic, llmRateLimiter = createLlmRateLimiter() }
+) {
   const router = Router();
 
   router.post('/api/topics/custom', requireAuth, async (req, res) => {
@@ -16,7 +20,9 @@ export function createTopicsRouter(requireAuth, { insertCustomTopic, insertGener
     res.status(201).json(topic);
   });
 
-  router.post('/api/topics/generate', requireAuth, async (req, res) => {
+  // H4 (audit 2026-07-28): rate-limited -- this route calls Gemini directly
+  // on every request, no threshold or opt-in involved, unlike /match below.
+  router.post('/api/topics/generate', requireAuth, llmRateLimiter, async (req, res) => {
     const { category, difficulty } = req.body || {};
     let text;
     try {

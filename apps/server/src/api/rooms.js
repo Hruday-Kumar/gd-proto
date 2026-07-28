@@ -12,6 +12,7 @@ import { getFeedbackForRoomAndUser, rateFeedback } from '../db/feedback.js';
 import { listParticipants } from '../db/roomParticipants.js';
 import { listProfiles } from '../db/profiles.js';
 import { listTranscriptLinesForRoom } from '../db/transcriptLines.js';
+import { createLlmRateLimiter } from './rateLimit.js';
 
 // Interim group-size default for random matching (PHASE1_PLAN.md §8,
 // decided 2026-07-26: anchored to the AI Voice Practice mode's stated
@@ -63,6 +64,7 @@ export function createRoomsRouter(requireAuth, deps) {
     listParticipantsFn = listParticipants,
     listProfilesFn = listProfiles,
     listTranscriptLinesForRoomFn = listTranscriptLinesForRoom,
+    llmRateLimiter = createLlmRateLimiter(),
   } = deps;
 
   const router = Router();
@@ -139,7 +141,9 @@ export function createRoomsRouter(requireAuth, deps) {
     res.status(200).json({ id: room.id, code: room.code, status: room.status });
   });
 
-  router.post('/api/rooms/match', requireAuth, async (req, res) => {
+  // H4 (audit 2026-07-28): rate-limited -- a formed match calls Gemini for
+  // the room's topic, same shared-quota risk as /api/topics/generate.
+  router.post('/api/rooms/match', requireAuth, llmRateLimiter, async (req, res) => {
     const { durationSeconds } = req.body || {};
     if (!durationSeconds) return res.status(400).json({ error: 'durationSeconds is required' });
     // Same H3 check as POST /api/rooms, and it matters more here: the matched
