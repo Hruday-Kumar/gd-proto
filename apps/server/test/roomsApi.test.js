@@ -29,7 +29,13 @@ function baseDeps(overrides = {}) {
     insertRoom: vi.fn(),
     getRoomByCode: vi.fn(),
     getRoomById: vi.fn(),
-    updateRoomStatus: vi.fn(),
+    // Echoes back an updated row, like the real db/rooms.js
+    // updateRoomStatus does via .select(). The return value used to be
+    // ignored by every caller, so a bare vi.fn() was enough; since C3 the
+    // /status route reads it to decide whether it won the ended-transition
+    // claim, so the stub has to honour that contract. Tests that care about
+    // *losing* the claim override this with one returning null.
+    updateRoomStatus: vi.fn(async (id, patch) => ({ id, ...patch })),
     addParticipant: vi.fn(),
     listQueue: vi.fn().mockResolvedValue([]),
     addToQueue: vi.fn(),
@@ -372,6 +378,65 @@ describe('GET /api/rooms/:id/status', () => {
     const app = buildApp(deps);
     await request(app).get('/api/rooms/r1/status');
     expect(deps.generateFeedbackFn).toHaveBeenCalledWith('r1');
+  });
+
+  // C3 (audit 2026-07-28). Every client in a room polls /status on the same
+  // 3-second interval and the timer expires for all of them at the same
+  // instant, so several pollers routinely read `status: 'live'` before any
+  // of them has written 'ended'. Each one then dispatched its own full
+  // feedback run, and generateFeedbackForRoom fans out one Gemini call per
+  // participant -- so N participants produced N*N calls against a
+  // rate-limited free tier, and the students whose calls got 429'd silently
+  // received no feedback at all. Reproduced 4/4 at 0ms, 5ms and 25ms of
+  // simulated DB latency.
+  //
+  // The transition must therefore be *claimed*, not just written: the
+  // update carries a precondition on the room still being 'live', and only
+  // the caller whose update actually matched a row dispatches feedback.
+  // The mock below models exactly what Postgres does with that
+  // precondition -- the first caller matches a row, everyone after gets
+  // null.
+  it('dispatches feedback only once when several participants poll an expired room together', async () => {
+    const endsAt = Date.now() - 1_000;
+    let claimed = false;
+    const deps = baseDeps({
+      getRoomById: vi.fn().mockResolvedValue({ id: 'r1', status: 'live', duration_seconds: 300, ends_at: new Date(endsAt).toISOString() }),
+      updateRoomStatus: vi.fn(async (id) => {
+        if (claimed) return null;
+        claimed = true;
+        return { id, status: 'ended' };
+      }),
+    });
+    const app = buildApp(deps);
+
+    const responses = await Promise.all([
+      request(app).get('/api/rooms/r1/status'),
+      request(app).get('/api/rooms/r1/status'),
+      request(app).get('/api/rooms/r1/status'),
+      request(app).get('/api/rooms/r1/status'),
+    ]);
+
+    // Every poller still gets a correct answer -- losing the race is not an
+    // error, it just means someone else already ended the room.
+    expect(responses.map((r) => r.status)).toEqual([200, 200, 200, 200]);
+    expect(responses.map((r) => r.body.status)).toEqual(['ended', 'ended', 'ended', 'ended']);
+    expect(deps.generateFeedbackFn).toHaveBeenCalledTimes(1);
+  });
+
+  // The claim has to be enforced by Postgres, not by JS state: under the
+  // deployment target (Render, one container) module state would happen to
+  // work, but the precondition is what makes this correct at all, and it's
+  // the only thing that keeps it correct if this ever runs as more than one
+  // instance.
+  it('claims the ended transition with a precondition on the room still being live', async () => {
+    const endsAt = Date.now() - 1_000;
+    const deps = baseDeps({
+      getRoomById: vi.fn().mockResolvedValue({ id: 'r1', status: 'live', duration_seconds: 300, ends_at: new Date(endsAt).toISOString() }),
+      updateRoomStatus: vi.fn().mockResolvedValue({ id: 'r1', status: 'ended' }),
+    });
+    const app = buildApp(deps);
+    await request(app).get('/api/rooms/r1/status');
+    expect(deps.updateRoomStatus).toHaveBeenCalledWith('r1', expect.objectContaining({ status: 'ended', expectedStatus: 'live' }));
   });
 
   it('does not dispatch feedback generation when the room is not yet ended', async () => {

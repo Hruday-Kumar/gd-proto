@@ -62,12 +62,31 @@ export async function listRoomsByIds(ids, { supabase = getSupabase() } = {}) {
   return data;
 }
 
-export async function updateRoomStatus(id, { status, startedAt, endsAt, endedAt }, { supabase = getSupabase() } = {}) {
+// `expectedStatus` makes the write a *claim* rather than a blind update: the
+// row is only changed if it's still in the status the caller decided from
+// (C3, audit 2026-07-28). Postgres evaluates that predicate atomically, so
+// exactly one of several concurrent callers can win -- which is what stops
+// every participant polling an expired room from each dispatching its own
+// feedback run. Returns the updated row, or null when the precondition
+// didn't match (someone else got there first). Without expectedStatus this
+// behaves exactly as before -- an unconditional update that throws if the
+// row is missing -- which is what POST /api/rooms/:id/start relies on.
+export async function updateRoomStatus(
+  id,
+  { status, startedAt, endsAt, endedAt, expectedStatus },
+  { supabase = getSupabase() } = {}
+) {
   const patch = { status };
   if (startedAt) patch.started_at = startedAt;
   if (endsAt) patch.ends_at = endsAt;
   if (endedAt) patch.ended_at = endedAt;
-  const { data, error } = await supabase.from('rooms').update(patch).eq('id', id).select().single();
+
+  let query = supabase.from('rooms').update(patch).eq('id', id);
+  if (expectedStatus) query = query.eq('status', expectedStatus);
+
+  // maybeSingle, not single, when there's a precondition: matching no row is
+  // the expected "someone else already did this" outcome, not an error.
+  const { data, error } = expectedStatus ? await query.select().maybeSingle() : await query.select().single();
   if (error) throw error;
   return data;
 }
