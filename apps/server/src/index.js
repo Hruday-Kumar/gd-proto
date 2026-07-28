@@ -66,19 +66,13 @@ export function createApp({ supabaseUrl, consentDb, topicsDb, roomsDb, historyDb
 // Only boot the server (and bind the port) when run directly — tests import
 // createApp() and drive it in-process instead. pathToFileURL (not a raw
 // "file://" template) so this comparison also works on Windows paths.
+// This is the only supported entry point: one long-lived process serving the
+// Express API and hosting the in-process transcription agent (ADR-0009,
+// PHASE1_PLAN.md §3a). Deliberately NOT a serverless handler export — see
+// ADR-0009 for why this application cannot run on a function runtime.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const PORT = process.env.PORT || 3000;
   const app = createApp();
   app.listen(PORT, () => console.log(`[server] listening on :${PORT}`));
   startAgentWorker();
-}
-
-// Vercel's Node runtime imports this file directly and requires a default
-// export that's callable — build the app lazily (only on first real request,
-// never at import time) so importing this module for the named createApp
-// export in tests never triggers it.
-let _serverlessApp;
-export default function handler(req, res) {
-  if (!_serverlessApp) _serverlessApp = createApp();
-  return _serverlessApp(req, res);
 }
