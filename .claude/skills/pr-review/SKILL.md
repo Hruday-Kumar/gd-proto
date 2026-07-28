@@ -15,10 +15,21 @@ description: >-
 
 # PR Review (PlaceMe / gd-proto house style)
 
-Reviewing a pull request against `github.com/Hruday-Kumar/gd-proto`. All
-branches so far are **same-repo task branches** (no forks) per
-`docs/engineering/BRANCHING.md` — `feature/<name>` or `chore/<name>` off
-`dev`. Some workstreams stack branches on top of each other (e.g. PR #44's
+Reviewing a pull request against `github.com/placemestudy1/gd-proto` —
+the canonical project repo as of 2026-07-28 (see
+`docs/engineering/BRANCHING.md`; the repo moved remotes twice —
+`Hruday-Kumar/gd-proto` then `Place-Me-study/gd-proto` then
+`placemestudy1/gd-proto` — check `git remote -v` if this drifts again).
+**Do not rely on `gh`'s default repo resolution** — this working copy's
+`origin` remote points to the first, personal repo
+(`Hruday-Kumar/gd-proto`), not this one, so every `gh pr ...`/`gh api
+repos/:owner/:repo/...` call in this skill needs an explicit `--repo
+placemestudy1/gd-proto` (or the literal owner/repo in the API path)
+rather than the `:owner/:repo` shorthand, which resolves against `origin`.
+All branches so far are **same-repo task
+branches** (no forks) per `docs/engineering/BRANCHING.md` — `feature/<name>`
+or `chore/<name>` off `dev`. Some workstreams stack branches on top of each
+other (e.g. PR #44's
 base was `feature/live-room-ux`'s parent branch, not `dev` directly) — never
 assume the base is `dev` without checking. The output is a clean, batched,
 inline GitHub review with code suggestions, **but nothing is posted until

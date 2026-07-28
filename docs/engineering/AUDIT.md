@@ -73,7 +73,11 @@ involved.
 
 ### C1 — Account deletion fails for any student who created a room
 
-**Status:** OPEN
+**Status:** RESOLVED 2026-07-28 — migration `0008` merged (commit
+`a877734`, PR #5), schema now matches the documented intent below.
+**Still unverified: whether `0008` has actually been run against the live
+Supabase project** — same manual SQL Editor step as every other
+migration; see `PLAN.md` §3.
 **Category:** Database · Compliance (India DPDP, guardrail #4)
 **Evidence:** Proven from DDL + first-party repo evidence
 **Location:** `supabase/migrations/0003_topics_rooms_matching.sql:39`,
@@ -139,7 +143,17 @@ account that has created a room — that case has never been tested.
 
 ### C2 — The backend has been made to run on Vercel serverless, which cannot host it
 
-**Status:** OPEN — **deployment state needs confirmation from the user**
+**Status:** RESOLVED 2026-07-28 — confirmed: `apps/server/src/index.js` no
+longer exports a serverless `handler`; `git log` shows no other commit
+re-added it. `docs/engineering/adr/0009-*.md` records why the backend
+cannot run on a function runtime at all (persistent LiveKit agent).
+Render (Docker) is the only backend target. **Note, added 2026-07-28:**
+the frontend half of this finding is now moot in a different way —
+Vercel *was* subsequently adopted for the **frontend only** (static
+build, no agent-worker constraints apply), per direct user instruction;
+see ADR-0007's "Superseded 2026-07-28" section. `apps/web/vercel.json` is
+tracked and current; `apps/web/public/_redirects` (the old Cloudflare
+Pages config referenced as untracked below) has been deleted.
 **Category:** Architecture · Infrastructure
 **Location:** `apps/server/src/index.js:80-84` (PR #2, merged to `main`)
 
@@ -219,7 +233,12 @@ before anything else in this document.**
 
 ### C3 — Every participant polling a finished room dispatches its own full feedback run
 
-**Status:** OPEN
+**Status:** RESOLVED 2026-07-28 — confirmed in code:
+`api/rooms.js:238-269` now passes `expectedStatus: 'live'` to
+`updateRoomStatus`, making the transition a conditional claim (Postgres
+picks exactly one winner); `generateFeedbackFn` only fires when `claimed`
+is true. M10 (the underlying "GET performs writes" smell) is intentionally
+**not** resolved by this — see M10 below, still open.
 **Category:** Reliability · Cost
 **Evidence:** Reproduced against the real router
 **Location:** `apps/server/src/api/rooms.js:220-233`
@@ -287,7 +306,13 @@ polls.
 
 ### H1 — PROGRESS.md records the wrong root cause for the transcription outage
 
-**Status:** OPEN · **Category:** Correctness of record · **Evidence:** Proven from git
+**Status:** RESOLVED 2026-07-28 — `PROGRESS.md` now has a correction note
+directly under the original mis-diagnosis, naming the `ca-certificates`
+cause and clarifying the retry logic addresses a genuinely different
+(real, transient) failure mode rather than this one. `LESSONS.md`'s Docker
+entry has the full technical explanation + the general lesson about native
+addons bypassing Node's bundled TLS store.
+**Category:** Correctness of record · **Evidence:** Proven from git
 **Location:** `docs/engineering/PROGRESS.md` "Current phase"
 
 `PROGRESS.md` diagnoses the failure as a *transient* LiveKit region-fetch
@@ -531,7 +556,7 @@ so removing it costs nothing and closes the hole. Verify by re-running
 | **M9** | **Unbounded reads.** `listQueue`, `listRoomIdsForUser`, `listRoomsByIds`, `listTranscriptLinesForRoom` have no `LIMIT`; history fans a user's full room-id list into an `.in()` clause. | `db/matchmakingQueue.js`, `db/roomParticipants.js`, `db/rooms.js` | Harmless at 20–30 students. Degrades predictably as history accumulates — a heavy user's `/api/history/mine` grows without bound. |
 | **M10** | **`GET /status` performs writes.** A GET transitions room state and dispatches an LLM job. Correctly participant-gated and well documented, but still a GET with side effects. | `api/rooms.js:204-233` | Any retry, prefetch, or proxy replay re-triggers the transition. Also the mechanism behind C3. |
 | **M11** | ~~**Unbounded LLM fan-out per room.** `generateFeedbackForRoom` issues one Gemini call per participant in a single `Promise.all`, no concurrency cap.~~ **RESOLVED 2026-07-28** — fixed-size worker pool, `DEFAULT_FEEDBACK_CONCURRENCY = 2`; participant order and per-student failure isolation both preserved. | `domain/feedbackGeneration.js:24` | Six simultaneous free-tier calls even without C3's multiplier; with it, up to 36. Rate-limited students silently get no feedback. |
-| **M12** | **Three deployment targets in flight, no ADR for any of the changes.** Docker/Render fixes and Vercel serverless fixes both landed on `main` within 24 hours. On top of that, the working tree holds SPA-routing configs for *two different frontend hosts* at once — `apps/web/vercel.json` (Vercel rewrites) and `apps/web/public/_redirects` (Cloudflare Pages) — both **untracked**. | `Dockerfile`, `render.yaml`, `src/index.js:81`, `apps/web/vercel.json`, `apps/web/public/_redirects` | Guardrail #10 ("justify, don't invent") and the ADR process bypassed for the highest-consequence decision in the project. ADR-0007 chose Cloudflare Pages; nothing records why Vercel appeared. Future sessions will read contradictory intent, and the two configs will diverge silently. |
+| **M12** | ~~**Three deployment targets in flight, no ADR for any of the changes.**~~ **RESOLVED 2026-07-28.** Backend: settled as Render-only, recorded in ADR-0009 (resolves the C2 half). Frontend: `apps/web/public/_redirects` (Cloudflare Pages config) deleted; `apps/web/vercel.json` is the sole, tracked, live config; ADR-0007 updated with a "Superseded 2026-07-28" section recording the Vercel switch and its reason (exploratory, per direct user instruction — not a technical failure of Cloudflare Pages). | `Dockerfile`, `render.yaml`, `docs/engineering/adr/0007-hosting-deployment.md`, `docs/engineering/adr/0009-*.md`, `apps/web/vercel.json` | Guardrail #10 ("justify, don't invent") and the ADR process bypassed for the highest-consequence decision in the project. ADR-0007 chose Cloudflare Pages; nothing records why Vercel appeared. Future sessions will read contradictory intent, and the two configs will diverge silently. |
 
 ---
 

@@ -357,6 +357,27 @@ resolution. Slightly larger image than a hand-tuned multi-stage build, but
 far more robust for a team new to Docker — revisit only if image size or
 build time actually becomes a problem.
 
+**Gotcha (hit 2026-07-28, real production outage):** `node:22-slim` (the
+base image) ships **without** the `ca-certificates` package. Most Node
+code doesn't notice, because Node's own HTTPS client bundles its own root
+certificate store — but `@livekit/rtc-node`'s native Rust engine does
+**not** use Node's cert store, it uses the OS's, and `node:22-slim` has
+none. Every HTTPS request that engine makes (including the region-info
+fetch it does right before `room.connect()`) failed with a generic
+`reqwest`/TLS error — reproduced identically across two different Render
+regions, ruling out a regional network fluke. This was originally
+misdiagnosed in `PROGRESS.md` as a transient network blip and "fixed" with
+a connection retry (`domain/retry.js`) — the retry is real and still
+useful for genuine transient failures, but it was masking, not fixing,
+this root cause, since a missing OS package fails the same way on every
+attempt, not intermittently. Actual fix: install `ca-certificates` in the
+`Dockerfile` (`apt-get install -y ca-certificates`, or the Alpine
+equivalent if the base image ever changes). **General lesson: any native
+addon/Rust/Go binary bundled into a Node app may bypass Node's own
+"batteries included" TLS handling — don't assume `node:*-slim` has
+everything a native dependency needs just because plain Node code works
+in it.**
+
 ---
 
 ## React + Vite

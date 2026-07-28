@@ -2,7 +2,10 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-07-28 (audit remediation — Phase 2 reliability)
+**Last updated:** 2026-07-28 (doc-sync + Vercel frontend decision, after
+audit remediation Phase 2 reliability and an undocumented second-session
+merge — see "Second-session work landed same day" below the Phase 2
+write-up for what changed and why the docs were behind)
 
 > **Two people work this repo.** `docs/engineering/PLAN.md` is the shared
 > checklist and ownership board — what's done, what's next, who has it, and
@@ -171,6 +174,82 @@ credentials, not guessed:
   isn't a substitute per guardrail #1's letter for a *feedback*-adjacent
   change. Recommend a quick real-room human check next time this comes up
   naturally, not necessarily its own dedicated session.
+
+**⚠️ Correction, 2026-07-28 (audit finding H1):** the "confirmed transient"
+diagnosis above was wrong. The 2026-07-28 engineering audit (`AUDIT.md`)
+flagged that the region-fetch failure recurred identically across two
+different Render regions — not what a transient network blip looks like.
+The real cause, found and fixed the same day (PR #5,
+`fix/english-only-transcription-and-duration-cap`): `node:22-slim` ships
+without `ca-certificates`, and `@livekit/rtc-node`'s native Rust engine
+uses the OS cert store, not Node's bundled one — so every one of its HTTPS
+requests failed, deterministically, until the image installs
+`ca-certificates`. See `LESSONS.md`'s Docker entry for the full
+explanation. **The retry logic above (`domain/retry.js`) is not wrong and
+stays** — it's real protection against genuine transient failures — but it
+was papering over this bug rather than fixing it: a missing OS package
+fails the same way on every attempt, so retrying just delayed the same
+failure instead of resolving it. Both fixes are complementary, now both
+live. H1 is RESOLVED as of this correction — see `AUDIT.md`.
+
+### Second-session work landed same day, undocumented until now (2026-07-28)
+A second person (`placemestudy1` account) pushed and merged PR #5/#6
+(`fix/english-only-transcription-and-duration-cap` → `dev` → `main`)
+directly against the `placemestudy1/gd-proto` remote, in parallel with the
+Phase 2 audit-remediation session recorded above — neither this file nor
+`PLAN.md` had been updated to reflect it until this correction pass. What
+it actually contains, found by reading the merged commits directly since
+neither doc mentioned it:
+- **The `ca-certificates` Docker fix** — see the H1 correction just above.
+- **Actually created migration `0008`** (`rooms.created_by` blocking
+  account deletion) — checked via `git log` on the file: this PR's commit
+  (`a877734`) is the *only* commit that ever created
+  `supabase/migrations/0008_rooms_created_by_on_delete_set_null.sql`.
+  `PLAN.md`'s DONE table had already credited C1 as fixed "via migration
+  0008" *before* this PR existed — a doc claim written ahead of the code
+  that made it true. No actual conflict or duplicate fix, just confirms
+  the migration file genuinely exists now and matches what `AUDIT.md`'s
+  C1 finding specifies (drops `NOT NULL`, adds `ON DELETE SET NULL`).
+- **Session duration cap tightened 60min → 25min** — new migration
+  `0009_rooms_duration_seconds_bounds.sql` → **`0010_tighten_rooms_duration
+  _seconds_bounds.sql`**, direct user request: a GD Arena practice round
+  was never meant to run half an hour or more. `domain/roomDuration.js`'s
+  `MAX_DURATION_SECONDS` now `25*60 = 1500`. **Neither `0009` nor `0010`
+  has a confirmed live-application status** — same manual Supabase SQL
+  Editor step as every other migration in this project.
+- **English-only transcription** — a fix landed per the PR title; not yet
+  cross-referenced against what was "noted, not investigated" in the W5
+  human-verification session's record above. Worth reading the actual
+  commit next time this area is touched, rather than relying on this
+  summary.
+- **192/192 server tests green** on `dev`/`main` as of this merge (was 187
+  at the end of the Phase 2 session recorded above).
+
+**Also this session (2026-07-28, doc-sync + Vercel frontend decision):**
+found the repo state was significantly ahead of what `PLAN.md` described —
+`dev`/`main`/the working branch were already fully synced with
+`placemestudy1/gd-proto` (the branch-stack-not-pushed hazard `PLAN.md`
+§2 warned about had already been resolved by an intervening commit,
+`2d2b0ac`, that also silently landed the `LobbyPage` `beforeunload` guard
+and both `apps/web/vercel.json`/`public/_redirects` — none of which
+`PLAN.md`'s checklist was ever updated to reflect). Also found a live,
+untracked Vercel CLI project link (`.vercel/`, project `gd-proto-web`) and
+a `.gitignore` change for it sitting in the working tree — that change was
+in `apps/web/.gitignore`, but `vercel link` had actually created `.vercel/`
+at the **repo root**, so the existing ignore rule never matched it and
+`git add -A` would have committed `.vercel/project.json` by accident.
+Fixed by adding `.vercel` to the **root** `.gitignore` instead (root
+`.gitignore` previously had no vercel-related entries at all). **Per direct
+user instruction: adopted Vercel for the frontend, superseding ADR-0007's
+original Cloudflare Pages pick** (reason on record: exploratory, not a
+technical failure of Cloudflare Pages — see the ADR's "Superseded
+2026-07-28" section). Deleted `apps/web/public/_redirects` (the now-dead
+Cloudflare Pages config) so only one host's routing config exists. Also
+corrected a stale repo reference in `.claude/skills/pr-review/SKILL.md`
+(pointed at `Place-Me-study/gd-proto`, an intermediate remote the project
+had already moved past — `placemestudy1/gd-proto` is current). `AUDIT.md`
+and `PLAN.md` were also brought in line with reality in this pass — see
+their own change history rather than duplicating it here.
 
 ## Earlier phases
 
