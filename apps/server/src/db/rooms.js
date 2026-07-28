@@ -62,6 +62,19 @@ export async function listRoomsByIds(ids, { supabase = getSupabase() } = {}) {
   return data;
 }
 
+// Every room the database still considers in progress. Read once at boot
+// (H2, audit 2026-07-28) so a process restart can re-attach a transcription
+// agent to sessions that are still running -- the in-memory activeRooms map
+// in agent/roomAgent.js does not survive a deploy, sleep, or crash.
+export async function listLiveRooms({ supabase = getSupabase() } = {}) {
+  const { data, error } = await supabase
+    .from('rooms')
+    .select('id, status, duration_seconds, started_at, ends_at')
+    .eq('status', 'live');
+  if (error) throw error;
+  return data ?? [];
+}
+
 // `expectedStatus` makes the write a *claim* rather than a blind update: the
 // row is only changed if it's still in the status the caller decided from
 // (C3, audit 2026-07-28). Postgres evaluates that predicate atomically, so

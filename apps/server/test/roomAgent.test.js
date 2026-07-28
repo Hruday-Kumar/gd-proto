@@ -84,6 +84,28 @@ describe('startTranscriptionForRoom', () => {
 // H2 (audit 2026-07-28): the two halves of surviving a process restart --
 // letting go cleanly on the way down, and picking the room back up on the
 // way up.
+describe('stopTranscriptionForRoom', () => {
+  it('closes the AssemblyAI sockets, not just the LiveKit connection', async () => {
+    // attachTranscriber() opens one AssemblyAI socket per speaker and returns
+    // a closeAll() handle for them. That handle was being dropped on the
+    // floor: stopping a room disconnected LiveKit and relied on the resulting
+    // TrackUnsubscribed events to tear the sockets down. During shutdown
+    // those events may never arrive, leaking metered, rate-limited STT
+    // connections on a free tier that caps them (LESSONS.md).
+    const closeAll = vi.fn();
+    const room = fakeRoom({ connect: vi.fn().mockResolvedValue(undefined) });
+
+    await startTranscriptionForRoom(
+      { id: 'stt-cleanup', durationSeconds: 600 },
+      { ...baseOpts, roomFactory: () => room, attachTranscriberFn: () => ({ closeAll }) }
+    );
+    await stopTranscriptionForRoom('stt-cleanup');
+
+    expect(closeAll).toHaveBeenCalledTimes(1);
+    expect(room.disconnect).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('stopAllTranscriptions', () => {
   it('disconnects every active room and empties the registry', async () => {
     const roomA = fakeRoom({ connect: vi.fn().mockResolvedValue(undefined) });

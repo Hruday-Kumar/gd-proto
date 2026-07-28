@@ -17,7 +17,8 @@ import { listRoomsByIds } from './db/rooms.js';
 import { listFeedbackForUserAndRooms } from './db/feedback.js';
 import { createHistoryRouter } from './api/history.js';
 import { startAgentWorker } from './agent/worker.js';
-import { getAgentWorkerStatus } from './agent/roomAgent.js';
+import { getAgentWorkerStatus, recoverLiveRooms, stopAllTranscriptions } from './agent/roomAgent.js';
+import { createGracefulShutdown } from './shutdown.js';
 
 export function createApp({ supabaseUrl, consentDb, topicsDb, roomsDb, historyDb, agentStatus } = {}) {
   const app = express();
@@ -73,6 +74,22 @@ export function createApp({ supabaseUrl, consentDb, topicsDb, roomsDb, historyDb
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const PORT = process.env.PORT || 3000;
   const app = createApp();
-  app.listen(PORT, () => console.log(`[server] listening on :${PORT}`));
+  const server = app.listen(PORT, () => console.log(`[server] listening on :${PORT}`));
   startAgentWorker();
+
+  // H2 (audit 2026-07-28), the two halves of surviving a restart. Both only
+  // ever run in this real-process branch, never under test.
+  //
+  // Up: this process is the only thing hosting the transcription agents, and
+  // the map holding them is in memory. After a deploy, a Render free-tier
+  // sleep, or a crash, any room still 'live' in the database has no agent --
+  // students notice nothing (their browsers talk to LiveKit directly) while
+  // the rest of the session is never transcribed. Re-attach on boot.
+  recoverLiveRooms();
+
+  // Down: disconnect each agent cleanly rather than having its LiveKit and
+  // AssemblyAI sockets cut, so the last speaker's turn can flush.
+  const shutdown = createGracefulShutdown({ server, stopAllTranscriptions });
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
