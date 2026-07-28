@@ -114,6 +114,8 @@ Audit findings closed, newest first. Evidence and root causes are in
 
 | ID | What | Where |
 |---|---|---|
+| **H8** | Dropped `room_participants`' client-facing insert policy — any authenticated student could self-seat into any room via a direct PostgREST call, reproduced live before fixing, re-verified blocked after | migration `0011`, `test/roomParticipantsRlsIsolation.test.js` |
+| **M1** | Student LiveKit tokens no longer grant `canPublishData` — could forge live-caption data messages attributed to a classmate | `api/rooms.js`, `test/roomsApi.test.js` |
 | **M11** | LLM fan-out bounded — worker pool, concurrency 2, order + failure-isolation preserved | `domain/feedbackGeneration.js` |
 | **H3** | `durationSeconds` validated (whole seconds, 60–1500 i.e. up to 25min — tightened from an initial 60–3600 by `0010`, a same-day follow-up product decision, not a second bug) at **both** `/api/rooms` and `/api/rooms/match`, plus a schema check constraint | `domain/roomDuration.js`, `api/rooms.js`, migrations `0009`, `0010` |
 | **H2** | Graceful SIGTERM/SIGINT shutdown + boot recovery of live rooms, re-dispatching with time **remaining**. Also closes the per-speaker AssemblyAI sockets that were being leaked | `shutdown.js`, `domain/roomRecovery.js`, `agent/roomAgent.js`, `db/rooms.js`, `index.js` |
@@ -145,8 +147,8 @@ Work top to bottom. Each row is one branch, one PR.
 
 | ✅ | ID | Task | Owner | Fix per audit |
 |---|---|---|---|---|
-| ☐ | **H8** | RLS lets any student seat themselves in any room | — | Drop the client insert policy on `room_participants` — every real seat is written by the service-role client. Re-run `test/historyRlsIsolation.test.js`. **Needs a live DB re-check.** |
-| ☐ | **M1** | Student LiveKit tokens grant `canPublishData` | — | Pass `canPublishData: false` for student tokens (`api/rooms.js:80`). Lets any student forge captions attributed to a classmate. **Needs a live re-check.** |
+| ✅ | **H8** | RLS lets any student seat themselves in any room | — | **DONE, PR #9.** See §4. |
+| ✅ | **M1** | Student LiveKit tokens grant `canPublishData` | — | **DONE, PR #9.** See §4. |
 | ☐ | **H4** | No rate limiting on metered LLM routes | — | `express-rate-limit` keyed on `req.userId`, strictest on the two Gemini routes. |
 | ☐ | **H5** | Prompt injection via custom topic | — | Cap topic length (~200 chars), delimit untrusted spans, instruct the model to treat the topic as data. |
 | ☐ | **M6** | Wide-open CORS | — | Origin allowlist. |
