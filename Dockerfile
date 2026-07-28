@@ -7,6 +7,16 @@
 FROM node:22-slim
 WORKDIR /app
 
+# node:22-slim ships without the system ca-certificates package. Node's own
+# HTTPS calls don't need it (bundled root store), but @livekit/rtc-node's
+# native Rust engine makes its own HTTPS requests (e.g. the region-info
+# fetch before room.connect()) against the system TLS store -- without this,
+# those requests fail with a generic "error sending request" on every
+# attempt, in every Render region (confirmed live: identical failure in both
+# Singapore and Oregon).
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY . .
 RUN npm ci
 
