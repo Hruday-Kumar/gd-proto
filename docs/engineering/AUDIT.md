@@ -319,8 +319,17 @@ and note the retry covers a different failure mode. Add to `LESSONS.md` —
 
 ### H2 — No graceful shutdown and no transcription recovery
 
-**Status:** OPEN · **Category:** Reliability · **Evidence:** Proven — no handler exists
+**Status:** RESOLVED 2026-07-28 · **Category:** Reliability · **Evidence:** Proven — no handler exists
 **Location:** `apps/server/src/index.js`, `apps/server/src/agent/roomAgent.js`
+
+> **Fixed.** `shutdown.js` (bounded SIGTERM/SIGINT handler),
+> `agent/roomAgent.js`'s `stopAllTranscriptions()` and `recoverLiveRooms()`,
+> `domain/roomRecovery.js` (which rooms qualify + time remaining),
+> `db/rooms.js`'s `listLiveRooms()`. Recovery passes the time REMAINING, not
+> the room's original duration. Stopping a room now also closes its
+> per-speaker AssemblyAI sockets explicitly — `attachTranscriber`'s
+> `closeAll()` handle was being dropped. Verified live: the real process logs
+> the boot-recovery scan and exits cleanly on SIGTERM.
 
 There is no `SIGTERM`/`SIGINT` handler anywhere in `apps/`, and no
 reconciliation on boot. `activeRooms` starts empty; nothing scans for rooms
@@ -347,8 +356,16 @@ what actually restores the session.
 
 ### H3 — `durationSeconds` is entirely unvalidated
 
-**Status:** OPEN · **Category:** Reliability · Validation · **Evidence:** Reproduced
+**Status:** RESOLVED 2026-07-28 · **Category:** Reliability · Validation · **Evidence:** Reproduced
 **Location:** `apps/server/src/api/rooms.js:96`, `agent/roomAgent.js:93`
+
+> **Fixed.** `domain/roomDuration.js` — whole seconds, 60–3600 inclusive —
+> enforced at **both** `POST /api/rooms` and `POST /api/rooms/match` (the
+> audit named only the first; `/match` is worse, since a matched room's
+> duration comes from whichever caller completed the group). Migration
+> `0009_rooms_duration_seconds_bounds.sql` adds the same bounds as a check
+> constraint, which the service-role key does *not* bypass. **Needs the
+> manual Supabase SQL Editor step, same as every other migration.**
 
 `POST /api/rooms` checks only `!durationSeconds`. The UI offers 5/10/15/20
 minutes, but the API is the security boundary, not the picker.
@@ -513,7 +530,7 @@ so removing it costs nothing and closes the hole. Verify by re-running
 | **M8** | **Consent version pinned at 1 while a new data use was added.** `CURRENT_CONSENT_VERSION = 1` is documented as the bump mechanism for material disclosure changes; PostHog analytics was introduced without one. The code itself flags this. | `domain/consent.js:9`, `apps/web/src/lib/analytics.js` | Currently inert — key unset, posthog-js dead-code-eliminated. Becomes a live DPDP problem the moment `VITE_POSTHOG_KEY` is set, because existing students would never be asked to re-consent. |
 | **M9** | **Unbounded reads.** `listQueue`, `listRoomIdsForUser`, `listRoomsByIds`, `listTranscriptLinesForRoom` have no `LIMIT`; history fans a user's full room-id list into an `.in()` clause. | `db/matchmakingQueue.js`, `db/roomParticipants.js`, `db/rooms.js` | Harmless at 20–30 students. Degrades predictably as history accumulates — a heavy user's `/api/history/mine` grows without bound. |
 | **M10** | **`GET /status` performs writes.** A GET transitions room state and dispatches an LLM job. Correctly participant-gated and well documented, but still a GET with side effects. | `api/rooms.js:204-233` | Any retry, prefetch, or proxy replay re-triggers the transition. Also the mechanism behind C3. |
-| **M11** | **Unbounded LLM fan-out per room.** `generateFeedbackForRoom` issues one Gemini call per participant in a single `Promise.all`, no concurrency cap. | `domain/feedbackGeneration.js:24` | Six simultaneous free-tier calls even without C3's multiplier; with it, up to 36. Rate-limited students silently get no feedback. |
+| **M11** | ~~**Unbounded LLM fan-out per room.** `generateFeedbackForRoom` issues one Gemini call per participant in a single `Promise.all`, no concurrency cap.~~ **RESOLVED 2026-07-28** — fixed-size worker pool, `DEFAULT_FEEDBACK_CONCURRENCY = 2`; participant order and per-student failure isolation both preserved. | `domain/feedbackGeneration.js:24` | Six simultaneous free-tier calls even without C3's multiplier; with it, up to 36. Rate-limited students silently get no feedback. |
 | **M12** | **Three deployment targets in flight, no ADR for any of the changes.** Docker/Render fixes and Vercel serverless fixes both landed on `main` within 24 hours. On top of that, the working tree holds SPA-routing configs for *two different frontend hosts* at once — `apps/web/vercel.json` (Vercel rewrites) and `apps/web/public/_redirects` (Cloudflare Pages) — both **untracked**. | `Dockerfile`, `render.yaml`, `src/index.js:81`, `apps/web/vercel.json`, `apps/web/public/_redirects` | Guardrail #10 ("justify, don't invent") and the ADR process bypassed for the highest-consequence decision in the project. ADR-0007 chose Cloudflare Pages; nothing records why Vercel appeared. Future sessions will read contradictory intent, and the two configs will diverge silently. |
 
 ---

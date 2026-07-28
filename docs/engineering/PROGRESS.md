@@ -2,9 +2,96 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-07-27 (transcription-resilience bug-fix session)
+**Last updated:** 2026-07-28 (audit remediation — Phase 2 reliability)
 
 ## Current phase
+
+**Audit remediation, Phase 2 (Reliability), 2026-07-28.** Working the
+`docs/engineering/AUDIT.md` roadmap in order, one verified finding at a
+time, TDD RED→GREEN with a separate commit per phase. Branch
+`fix/h2-graceful-shutdown-boot-recovery`, stacked on the earlier
+C1/C3/C2 work (which is **not yet merged into `dev`** — see below).
+**187/187 server tests green on Node 22** (was 151), lint clean.
+
+- **H2 — no graceful shutdown, no boot recovery. FIXED.** Root cause
+  re-confirmed before touching anything: no `SIGTERM`/`SIGINT` handler
+  existed anywhere in `apps/server/src`, and `activeRooms` (the in-memory
+  map holding every live room's agent) had no reconciliation on boot. A
+  Render deploy, free-tier sleep, or crash mid-session therefore dropped
+  LiveKit + AssemblyAI sockets with no disconnect, left the room row saying
+  `live`, and wrote zero transcript lines for the rest of the session —
+  invisibly, since browsers talk to LiveKit directly and students notice
+  nothing. This compounds the still-untested **B4** risk.
+  - *Down:* `src/shutdown.js`'s `createGracefulShutdown()` — stops
+    accepting connections, disconnects every active agent, exits; bounded
+    by a force-exit deadline so a hung disconnect can't hold the process
+    open until SIGKILL. `stopAllTranscriptions()` sweeps with `allSettled`
+    so one dead socket doesn't strand the rest.
+  - *Up:* `recoverLiveRooms()` + the new pure `domain/roomRecovery.js`
+    (core, tests-first) + `db/rooms.js`'s `listLiveRooms()`. **The
+    important detail:** a recovered agent is dispatched with the time
+    **remaining** (from `ends_at`), not the room's original duration —
+    the agent's stop timer runs from the moment it connects, so passing
+    the original duration would transcribe well past the room's real end.
+    Sequential on purpose (AssemblyAI free-tier connection rate limit, see
+    `LESSONS.md`). Nothing in it throws: a DB hiccup degrades to "no
+    recovery", never a server that won't boot.
+  - *Found while checking consistency:* `attachTranscriber()` returns a
+    `closeAll()` handle for the per-speaker AssemblyAI sockets that
+    `roomAgent.js` was dropping on the floor — teardown depended on
+    `TrackUnsubscribed` events that may never arrive during shutdown.
+    Now captured and called explicitly on stop.
+  - **Verified live**, not just in tests: the real process logged its
+    boot-recovery scan against Supabase and exited cleanly on a real
+    `SIGTERM`.
+- **H3 — `durationSeconds` entirely unvalidated. FIXED.** Reproduced first:
+  `2000000000`, `-5`, `0.5` and `"600"` all got past the route into the DB
+  layer. Two invisible failures at once — `ends_at` lands far enough out
+  that `isTimerExpired()` never fires (room stays `live` forever, feedback
+  never dispatched), *and* the agent's `setTimeout(duration * 1000)`
+  overflows int32 and fires at 1 ms, disconnecting the transcriber
+  immediately. New pure `domain/roomDuration.js` (whole seconds, 60–3600
+  inclusive) applied at **both** `POST /api/rooms` and `POST
+  /api/rooms/match` — the audit named only the first, but `/match` is
+  worse: a matched room's duration comes from whichever caller completed
+  the group, so one bad value breaks the session for up to six students.
+  Bounds are wider than the UI picker (5/10/15/20 min) so options can be
+  added without a server change.
+- **M11 — unbounded LLM fan-out. FIXED.** Reproduced: a six-person room
+  peaked at six simultaneous Gemini calls against a rate-limited free
+  tier, and a throttled call fell into the existing per-student error path
+  — that student silently got no feedback at all. Replaced the
+  `Promise.all` with a fixed-size worker pool over a shared cursor,
+  `DEFAULT_FEEDBACK_CONCURRENCY = 2` (three small waves instead of one
+  burst, well inside the ~2 min window the lobby polls). Both prior
+  guarantees preserved and regression-tested: results stay in participant
+  order, and one student's failure still can't abort the pool or leak into
+  anyone else's feedback.
+
+**Open follow-ups from this session:**
+1. **`supabase/migrations/0009_rooms_duration_seconds_bounds.sql` has not
+   been run** — needs the usual manual Supabase SQL Editor step. The
+   server-side validation is the primary fix and is already live in code,
+   so this is defence in depth, not a blocker for merging.
+2. **None of the audit-remediation work (C1, C3, C2, H2, H3, M11) has been
+   merged into `dev` yet** — it's all stacked on
+   `chore/c2-remove-vercel-serverless-handler` →
+   `fix/h2-graceful-shutdown-boot-recovery`. PRs still need opening (and
+   the `pr-review` skill run on each, per `BRANCHING.md` 5a).
+3. `AUDIT.md` still marks **C1, C3 and C2 as OPEN** even though the prior
+   session fixed them; only H2/H3/M11 were updated here. Worth correcting
+   so the record doesn't mislead the next session (the exact failure mode
+   H1 is about).
+4. **H2's recovery path has never run against a room that was actually
+   live** — the live check confirmed the scan, the shutdown, and a clean
+   exit, but there were no live rooms to re-attach. Worth exercising once
+   during the next real-room session: start a room, restart the server
+   mid-discussion, confirm transcription resumes.
+5. Next in the roadmap after this: **Phase 3** (H8, M1, H4, H5, M6, M7).
+
+## Earlier phases
+
+### Transcription-resilience bug fix (2026-07-27)
 **Transcription-resilience bug fix, 2026-07-27 (separate session, after the
 pilot-readiness pass below).** User report: "the room sharing and code
 works, but the transcription fails, since the transcription is failing the
