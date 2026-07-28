@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { generateUniqueRoomCode } from '../domain/roomCode.js';
 import { matchmake } from '../domain/matchmaking.js';
 import { startSession, endSession, isTimerExpired } from '../domain/sessionStateMachine.js';
+import { isValidDurationSeconds, MIN_DURATION_SECONDS, MAX_DURATION_SECONDS } from '../domain/roomDuration.js';
 import { generateTopic } from '../llm/geminiClient.js';
 import { createConsentGate } from './consentGate.js';
 import { mintToken } from '../livekit/token.js';
@@ -19,6 +20,8 @@ import { listTranscriptLinesForRoom } from '../db/transcriptLines.js';
 // apply to the /match path.
 const DEFAULT_MIN_GROUP_SIZE = 3;
 const DEFAULT_MAX_GROUP_SIZE = 6;
+
+const INVALID_DURATION_ERROR = `durationSeconds must be a whole number of seconds between ${MIN_DURATION_SECONDS} and ${MAX_DURATION_SECONDS}`;
 
 // Maps a DB room row (snake_case) to the shape sessionStateMachine.js
 // expects (camelCase, millisecond timestamps).
@@ -96,6 +99,12 @@ export function createRoomsRouter(requireAuth, deps) {
     if (!topicId || !durationSeconds) {
       return res.status(400).json({ error: 'topicId and durationSeconds are required' });
     }
+    // H3: bound the duration before it reaches the database. An out-of-range
+    // value leaves the room live forever AND overflows the agent's stop timer
+    // -- see domain/roomDuration.js.
+    if (!isValidDurationSeconds(durationSeconds)) {
+      return res.status(400).json({ error: INVALID_DURATION_ERROR });
+    }
     const code = await generateUniqueRoomCode(roomCodeExists);
     const room = await insertRoom({ code, topicId, durationSeconds, joinMode: 'code', createdBy: req.userId });
     await addParticipant(room.id, req.userId, req.userId);
@@ -127,6 +136,12 @@ export function createRoomsRouter(requireAuth, deps) {
   router.post('/api/rooms/match', requireAuth, async (req, res) => {
     const { durationSeconds } = req.body || {};
     if (!durationSeconds) return res.status(400).json({ error: 'durationSeconds is required' });
+    // Same H3 check as POST /api/rooms, and it matters more here: the matched
+    // room's duration comes from whichever caller completed the group, so one
+    // bad value would break the session for every member, not just its sender.
+    if (!isValidDurationSeconds(durationSeconds)) {
+      return res.status(400).json({ error: INVALID_DURATION_ERROR });
+    }
 
     const queue = await listQueue();
     if (queue.some((p) => p.id === req.userId)) {
