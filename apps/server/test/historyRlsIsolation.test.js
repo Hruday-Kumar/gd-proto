@@ -97,10 +97,18 @@ describe.skipIf(!hasLiveCreds)('session history RLS isolation (two real Supabase
 
   afterAll(async () => {
     if (!admin) return;
-    // rooms.created_by has no ON DELETE CASCADE (only room_participants/
-    // transcript_lines/feedback cascade FROM a room) -- the fixture rooms
-    // must be deleted before the users, or deleting the users hits an FK
-    // violation.
+    // Fixture rooms are deleted before their creators so this test cleans
+    // up after itself completely -- rooms don't cascade FROM auth.users
+    // (only room_participants/transcript_lines/feedback cascade FROM a
+    // room), so leaving them would strand orphaned rows in the project.
+    //
+    // Until migration 0008 this ordering was mandatory rather than tidy:
+    // rooms.created_by was NOT NULL with no ON DELETE clause, so deleting
+    // a user who had created a room raised an FK violation. That was C1 in
+    // the 2026-07-28 audit -- the same violation broke
+    // scripts/delete-account.js in production. 0008 makes created_by
+    // nullable with `on delete set null`, so the delete now succeeds
+    // either way; this order is kept for cleanliness.
     for (const room of [roomA, roomB]) {
       if (room) await admin.from('rooms').delete().eq('id', room.id);
     }

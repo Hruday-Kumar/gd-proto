@@ -221,6 +221,24 @@ describe('POST /api/rooms/:id/start', () => {
     const res = await request(app).post('/api/rooms/r1/start').send();
     expect(res.status).toBe(409);
   });
+
+  // C1 (audit 2026-07-28): migration 0008 makes rooms.created_by
+  // `on delete set null`, so a room outlives the student who created it
+  // once they exercise their right to erasure. Nobody may then start it --
+  // the creator-only gate is an equality check against req.userId, and a
+  // NULL creator must never accidentally match. Pinned here because the
+  // safety of that migration depends on this behaviour, and nothing else
+  // in the suite covers a null creator.
+  it('403s when the room has no creator (creator account was deleted)', async () => {
+    const deps = baseDeps({
+      getRoomById: vi.fn().mockResolvedValue({ id: 'r1', status: 'waiting', duration_seconds: 300, created_by: null }),
+    });
+    const app = buildApp(deps);
+    const res = await request(app).post('/api/rooms/r1/start').send();
+    expect(res.status).toBe(403);
+    expect(deps.updateRoomStatus).not.toHaveBeenCalled();
+    expect(deps.startTranscriptionFn).not.toHaveBeenCalled();
+  });
 });
 
 describe('GET /api/rooms/:id/status', () => {
@@ -233,6 +251,27 @@ describe('GET /api/rooms/:id/status', () => {
     const res = await request(app).get('/api/rooms/r1/status');
     expect(res.body.status).toBe('live');
     expect(deps.updateRoomStatus).not.toHaveBeenCalled();
+  });
+
+  // C1 (audit 2026-07-28), same reasoning as the /start case above: after
+  // migration 0008 a room can outlive its creator with created_by NULL.
+  // isCreator must be false for everyone then, so the lobby never renders
+  // a start button nobody is allowed to press.
+  it('reports isCreator false when the room has no creator', async () => {
+    const endsAt = Date.now() + 60_000;
+    const deps = baseDeps({
+      getRoomById: vi.fn().mockResolvedValue({
+        id: 'r1',
+        status: 'live',
+        duration_seconds: 300,
+        created_by: null,
+        ends_at: new Date(endsAt).toISOString(),
+      }),
+    });
+    const app = buildApp(deps);
+    const res = await request(app).get('/api/rooms/r1/status');
+    expect(res.status).toBe(200);
+    expect(res.body.isCreator).toBe(false);
   });
 
   // The lobby needs this to render a countdown -- without it, a
