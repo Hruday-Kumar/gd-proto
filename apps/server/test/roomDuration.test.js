@@ -1,7 +1,7 @@
 // H3 (audit 2026-07-28) core unit. POST /api/rooms and POST /api/rooms/match
 // checked only `!durationSeconds`, so anything truthy was written straight
-// into the rooms table. The UI's picker offers 5/10/15/20 minutes, but the
-// API is the security boundary, not the picker.
+// into the rooms table. The UI lets a student type any number of minutes
+// (DurationPicker.jsx), but the API is the security boundary, not the input.
 //
 // Two things break at once with an out-of-range value, and neither is
 // visible to a student:
@@ -14,9 +14,8 @@ import { describe, it, expect } from 'vitest';
 import { isValidDurationSeconds, MIN_DURATION_SECONDS, MAX_DURATION_SECONDS } from '../src/domain/roomDuration.js';
 
 describe('isValidDurationSeconds', () => {
-  it('accepts every duration the UI can actually produce', () => {
-    // DurationPicker.jsx offers 5/10/15/20 minutes.
-    for (const minutes of [5, 10, 15, 20]) {
+  it('accepts every whole minute value the UI can produce (1-25 min input)', () => {
+    for (const minutes of [1, 5, 10, 15, 20, 25]) {
       expect(isValidDurationSeconds(minutes * 60)).toBe(true);
     }
   });
@@ -24,6 +23,15 @@ describe('isValidDurationSeconds', () => {
   it('accepts the inclusive bounds', () => {
     expect(isValidDurationSeconds(MIN_DURATION_SECONDS)).toBe(true);
     expect(isValidDurationSeconds(MAX_DURATION_SECONDS)).toBe(true);
+  });
+
+  // 2026-07-28, direct user request: cap live sessions at 25 minutes. The
+  // 60-minute bound above was correct defence-in-depth for H3's actual bug
+  // (int32 overflow / a runaway timer), but 30+ minutes is a product decision
+  // this project has never wanted -- it's well past the "quick practice
+  // round" the GD Arena is for.
+  it('rejects a duration past the 25 minute product cap', () => {
+    expect(isValidDurationSeconds(30 * 60)).toBe(false);
   });
 
   it('rejects a duration long enough to overflow the agent stop timer', () => {

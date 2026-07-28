@@ -13,8 +13,13 @@
 // Bounds are deliberately wider than the picker so the UI can add options
 // without a server change, and narrow enough that neither failure is
 // reachable. Both are inclusive.
+//
+// MAX tightened 60 -> 25 minutes on 2026-07-28 per direct user request: a GD
+// Arena practice round was never meant to run half an hour-plus, and the
+// original 3600s bound was sized only to rule out H3's int32-overflow/
+// runaway-timer bug, not to express a real product ceiling.
 export const MIN_DURATION_SECONDS = 60;
-export const MAX_DURATION_SECONDS = 3600;
+export const MAX_DURATION_SECONDS = 25 * 60;
 
 export function isValidDurationSeconds(value) {
   // Number.isInteger is false for NaN, Infinity, non-numbers, and fractions,
