@@ -9,7 +9,13 @@
 // permanent misconfiguration (proven live: the same credentials succeeded
 // moments before and after the failure).
 import { describe, it, expect, vi } from 'vitest';
-import { startTranscriptionForRoom, stopTranscriptionForRoom, getAgentWorkerStatus } from '../src/agent/roomAgent.js';
+import {
+  startTranscriptionForRoom,
+  stopTranscriptionForRoom,
+  stopAllTranscriptions,
+  recoverLiveRooms,
+  getAgentWorkerStatus,
+} from '../src/agent/roomAgent.js';
 
 function fakeRoom({ connect }) {
   return {
@@ -72,5 +78,81 @@ describe('startTranscriptionForRoom', () => {
 
     expect(connect).toHaveBeenCalledTimes(3);
     expect(getAgentWorkerStatus().getStatus().lastFailure).toMatchObject({ roomId, message: 'still down' });
+  });
+});
+
+// H2 (audit 2026-07-28): the two halves of surviving a process restart --
+// letting go cleanly on the way down, and picking the room back up on the
+// way up.
+describe('stopAllTranscriptions', () => {
+  it('disconnects every active room and empties the registry', async () => {
+    const roomA = fakeRoom({ connect: vi.fn().mockResolvedValue(undefined) });
+    const roomB = fakeRoom({ connect: vi.fn().mockResolvedValue(undefined) });
+    await startTranscriptionForRoom({ id: 'shutdown-a', durationSeconds: 600 }, { ...baseOpts, roomFactory: () => roomA });
+    await startTranscriptionForRoom({ id: 'shutdown-b', durationSeconds: 600 }, { ...baseOpts, roomFactory: () => roomB });
+
+    const stopped = await stopAllTranscriptions();
+
+    expect(stopped).toBe(2);
+    expect(roomA.disconnect).toHaveBeenCalledTimes(1);
+    expect(roomB.disconnect).toHaveBeenCalledTimes(1);
+    // Registry really is empty -- a second sweep has nothing left to do.
+    expect(await stopAllTranscriptions()).toBe(0);
+  });
+
+  it('still disconnects the remaining rooms when one disconnect fails', async () => {
+    const bad = fakeRoom({ connect: vi.fn().mockResolvedValue(undefined) });
+    bad.disconnect = vi.fn().mockRejectedValue(new Error('socket already gone'));
+    const good = fakeRoom({ connect: vi.fn().mockResolvedValue(undefined) });
+    await startTranscriptionForRoom({ id: 'shutdown-bad', durationSeconds: 600 }, { ...baseOpts, roomFactory: () => bad });
+    await startTranscriptionForRoom({ id: 'shutdown-good', durationSeconds: 600 }, { ...baseOpts, roomFactory: () => good });
+
+    await expect(stopAllTranscriptions()).resolves.toBe(2);
+
+    expect(good.disconnect).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('recoverLiveRooms', () => {
+  const NOW = Date.parse('2026-07-28T10:00:00.000Z');
+
+  it('re-dispatches an agent for each still-live room, with the time remaining', async () => {
+    const startFn = vi.fn().mockResolvedValue(undefined);
+    const listLiveRoomsFn = vi.fn().mockResolvedValue([
+      { id: 'r1', status: 'live', duration_seconds: 600, ends_at: new Date(NOW + 300_000).toISOString() },
+      { id: 'r2', status: 'live', duration_seconds: 900, ends_at: new Date(NOW + 60_000).toISOString() },
+    ]);
+
+    const recovered = await recoverLiveRooms({ listLiveRoomsFn, startFn, now: NOW });
+
+    expect(recovered).toEqual([
+      { id: 'r1', remainingSeconds: 300 },
+      { id: 'r2', remainingSeconds: 60 },
+    ]);
+    expect(startFn).toHaveBeenNthCalledWith(1, { id: 'r1', durationSeconds: 300 });
+    expect(startFn).toHaveBeenNthCalledWith(2, { id: 'r2', durationSeconds: 60 });
+  });
+
+  it('never lets a database failure crash boot', async () => {
+    const startFn = vi.fn();
+    const listLiveRoomsFn = vi.fn().mockRejectedValue(new Error('supabase unreachable'));
+
+    await expect(recoverLiveRooms({ listLiveRoomsFn, startFn, now: NOW })).resolves.toEqual([]);
+    expect(startFn).not.toHaveBeenCalled();
+  });
+
+  it('keeps recovering the other rooms when one dispatch fails', async () => {
+    const startFn = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('livekit down'))
+      .mockResolvedValue(undefined);
+    const listLiveRoomsFn = vi.fn().mockResolvedValue([
+      { id: 'r1', status: 'live', duration_seconds: 600, ends_at: new Date(NOW + 300_000).toISOString() },
+      { id: 'r2', status: 'live', duration_seconds: 600, ends_at: new Date(NOW + 300_000).toISOString() },
+    ]);
+
+    await recoverLiveRooms({ listLiveRoomsFn, startFn, now: NOW });
+
+    expect(startFn).toHaveBeenCalledTimes(2);
   });
 });
