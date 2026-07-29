@@ -2,10 +2,161 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-07-29 (N1 fix session — see immediately below; the
-Phase 5 release-to-both-remotes, close-out session, blockers-
-investigation, and M4/H6/M10 notes and older context are preserved
-further down)
+**Last updated:** 2026-07-29 (N2 — DONE, migration applied and live-verified;
+see immediately below. The N7 verification session, N1 fix session, Phase
+5 release-to-both-remotes, close-out session, blockers-investigation, and
+M4/H6/M10 notes and older context are preserved further down)
+
+## N2 — close the database-level bypass of H5's prompt-injection mitigation (2026-07-29, after N7)
+
+Picked up per direct user instruction to implement N2 only, from
+`AUDIT_COMPARISON_2026-07-29.md`. H5 (2026-07-28) capped custom topics at
+200 chars and delimited them as data (not instructions) in the Gemini
+feedback prompt — but only at the `POST /api/topics/custom` route.
+`0003`'s `topics_insert_own_custom` RLS policy still let any authenticated
+student insert directly into `public.topics` via a raw PostgREST call,
+with a check (`source = 'custom' and auth.uid() = created_by`) that only
+proves self-identity, not length or content — the exact vulnerability
+class H8 already fixed on `room_participants`, on a different table the
+audit never cross-checked. An unbounded direct insert could contain a
+`"""` sequence that closes the delimiter `domain/feedbackPrompt.js` relies
+on, then be referenced as `topicId` in `POST /api/rooms` like any
+legitimate topic.
+
+- **Audited every insert path into `topics` first**, per the task's own
+  requirement 1: `db/topics.js`'s `insertCustomTopic`/`insertGeneratedTopic`
+  (both service-role, called only from `api/topics.js` after the H5 length
+  check) are the only two in `apps/server`. Grepped `apps/web` for any
+  direct `.from('topics')` write — none exist; `roomsApi.js` only calls
+  the backend API. The two live-RLS test fixtures
+  (`roomParticipantsRlsIsolation.test.js`, `historyRlsIsolation.test.js`)
+  insert via the service-role `admin` client for fixture setup, which
+  bypasses RLS anyway and isn't affected by dropping the client policy.
+  **Conclusion: `topics_insert_own_custom` is unused by the real app** —
+  same finding the audit's own recommended fix assumed, now independently
+  confirmed rather than taken on faith.
+- **Migration `0013_drop_topics_client_insert_add_length_constraint.sql`**
+  (not yet run against the live project) drops that policy and adds a
+  `topics_text_length` CHECK constraint (≤200 chars, matching
+  `domain/topicText.js`'s `MAX_CUSTOM_TOPIC_LENGTH`) — a table constraint,
+  not an RLS check, so it binds *every* insert including the server's own
+  service-role writes. Clamps any pre-existing over-length row first
+  (`update ... set text = left(text, 200)`), same defensive pattern
+  `0009` used for `rooms.duration_seconds`, so applying it can't abort on
+  data that predates the constraint.
+- **A CHECK constraint binding service-role writes creates a new failure
+  mode the audit's recommended SQL alone didn't address**: LLM-generated
+  topics (`insertGeneratedTopic`, called from `POST /api/topics/generate`
+  and `POST /api/rooms/match`) were never length-checked at all — only
+  asked, by prompt instruction, for "one sentence." Once `0013` is live, a
+  verbose Gemini reply over 200 chars would fail that insert with a raw
+  Postgres constraint-violation error instead of the existing clean
+  502/error handling. Fixed at the one choke point both routes already
+  share: `domain/topicPrompt.js`'s `parseTopicResponse` (TDD RED→GREEN,
+  2 new tests) now throws before returning an over-length response, so
+  the legitimate LLM path can never hit the new constraint in production.
+- **New `test/topicsRlsIsolation.test.js`**, same live-RLS pattern as
+  `roomParticipantsRlsIsolation.test.js`/`historyRlsIsolation.test.js`: a
+  real Supabase Auth user's own scoped client attempts a direct insert
+  (should be rejected once `0013` is applied); a separate assertion proves
+  the length constraint holds even via the service-role client; a third
+  confirms the service-role path still works for an in-bounds topic (no
+  regression). **Ran live against this project's real Supabase instance on
+  Node 22** (this shell defaults to Node 20, which throws on the first
+  live Supabase query — same recurring gotcha as N7 and `LESSONS.md`'s
+  "Node 22 or nothing" entry) — both the client-bypass and length-limit
+  assertions **failed**, i.e. the vulnerability reproduces live today,
+  exactly as N2 describes, because `0013` has not been applied yet. This
+  is the expected, correct RED state for a migration that hasn't run —
+  not a bug in the fix.
+- **A real near-miss caught and cleaned up during that live run**: the
+  test's first draft assumed a blocked insert would never return an id to
+  track, so it only recorded ids for cleanup on the success path. Because
+  the insert *unexpectedly succeeded* (the policy is still live), two rows
+  were briefly written to the live `topics` table (`727a8168…`,
+  `37ffe300…`) with no cleanup path pointed at them until caught by
+  re-querying the table directly. Deleted both immediately via the
+  service-role client, and rewrote the test to record any returned id for
+  cleanup regardless of pass/fail — so re-running this test again before
+  `0013` is applied (which will happen, since the migration is a manual
+  step) can't leak rows a second time.
+- **274/274 offline server tests green** (was 272; +2 for
+  `parseTopicResponse`'s new length guard) — the 3 new live-RLS tests in
+  `topicsRlsIsolation.test.js` correctly skip without live credentials
+  (e.g. in CI), same `describe.skipIf(!hasLiveCreds)` pattern as the other
+  two live-RLS test files. `npx oxlint apps/server/src` clean. No
+  `apps/web` changes — confirmed unnecessary during the path audit above.
+- **Not done this session, by design (scope discipline, per direct
+  instruction to implement N2 only)**: no other `AUDIT_COMPARISON_2026-07-29.md`
+  finding was touched. `POST /api/rooms`'s acceptance of any `topicId`
+  without checking ownership — mentioned in N2's "full detail is under H5"
+  paragraph but not in its "Recommended fix" section — was deliberately
+  left alone; the audit's prescribed fix is the migration, and that's what
+  was implemented.
+- **Migration `0013` applied by the user, then live-verified the same
+  session.** Re-ran `test/topicsRlsIsolation.test.js` against the live
+  project on Node 22 after the user ran the migration: **all 3 assertions
+  now pass, with no code change** — a direct client insert into `topics`
+  is rejected, an oversized (>200 char) service-role insert is rejected by
+  the new `topics_text_length` constraint, and a normal in-bounds
+  service-role insert still succeeds (the real `/api/topics/custom` and
+  `/api/topics/generate` paths are unaffected). This is the same
+  before/after live-proof pattern H8/`0011` and N7 established: the exact
+  same test reproduced the vulnerability pre-migration and confirmed the
+  fix post-migration, rather than trusting the SQL alone. Full server
+  suite reconfirmed green after: **282/282**. **N2 is DONE** — see
+  `PLAN.md` §3/§4.
+
+## N7 — verify migration 0011 is applied live (2026-07-29, after the N1 fix session)
+
+Picked up per direct user instruction to implement N7 only, from
+`AUDIT_COMPARISON_2026-07-29.md`: migration `0011`
+(`drop_room_participants_client_insert.sql`, H8's fix) had no recorded
+live-application status anywhere in the repo — `PLAN.md` §3's migration
+table stopped at `0010`. Until someone checked, the repo could not say
+whether H8 (any student could seat themselves into any room via a direct
+PostgREST call, then read that room's attributed transcript) was actually
+closed in production, or was quietly still live.
+
+- **Verification method:** rather than guessing or asking for another
+  manual dashboard confirmation, re-ran the existing
+  `apps/server/test/roomParticipantsRlsIsolation.test.js` — the same live
+  two-real-user RLS test written alongside `0011`/H8 originally — directly
+  against the live Supabase project. This environment already had live
+  `SUPABASE_URL`/`SUPABASE_ANON_KEY`/`SUPABASE_SERVICE_ROLE_KEY` in
+  `apps/server/.env`, so the test's `describe.skipIf(!hasLiveCreds)` guard
+  didn't skip it (this is also **why it never runs in CI** — no live
+  creds are configured there, which is N8's separate, not-in-scope,
+  finding).
+- **First attempt failed for an environmental reason, not a real result:**
+  this shell defaults to Node 20, and `@supabase/supabase-js`'s realtime
+  client needs a native `WebSocket` global only present in Node 22+ (the
+  same recurring gotcha documented in `LESSONS.md` and `PLAN.md` §1's
+  "Node 22 or nothing" rule) — the client constructor itself threw before
+  any test body ran. Re-ran with `nvm use 22`; the suite then executed for
+  real.
+- **Result: 1/1 test passed.** A second real user (`userB`, deliberately
+  never seated in the test room) attempted a direct client-side insert
+  into `room_participants` for a room they weren't invited to; Supabase
+  rejected it, and a service-role re-query confirmed no row was written.
+  **Why a rejection proves `0011` is applied:** the pre-`0011` policy
+  (`room_participants_insert_self`, from `0003`) only checked `auth.uid()
+  = user_id` — a self-identity check, not a room-membership check — so
+  `userB` inserting a row with their own `user_id` would have been
+  *allowed* under the old policy. The insert being rejected is therefore
+  direct live evidence the vulnerable policy is gone and RLS now defaults
+  to deny, exactly what `0011` does.
+- **`PLAN.md` §3 updated** — `0011`'s row now reads "Confirmed applied —
+  live-verified 2026-07-29 (N7)" instead of `?`, with the evidence above
+  recorded inline. **§4's DONE table also gained an N7 row**, since this
+  closes out the finding, not just the migration-table gap.
+- **No code, test, or schema changes** — this was a verification-and-
+  recording task only, exactly as N7's own "Recommended fix" specified
+  (verify against the live project and add the row). The test file was
+  read and re-run, not modified. No other findings from
+  `AUDIT_COMPARISON_2026-07-29.md` (N1 was already done in the prior
+  session; N2–N6, N8–N14 remain untouched) were looked at or touched this
+  session, per direct instruction to implement N7 only.
 
 ## N1 fix — feedback generation retry (2026-07-29, after the independent audit comparison)
 

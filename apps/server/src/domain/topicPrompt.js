@@ -2,6 +2,8 @@
 // (W4, ADR-0008). Kept separate from the network-calling client
 // (src/llm/geminiClient.js) so this stays testable without hitting the
 // real API.
+import { MAX_CUSTOM_TOPIC_LENGTH } from './topicText.js';
+
 export function buildTopicPrompt({ category, difficulty } = {}) {
   const parts = [
     'Generate a single group discussion (GD) topic suitable for engineering students preparing for campus placements.',
@@ -21,5 +23,14 @@ export function parseTopicResponse(geminiResponseBody) {
   if (!text || !text.trim()) {
     throw new Error('Gemini response did not contain topic text');
   }
-  return text.trim();
+  const trimmed = text.trim();
+  // N2 (AUDIT_COMPARISON_2026-07-29.md): the topics table now has a
+  // topics_text_length check constraint (200 chars, matching H5's
+  // custom-topic cap) that applies to every insert, including this
+  // service-role-written LLM path -- reject an oversized reply here so a
+  // verbose Gemini response can never fail that insert.
+  if (trimmed.length > MAX_CUSTOM_TOPIC_LENGTH) {
+    throw new Error(`Gemini response exceeded ${MAX_CUSTOM_TOPIC_LENGTH} characters`);
+  }
+  return trimmed;
 }
