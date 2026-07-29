@@ -2,9 +2,84 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-07-29 (M4/H6/M10 shipped to `main` — see the release
-note immediately below; older "Last updated" context — audit Phase 4
-close-out, doc-sync + Vercel frontend decision — is preserved further down)
+**Last updated:** 2026-07-29 (blockers-investigation session — see the note
+immediately below; the M4/H6/M10 release note and older context are
+preserved further down)
+
+## Blockers investigation (PLAN.md §6), 2026-07-29
+
+Picked up per direct user instruction ("steer and complete the blockers
+issue before proceeding with other tasks of phase 5"). Went through B1,
+B3, B4, B7 one at a time using live checks rather than trusting what
+`PLAN.md` said, since that table hadn't been touched in a while. Two real
+surprises:
+
+- **B1 (deploy) was far more done than documented — a live deploy already
+  existed that no doc mentioned.** Found via `render` CLI (already
+  authenticated on this machine as `place.me.study1@gmail.com`) and
+  `npx vercel ls`/`vercel env ls`/`vercel domains ls`:
+  - **Frontend:** Vercel project `gd-proto-web`, custom domain
+    `placeme.study` registered and wired (308 redirect confirmed),
+    `gd-proto-web.vercel.app` also live (200), all three `VITE_*` env vars
+    set for Production. Origin unknown — doesn't match anything in this
+    file's history, most likely a teammate working outside a recorded
+    session, per `PLAN.md`'s "two people work this repo" note. Left
+    untouched per direct user instruction, since it might be someone
+    else's in-progress work.
+  - **Backend:** three Render services existed, not one. `gd-proto` and
+    `placeme-server` were both already suspended by a user and both
+    pointed at the stale `Hruday-Kumar/gd-proto` repo — dead ends, not
+    referenced by anything live. **`gd-proto-1` was the real one:** live,
+    healthy (`/health` → `{"status":"ok"}`, `/health/agent` →
+    `healthy: true`), tracking `placemestudy1/gd-proto`'s `main` branch
+    with auto-deploy on, last deployed automatically 2026-07-29T06:30Z —
+    literally the same session that merged the M4/H6/M10 release
+    (`805031c`). It wasn't created from `render.yaml`'s Blueprint (it'd be
+    named `placeme-server` if so) — a direct "New Web Service" import
+    instead, functionally equivalent.
+  - **Fixed this session:** `RENDER_APP_URL` GitHub Actions variable was
+    never set, so `keepalive.yml` had been silently no-op'ing every run
+    (visible in its own "success" status — the workflow's no-op path
+    always exits 0, so a green checkmark didn't mean it was actually
+    pinging anything). Set it to `https://gd-proto-1.onrender.com` via
+    `gh variable set`, then manually triggered the workflow once to
+    confirm: it pinged real `/health` and `/health/agent` and both came
+    back healthy. **Deleted the two stale/suspended services** (per
+    explicit user confirmation) since they were confusing dead weight on
+    the wrong repo.
+  - **Found, not yet fixed — needs the user's Render dashboard access:**
+    `ALLOWED_ORIGINS` is not set on `gd-proto-1`. Verified directly with a
+    real CORS preflight (`OPTIONS` + `Origin` header) against both
+    `https://placeme.study` and `https://gd-proto-web.vercel.app` — no
+    `Access-Control-Allow-Origin` came back for either, while the same
+    request with `Origin: http://localhost:5173` correctly got one. This
+    means **the live deployed frontend cannot successfully call the API
+    right now** — it loads, but every request fails client-side. This is
+    the one concrete thing standing between "deploy exists" and "deploy
+    actually works." See `DEPLOYMENT.md`'s new status section for the
+    exact value to set.
+- **B3 confirmed still open, checked live rather than assumed:** hit the
+  Supabase project's public `/auth/v1/settings` endpoint directly (needs
+  only the anon/publishable key, already in `apps/server/.env`) —
+  `mailer_autoconfirm: true`, so "Confirm email" is still off, exactly as
+  `PLAN.md` said. No change possible from here (needs the Supabase
+  dashboard); confirmed the exact toggle location in `DEPLOYMENT.md`.
+- **B4 and B7 are genuinely still blocked**, both now unblocked-in-principle
+  by B1's backend being live (B4 needs a real idle-then-room test against
+  it; B7 needs real humans on real devices, and can't meaningfully run
+  against the deployed stack until the CORS fix lands) but neither attempted
+  this session — both need the user directly.
+- Updated `DEPLOYMENT.md` throughout to match reality: Vercel replaces the
+  stale Cloudflare Pages instructions, `placemestudy1/gd-proto` replaces
+  the stale `Hruday-Kumar/gd-proto` repo reference, and a new "Status as of
+  2026-07-29" section at the top records exactly what's live vs. still
+  needed so the next session doesn't have to re-discover any of this.
+  `PLAN.md` §6 updated to match.
+- **Not done, explicitly deferred to the user:** the actual `ALLOWED_ORIGINS`
+  dashboard edit and the Supabase "Confirm email" toggle — both are single
+  clicks in dashboards this session has no access to. Also didn't touch the
+  Vercel project's settings at all, per direct user instruction, since its
+  origin is unconfirmed and might be a teammate's active work.
 
 ## Released to `main`, 2026-07-29
 
