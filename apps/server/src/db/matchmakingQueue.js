@@ -4,8 +4,19 @@
 // layer can pass a fetched queue straight into the pure domain function.
 import { getSupabase } from './supabase.js';
 
+// M9 (audit 2026-07-28): a defensive ceiling, not an expected limit at pilot
+// scale (~20-30 concurrent students, so realistically dozens queued at
+// once at most). Bounds the worst case if queue-draining ever breaks and
+// rows pile up, without changing matchmake()'s FIFO semantics -- the
+// oldest-joined rows are still exactly the ones kept.
+const MAX_QUEUE_ROWS = 500;
+
 export async function listQueue({ supabase = getSupabase() } = {}) {
-  const { data, error } = await supabase.from('matchmaking_queue').select('user_id').order('joined_at', { ascending: true });
+  const { data, error } = await supabase
+    .from('matchmaking_queue')
+    .select('user_id')
+    .order('joined_at', { ascending: true })
+    .limit(MAX_QUEUE_ROWS);
   if (error) throw error;
   return data.map((row) => ({ id: row.user_id }));
 }

@@ -47,6 +47,11 @@ export async function getRoomById(id, { supabase = getSupabase() } = {}) {
   return data;
 }
 
+// M9 (audit 2026-07-28): matches roomParticipants.js's listRoomIdsForUser
+// cap -- defensive ceiling on a single student's session history, not
+// expected to bind in practice at pilot scale.
+const MAX_HISTORY_ROOMS = 200;
+
 // W7 session history: every room from a set of ids, newest first, with
 // each room's topic text embedded via the topic_id foreign key (PostgREST
 // resolves the rooms->topics relationship automatically) rather than a
@@ -57,7 +62,8 @@ export async function listRoomsByIds(ids, { supabase = getSupabase() } = {}) {
     .from('rooms')
     .select('id, code, status, duration_seconds, started_at, ends_at, ended_at, created_at, topics(text)')
     .in('id', ids)
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    .limit(MAX_HISTORY_ROOMS);
   if (error) throw error;
   return data;
 }
