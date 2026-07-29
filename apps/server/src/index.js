@@ -21,6 +21,7 @@ import { listFeedbackForUserAndRooms } from './db/feedback.js';
 import { createHistoryRouter } from './api/history.js';
 import { startAgentWorker } from './agent/worker.js';
 import { getAgentWorkerStatus, recoverLiveRooms, stopAllTranscriptions } from './agent/roomAgent.js';
+import { startRoomSweeper } from './agent/roomSweeper.js';
 import { createGracefulShutdown } from './shutdown.js';
 
 // M6 (audit 2026-07-28): local Vite dev server default -- kept even once
@@ -115,9 +116,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // the rest of the session is never transcribed. Re-attach on boot.
   recoverLiveRooms();
 
+  // M10 (audit 2026-07-28): the room's ended-transition and feedback
+  // dispatch used to happen as a side effect of a client's GET /status poll
+  // -- a retry, prefetch, or proxy replay could re-trigger it. This runs it
+  // on a server-side timer instead, so the route itself can be read-only.
+  const stopSweeper = startRoomSweeper();
+
   // Down: disconnect each agent cleanly rather than having its LiveKit and
   // AssemblyAI sockets cut, so the last speaker's turn can flush.
-  const shutdown = createGracefulShutdown({ server, stopAllTranscriptions });
+  const shutdown = createGracefulShutdown({ server, stopAllTranscriptions, stopSweeper });
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
