@@ -51,4 +51,49 @@ describe('GET /health/agent', () => {
       healthy: true,
     });
   });
+
+  // M3 (audit 2026-07-28): unauthenticated, this endpoint leaks lastFailure's
+  // roomId and raw error text to anyone who finds the URL. When a token is
+  // configured, require it -- but stay open by default so local dev/CI (no
+  // HEALTH_CHECK_TOKEN set) never breaks.
+  describe('when HEALTH_CHECK_TOKEN is configured', () => {
+    const agentStatus = {
+      getStatus: () => ({
+        activeRooms: 1,
+        dispatchSuccesses: 1,
+        dispatchFailures: 1,
+        lastFailure: { roomId: 'room-1', message: 'boom', at: '2026-07-26T00:00:00.000Z' },
+        healthy: false,
+      }),
+    };
+
+    it('401s a request with no token, revealing no status detail', async () => {
+      const res = await request(
+        createApp({ supabaseUrl: TEST_SUPABASE_URL, agentStatus, healthCheckToken: 'secret-token' })
+      ).get('/health/agent');
+      expect(res.status).toBe(401);
+      expect(res.body).not.toHaveProperty('lastFailure');
+      expect(res.body).not.toHaveProperty('activeRooms');
+    });
+
+    it('401s a request with the wrong token', async () => {
+      const res = await request(
+        createApp({ supabaseUrl: TEST_SUPABASE_URL, agentStatus, healthCheckToken: 'secret-token' })
+      )
+        .get('/health/agent')
+        .set('x-health-token', 'wrong');
+      expect(res.status).toBe(401);
+    });
+
+    it('200s and returns full status with the correct token', async () => {
+      const res = await request(
+        createApp({ supabaseUrl: TEST_SUPABASE_URL, agentStatus, healthCheckToken: 'secret-token' })
+      )
+        .get('/health/agent')
+        .set('x-health-token', 'secret-token');
+      expect(res.status).toBe(200);
+      expect(res.body.activeRooms).toBe(1);
+      expect(res.body.lastFailure).toEqual({ roomId: 'room-1', message: 'boom', at: '2026-07-26T00:00:00.000Z' });
+    });
+  });
 });

@@ -28,7 +28,16 @@ import { createGracefulShutdown } from './shutdown.js';
 // ALLOWED_ORIGINS is set in production, so local dev never breaks.
 const DEFAULT_DEV_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173'];
 
-export function createApp({ supabaseUrl, consentDb, topicsDb, roomsDb, historyDb, agentStatus, allowedOrigins } = {}) {
+export function createApp({
+  supabaseUrl,
+  consentDb,
+  topicsDb,
+  roomsDb,
+  historyDb,
+  agentStatus,
+  allowedOrigins,
+  healthCheckToken,
+} = {}) {
   const origins = allowedOrigins ?? [...DEFAULT_DEV_ORIGINS, ...parseAllowedOrigins(process.env.ALLOWED_ORIGINS)];
 
   const app = express();
@@ -47,7 +56,7 @@ export function createApp({ supabaseUrl, consentDb, topicsDb, roomsDb, historyDb
   // so there's nothing here for a future error-handling middleware to catch.
   app.use(cors({ origin: (origin, callback) => callback(null, isAllowedOrigin(origin, origins)) }));
   app.use(express.json());
-  app.use(createHealthRouter(agentStatus ?? getAgentWorkerStatus()));
+  app.use(createHealthRouter(agentStatus ?? getAgentWorkerStatus(), { healthCheckToken }));
 
   const requireAuth = createAuthMiddleware({ supabaseUrl });
   app.use(createMeRouter(requireAuth));

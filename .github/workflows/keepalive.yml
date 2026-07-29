@@ -27,8 +27,14 @@ jobs:
 
       - name: Check transcription agent dispatch health
         if: ${{ vars.RENDER_APP_URL != '' }}
+        env:
+          HEALTH_CHECK_TOKEN: ${{ secrets.HEALTH_CHECK_TOKEN }}
         run: |
-          status=$(curl -sf "${{ vars.RENDER_APP_URL }}/health/agent")
+          # M3 (audit 2026-07-28): /health/agent is gated on this shared
+          # secret once HEALTH_CHECK_TOKEN is set on Render -- see
+          # DEPLOYMENT.md. Sending an empty header when the secret isn't
+          # configured yet is harmless (the endpoint stays open until then).
+          status=$(curl -sf -H "x-health-token: ${HEALTH_CHECK_TOKEN}" "${{ vars.RENDER_APP_URL }}/health/agent")
           echo "$status"
           echo "$status" | jq -e '.healthy == true' > /dev/null \
             || { echo "::error::Transcription agent is reporting an unhealthy dispatch (see .lastFailure above) -- a room may have gone live with no transcription."; exit 1; }

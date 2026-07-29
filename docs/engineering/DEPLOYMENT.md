@@ -128,6 +128,7 @@ had never been updated — this is the first record of the real state):
 | `ASSEMBLYAI_API_KEY` | AssemblyAI dashboard |
 | `GEMINI_API_KEY` | Google AI Studio |
 | `ALLOWED_ORIGINS` | **⚠️ Not yet set on the live service as of 2026-07-29 — this is the one thing currently broken.** The deployed frontend's real origin(s) (M6, audit 2026-07-28) — comma-separated if there's more than one. No trailing slash, scheme required. Current value needed: `https://placeme.study,https://gd-proto-web.vercel.app`. Without this set, only the local Vite dev origins (`localhost:5173`) are allowed — the deployed frontend's requests are silently missing CORS headers right now. Render dashboard → `gd-proto-1` service → Environment → add it → save (auto-redeploys). |
+| `HEALTH_CHECK_TOKEN` | **New (M3, audit 2026-07-28).** Any long random string you generate yourself (e.g. `openssl rand -hex 32`) — not from a vendor dashboard. Gates `GET /health/agent` behind a shared-secret header so `lastFailure`'s roomId and raw error text aren't public to anyone who finds the URL. Must be set in **two** places with the same value: this Render env var, and a GitHub Actions **secret** (not variable) of the same name on the repo, so `keepalive.yml` can send it. Optional — the endpoint stays open (previous behavior) until this is set. |
 
 Same values already sitting in `apps/server/.env` locally — this is
 copying them into Render's dashboard, not generating new ones.
@@ -183,6 +184,13 @@ flagged as still needed — no new paid service required.
 **Nothing to do here except step 4 above** (set `RENDER_APP_URL`) — the
 workflow already no-ops safely if that variable isn't set yet.
 
+**New, optional (M3, audit 2026-07-28):** if you set `HEALTH_CHECK_TOKEN`
+on the Render service (see the secrets checklist above), also add it as a
+**repo secret** of the same name (Settings → Secrets and variables →
+Actions → **Secrets** tab, not the Variables tab where `RENDER_APP_URL`
+lives) so this workflow's `/health/agent` check keeps working — otherwise
+it'll start getting 401s once the token is set on Render but not here.
+
 ## 4. Pre-launch checklist (do before real students use the deployed app)
 
 - [x] **Set `ALLOWED_ORIGINS` on the live Render service.** **Done and
@@ -203,6 +211,11 @@ workflow already no-ops safely if that variable isn't set yet.
       a different Vercel project (`waitlist`), not this app. Not a
       blocker for a pilot using the `.vercel.app` URL, but should be
       fixed before advertising `placeme.study` to real students.
+- [ ] **New (M3, audit 2026-07-28):** set `HEALTH_CHECK_TOKEN` on the live
+      Render service **and** as a GitHub Actions repo secret of the same
+      name — see the secrets checklist and step 3 above. Optional (the
+      endpoint stays open until this is set), but closes a minor
+      information-disclosure gap on `/health/agent`.
 
 ## Notes
 
