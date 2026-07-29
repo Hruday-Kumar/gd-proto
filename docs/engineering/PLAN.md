@@ -1,8 +1,8 @@
 # PLAN — audit remediation & road to pilot
 
-**Last updated:** 2026-07-28 (doc-sync pass — §2/§3/§4 brought in line with
-what's actually on `dev`/`main`; see `PROGRESS.md`'s "Second-session work
-landed same day" + doc-sync entries for the full why)
+**Last updated:** 2026-07-29 (Phase 5 close-out — M3, M5, M8, M9, and the
+L-series all done; §4/§5d/§6 updated. This is the last open work from the
+2026-07-28 audit. See `PROGRESS.md` for the session record.)
 
 This is the **shared checklist and ownership board** for two people working
 this repo at the same time. It answers: what is done, what is next, who has
@@ -47,7 +47,7 @@ how it was verified*. Don't duplicate one into the other.
 **Test commands** (from repo root, on Node 22):
 
 ```
-npx vitest run --root apps/server    # 192 tests, all must pass
+npx vitest run --root apps/server    # 247 tests, all must pass
 npx oxlint apps/server/src           # 1 known pre-existing warning (L5)
 npm run build --workspace=apps/web   # must build clean
 ```
@@ -129,6 +129,11 @@ Audit findings closed, newest first. Evidence and root causes are in
 | **C2** | Vercel serverless handler removed; ADR-0009 records why this app cannot run on a function runtime | `index.js`, `adr/0009-*.md` |
 | **C3** | Ended-transition is now a conditional claim, so only one poller dispatches feedback | `db/rooms.js`, `api/rooms.js` |
 | **C1** | `rooms.created_by` no longer blocks account deletion | migration `0008` |
+| **M3** | `/health/agent` no longer unauthenticated — optional `HEALTH_CHECK_TOKEN` shared-secret gate (falls back to open when unset, so local dev/CI can't break); `keepalive.yml` sends it from a new GH Actions secret | `api/health.js`, `.github/workflows/keepalive.yml` |
+| **M5** | Render-sleep mitigation no longer a single unguarded cron — tightened `*/10`→`*/5`, added `curl --retry`. **Not fully closed by code**: true redundancy against GitHub Actions itself being unavailable needs an independent watchdog (free UptimeRobot/cron-job.org) — see §6 | `.github/workflows/keepalive.yml`, `DEPLOYMENT.md` |
+| **M8** | Consent version bumped 1→2 + a 5th disclosure added for PostHog analytics — closes the gap where existing students would never be re-asked once `VITE_POSTHOG_KEY` goes live | `domain/consent.js`, `ConsentPage.jsx` |
+| **M9** | `LIMIT` added to `listQueue` (500), `listRoomIdsForUser`/`listRoomsByIds` (200), `listTranscriptLinesForRoom` (5000) | `db/matchmakingQueue.js`, `db/roomParticipants.js`, `db/rooms.js`, `db/transcriptLines.js` |
+| **L1–L8** | Real `Readme.md`; dead `spike/` (21 files) + `packages/shared` removed; dead `remainingQueue` removed; `recordDispatchSuccess` now correlates `roomId`; LiveKit tokens use display name not raw UUID; L7 folded into the new README; L8 already resolved (verified, no action needed) | `Readme.md`, `domain/matchmaking.js`, `domain/agentWorkerStatus.js`, `api/rooms.js` |
 
 **Note on ordering:** H2 is an audit *Phase 4* item, pulled forward ahead of
 Phase 3 by direct instruction. H7 is a *Phase 5* item, pulled forward to run
@@ -183,22 +188,33 @@ now fully complete.** Next up per the roadmap: Phase 5 (§5d).
 
 ### 5d. Audit Phase 5 — guard what exists, then tidy
 
+**✅ Phase 5 fully complete, 2026-07-29.** M3, M5, M8, M9, and the L-series
+were the last open rows in this entire audit-remediation checklist (§5b
+through §5d) — every finding from the 2026-07-28 engineering audit is now
+either fixed or, for M5's external-watchdog half, explicitly tracked as a
+human/dashboard follow-up in §6. Full detail in `PROGRESS.md`.
+
 | ✅ | ID | Task | Owner | Notes |
 |---|---|---|---|---|
 | ✅ | **H6** | CI never builds or lints the frontend | — | **DONE, 2026-07-29.** New `web` job in `ci.yml` (`npm run lint` + `npm run build` for `@placeme/web`), mirrors the existing `test` job's shape. Verified locally before pushing: both pass (one pre-existing lint warning, unrelated). |
 | ✅ | **H7** | Matchmaking is check-then-act with no lock | — | **DONE, PR #11.** See §4. Pulled forward ahead of Phase 5 — see the ordering note in §4. |
 | ✅ | **M10** | `GET /status` performs writes | — | **DONE, 2026-07-29.** New periodic sweep (`agent/roomSweeper.js`, on a 3s interval matching the client's existing poll cadence) now owns the ended-transition + feedback dispatch; the route is purely read-only. Verified live: real `docker build`/`run` + a real `docker stop` (SIGTERM) showed clean shutdown in <1s, sweeper included. |
-| ☐ | **M3** | `/health/agent` unauthenticated, in-memory only | — | Leaks `roomId` + raw error text; always reports healthy after a restart. |
-| ☐ | **M5** | Sleep mitigation rests on one GitHub Actions cron | — | Best-effort, auto-disabled after 60 days idle, currently no-ops. |
-| ☐ | **M8** | Consent version not bumped when PostHog was added | — | Inert while `VITE_POSTHOG_KEY` is unset; **a DPDP problem the moment it's set.** |
-| ☐ | **M9** | Unbounded reads (no `LIMIT`) | — | Harmless at pilot scale, degrades as history grows. |
-| ☐ | **L1–L8** | README placeholder, dead `spike/` + `packages/shared`, dead `remainingQueue`, discarded `roomId`, raw UUID as LiveKit name, nvm friction | — | Cleanup. L1 (README) is the cheapest real win. |
+| ✅ | **M3** | `/health/agent` unauthenticated, in-memory only | — | **DONE, 2026-07-29.** See §4. `HEALTH_CHECK_TOKEN` still needs setting on Render + as a GH secret — see §6. |
+| ✅ | **M5** | Sleep mitigation rests on one GitHub Actions cron | — | **DONE (partially — see §4/§6), 2026-07-29.** Cron tightened + retry added; a genuine second, non-GitHub watchdog is still a human/dashboard follow-up — see §6. |
+| ✅ | **M8** | Consent version not bumped when PostHog was added | — | **DONE, 2026-07-29.** See §4. |
+| ✅ | **M9** | Unbounded reads (no `LIMIT`) | — | **DONE, 2026-07-29.** See §4. |
+| ✅ | **L1–L8** | README placeholder, dead `spike/` + `packages/shared`, dead `remainingQueue`, discarded `roomId`, raw UUID as LiveKit name, nvm friction | — | **DONE, 2026-07-29.** See §4. |
 
 ---
 
 ## 6. Blocked on a human — not code
 
-**✅ Section fully cleared, 2026-07-29.** Every row below is now done —
+**Two new rows added 2026-07-29 (later same day, Phase 5 close-out)** —
+M3 and M5's dashboard-dependent halves. Everything else below was
+already fully cleared earlier the same day; kept in full as the record
+of what was checked and how.
+
+**Previously: ✅ Section fully cleared, 2026-07-29.** Every row below is now done —
 this table drove an entire session's worth of real-deploy verification,
 not just dashboard checkbox-ticking. Kept in full (rather than deleted)
 as the record of what was actually checked and how, per this file's own
@@ -228,6 +244,8 @@ detail in `PROGRESS.md`.
 | ✅ | — | Exercise H2's recovery path against a genuinely live room | — | **DONE, PASS, 2026-07-29.** Real room started, service restarted mid-discussion (`render restart`): logs show the new instance's boot recovery re-attached the room with time remaining within 2 seconds of boot, while the old instance's own shutdown log (stopping its transcription) arrived in the same log window — no gap. Both participants confirmed the final transcript was complete despite the restart and a page reload mid-session. One transient artifact noted, not a bug — see `PROGRESS.md`. |
 | ✅ | — | Revoke the old `DEEPGRAM_API_KEY` in the Deepgram dashboard | — | **DONE, 2026-07-29** — user deleted it from the Deepgram dashboard. Already removed from `.env` (S2, pilot-readiness pass); now fully dead. |
 | ✅ | — | AssemblyAI trial credit will run out | — | **DECIDED, 2026-07-29** — open a fresh trial account rather than add a card, per direct user instruction. See ADR-0002's "Payment decision — RESOLVED" section. Nothing to action until the current $50 credit is actually spent. |
+| ☐ | **M3** | Set `HEALTH_CHECK_TOKEN` on the live Render service **and** as a GitHub Actions repo secret | — | Optional — `/health/agent` stays open (previous behavior) until this is set. Needs Render + GitHub dashboard access. See `DEPLOYMENT.md`'s secrets checklist and §3. |
+| ☐ | **M5** | Sign up for a free UptimeRobot/cron-job.org monitor pinging `GET /health`, independent of GitHub Actions | — | Not a blocker (the GH Actions cron already works, per B4's real test) — but the single-point-of-failure gap named in the audit stays open until this exists. Needs a dashboard account. See `DEPLOYMENT.md`. |
 
 ---
 

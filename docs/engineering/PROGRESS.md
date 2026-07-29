@@ -2,9 +2,121 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-07-29 (release session — see the note immediately
-below; the blockers-investigation and M4/H6/M10 release notes and older
-context are preserved further down)
+**Last updated:** 2026-07-29 (Phase 5 close-out session — see immediately
+below; the release session, blockers-investigation, and M4/H6/M10 notes
+and older context are preserved further down)
+
+## Audit remediation, Phase 5 close-out (2026-07-29, later same day)
+
+Picked up per direct user instruction ("start phase 5 remaining tasks,
+push and merge changes to both main branches of placemestudy1 and
+Hruday-Kumar"). This closes out the last open rows in the entire
+2026-07-28 engineering audit — `PLAN.md` §5b through §5d are now fully
+checked. Five small branches/PRs into `dev` (#32–#36), each following the
+usual TDD RED→GREEN discipline where the finding was testable core logic,
+each with a self-review drafted in chat before merge (see the note below
+on why the review couldn't be *posted* to GitHub).
+
+- **M3 — `/health/agent` unauthenticated + info disclosure. FIXED, PR
+  #32.** Optional `HEALTH_CHECK_TOKEN` shared-secret header gate —
+  falls back to the previous open behavior when unset, so local dev/CI
+  can't break. `keepalive.yml` sends it from a new GitHub Actions
+  **secret**. Setting the token on Render + as the matching GH secret is
+  a remaining dashboard step (tracked in `PLAN.md` §6) — the in-memory,
+  resets-on-restart nature of the tracker itself is unchanged, that was
+  never in scope for this fix.
+- **M5 — Render-sleep mitigation is a single unguarded cron. PARTIALLY
+  FIXED, PR #33.** Cron tightened `*/10`→`*/5`, `curl --retry 3` added to
+  both pings — both free, code-only. **Deliberately not marked fully
+  resolved**: GitHub's own docs say scheduled workflows can be delayed or
+  auto-disabled, and closing that for real needs an independent,
+  non-GitHub watchdog (free UptimeRobot/cron-job.org) that needs a
+  dashboard account this session doesn't have. New row added to `PLAN.md`
+  §6 rather than silently claiming the audit finding fully closed.
+- **M8 — consent version not bumped for PostHog analytics. FIXED, PR
+  #34.** `CURRENT_CONSENT_VERSION` 1→2, plus a fifth disclosure added to
+  `ConsentPage.jsx` covering usage analytics. Bumping the version means
+  every existing student is required to re-consent before their next
+  mic-enabled room — confirmed this is the intended effect (guardrail #3),
+  not a side effect to design around. Caught its own regression in
+  passing: `roomsApi.test.js`'s base test fixture hardcoded
+  `consent_version: 1`, which the bump alone broke (the `/token` route's
+  consent gate started 403ing every previously-passing case) — fixed to
+  reference `CURRENT_CONSENT_VERSION` instead of a hardcoded number.
+- **M9 — unbounded DB reads. FIXED, PR #35.** Explicit `LIMIT` on
+  `listQueue` (500), `listRoomIdsForUser`/`listRoomsByIds` (200 each,
+  ordered so the most recent rooms are what's kept), and
+  `listTranscriptLinesForRoom` (5000 — much larger, since a real session
+  is already time-bounded by `roomDuration.js`'s 25-minute cap and
+  truncating a genuine transcript would hurt feedback quality more than
+  the other caps binding ever would). No unit-test infrastructure exists
+  for these thin Supabase query-builder wrappers anywhere in this repo
+  (same as every other `db/*.js` change in this project's history) —
+  verified via the full suite staying green (these are mocked at the
+  function-injection boundary in route tests) and via reasoning about the
+  query shape, not a live DB check (no Supabase access this session).
+- **L-series (L1–L8). FIXED/VERIFIED, PR #36.** L5: `recordDispatchSuccess`
+  now tracks `lastSuccess: { roomId, at }` (was silently discarding
+  `roomId`). L6: LiveKit tokens now use the participant's display name via
+  the existing `listProfilesFn`, not a raw UUID. L4: removed
+  `matchmake()`'s dead `remainingQueue` return value (updated the two
+  `matchmaking.test.js` assertions that pinned its old shape). L1: real
+  `Readme.md` replacing the `"# This is the readme"` placeholder — repo
+  layout, dev setup, doc pointers, folding in **L7**'s nvm/Node-22
+  friction note. L2: removed `spike/` (21 tracked files, own lockfile) —
+  superseded by `apps/server` since Phase 1, already Docker-excluded, but
+  still shipped to every clone; `.agents/` and the stray UI-overhaul
+  folder the audit also named were already gone. L3: removed
+  `packages/shared` (existed solely to `export {}`, nothing imports
+  `@placeme/shared`) and the now-empty `packages/*` glob from root
+  `package.json`'s workspaces. **L8 needed no fix** — verified the
+  uncommitted work the audit found (the `LobbyPage` `beforeunload` guard,
+  the Vercel/Cloudflare host configs) had already landed via an
+  intervening commit (`2d2b0ac`) before this session started.
+- **A real regression, caught before it shipped, not after.** Removing
+  `packages/shared` meant editing `package-lock.json`. A first attempt did
+  a full regen (`rm package-lock.json && npm install`) on this Windows dev
+  machine — which silently collapsed `@livekit/rtc-ffi-bindings`'s
+  `optionalDependencies` down to just the `win32-x64-msvc` platform
+  variant, dropping the `linux-x64-gnu` one the Docker image actually
+  needs. This wasn't caught by the server test suite (which doesn't touch
+  Docker) — it was caught by actually running `docker build` + `docker
+  run` + `curl /health` before pushing, per this project's own established
+  verification habit for anything Docker/deploy-adjacent (same pattern as
+  the M4 session). The broken image failed at container boot with `Cannot
+  find module './rtc-node.linux-x64-gnu.node'`. Fixed by reverting to the
+  original lockfile and hand-editing out only the `@placeme/shared`-
+  specific entries, preserving every platform's optional native binding.
+  Re-verified with `npm ci` (the exact command the Dockerfile uses), a
+  fresh `docker build`/`run`/`curl /health` → `{"status":"ok"}` locally,
+  and confirmed again by GitHub's own `docker-build` CI check passing on
+  the PR before merge — this one only needed a Linux CI runner to
+  surface, so the local-Windows-Docker-Desktop check and the GitHub
+  Actions check both mattered here, not just one or the other.
+- **Self-review posting hit the same wall as the 2026-07-29 release
+  session (recorded further down this file): `gh`'s authenticated
+  identity is the same one that authored every PR, and GitHub rejects
+  self-approval outright** (`gh pr review --approve` failed with
+  `GraphQL: Review Can not approve your own pull request`). Confirmed
+  this repo still has no branch protection (`reviewDecision` empty on
+  every PR, private repo on the free plan), so merging never actually
+  needed the review. Followed the same precedent as before: drafted each
+  PR's review in chat (findings, guardrail check, verdict), got the
+  user's explicit go-ahead to merge each one, and merged directly rather
+  than repeatedly retrying an API call that structurally cannot succeed
+  from this identity.
+- **247/247 server tests green** throughout (was 192 per `PLAN.md` §1's
+  test command before this session, now updated), `apps/web` lint + build
+  clean. One environmental flake hit twice mid-session
+  (`verifyToken.test.js`'s `beforeAll` hook timing out generating an RSA
+  keypair under this session's load) — confirmed transient both times by
+  re-running the file alone with a longer hook timeout; nothing in any
+  branch touched `verifyToken.js` or auth code.
+- **`PLAN.md` and `AUDIT.md` both updated to close out every row** — see
+  their own diffs rather than duplicating the detail here. Two new
+  dashboard-dependent follow-ups added to `PLAN.md` §6 (M3's
+  `HEALTH_CHECK_TOKEN`, M5's external watchdog) rather than pretending
+  those findings are 100% closed by code alone.
 
 ## Released to `main`, 2026-07-29 (second release of the day)
 
