@@ -17,9 +17,16 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY . .
-RUN npm ci
-
 ENV NODE_ENV=production
+
+# apps/web is excluded via .dockerignore: this image only ever runs
+# apps/server (the frontend builds/deploys separately on Vercel, see
+# ADR-0007), so its toolchain (Vite, Tailwind, oxlint, @types) never needs
+# to land here. --omit=dev additionally strips apps/server's own
+# devDependencies (Vitest, Supertest) -- NODE_ENV alone isn't reliably
+# honored by npm ci across versions.
+COPY . .
+RUN npm ci --omit=dev
+
 EXPOSE 3000
 CMD ["node", "apps/server/src/index.js"]

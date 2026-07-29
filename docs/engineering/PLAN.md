@@ -115,6 +115,8 @@ Audit findings closed, newest first. Evidence and root causes are in
 | ID | What | Where |
 |---|---|---|
 | **M2** | Global Express error-handling middleware, registered last — an uncaught route error now returns the same JSON `{error}` shape every other endpoint uses (was Express's default HTML error page) with a structured JSON log line, instead of vanishing with nothing logged anywhere the team would see it during a live pilot session | `api/errorHandler.js`, `index.js` |
+| **H1** | `PROGRESS.md`'s transcription-outage write-up corrected to name the real cause (`node:22-slim` missing `ca-certificates`, so `@livekit/rtc-node`'s native Rust engine's HTTPS calls failed deterministically on every attempt) instead of the original "transient region-fetch blip" misdiagnosis; the retry logic stays, reframed as protection against genuine transient failures, not credited with fixing this one | `PROGRESS.md`'s "⚠️ Correction" note, `LESSONS.md`'s Docker entry, `Dockerfile` |
+| **M4** | Production image no longer installs the frontend toolchain (Vite, Tailwind, oxlint, Vitest, Supertest, `@types`) — `apps/web` excluded via `.dockerignore`, `npm ci --omit=dev` instead of a bare `npm ci`. Verified with a real `docker build`/`run`: 929MB → 454MB, 244 → 122 packages, `npm audit` 2 high → 0, `/health` still responds correctly | `Dockerfile`, `.dockerignore` |
 | **M6/M7** | CORS is now an origin allowlist (was wide open) + helmet security headers on every response. `ALLOWED_ORIGINS` (comma-separated) must be set on Render once the frontend's real origin is known — see `DEPLOYMENT.md`'s secrets checklist. Local Vite dev origins always allowed regardless | `domain/corsConfig.js`, `index.js`, `.env.example`, `DEPLOYMENT.md` |
 | **H5** | Custom topic length capped (200 chars) + the topic (and topic-generation's category/difficulty) delimited and explicitly framed as data, not instructions, in both Gemini prompts — defense-in-depth against a student's custom topic hijacking every participant's feedback in the room | `domain/topicText.js`, `domain/feedbackPrompt.js`, `domain/topicPrompt.js`, `api/topics.js` |
 | **H4** | Rate-limited the two Gemini-backed routes (topic generation, random matching) — keyed per-user, not IP; wiring confirmed via dedicated route-level tests, not just the limiter in isolation | `api/rateLimit.js`, `api/topics.js`, `api/rooms.js` |
@@ -168,14 +170,16 @@ Work top to bottom. Each row is one branch, one PR.
 | ✅ | ID | Task | Owner | Fix per audit |
 |---|---|---|---|---|
 | ✅ | **M2** | No Express error-handling middleware | — | **DONE, PR #17.** See §4. |
-| ☐ | **H1** | PROGRESS.md records the wrong root cause for the transcription outage | — | Name the CA-certificate cause; note the retry covers a *different* failure. Add the "native addons don't use Node's cert store" lesson to `LESSONS.md`. |
-| ☐ | **M4** | Docker image ships the whole frontend toolchain | — | Production-only deps; directly worsens the B4 cold-start risk. |
+| ✅ | **H1** | PROGRESS.md records the wrong root cause for the transcription outage | — | **Already done — this row was just never updated.** `AUDIT.md` itself has carried `Status: RESOLVED 2026-07-28` since it was written; `PROGRESS.md`'s "⚠️ Correction, 2026-07-28" note names the `ca-certificates` cause and clarifies the retry logic covers a genuinely different failure, and `LESSONS.md`'s Docker entry has the full "native addons bypass Node's cert store" lesson. Found and corrected in this doc-sync pass, 2026-07-29. |
+| ✅ | **M4** | Docker image ships the whole frontend toolchain | — | **DONE, 2026-07-29.** See §4. |
 
 **Deliberate stopping point, 2026-07-28:** M2 (the only Phase 3-adjacent
 item still open at session start) is now done and released to `main`.
-H1 and M4 above, and all of Phase 5 below, were explicitly held back per
-direct user instruction this session ("just do not start phase 4/5") —
-not forgotten, not blocked on anything. Pick up at H1 next.
+M4 and all of Phase 5 below were explicitly held back per direct user
+instruction that session ("just do not start phase 4/5") — not forgotten,
+not blocked on anything. **H1 turned out to already be done** (see above);
+M4 was picked up and finished 2026-07-29. **Phase 4 (H1, H2, M2, M4) is
+now fully complete.** Next up per the roadmap: Phase 5 (§5d).
 
 ### 5d. Audit Phase 5 — guard what exists, then tidy
 

@@ -2,10 +2,63 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-07-28 (doc-sync + Vercel frontend decision, after
-audit remediation Phase 2 reliability and an undocumented second-session
-merge — see "Second-session work landed same day" below the Phase 2
-write-up for what changed and why the docs were behind)
+**Last updated:** 2026-07-29 (audit Phase 4: closed out H1 + M4, see the
+new subsection immediately below; older "Last updated" context — doc-sync +
+Vercel frontend decision, after audit remediation Phase 2 reliability and
+an undocumented second-session merge — is preserved further down)
+
+## Phase 4 close-out (2026-07-29)
+
+Picked up per `PLAN.md` §5c ("pick up at H1 next"). Two findings, both
+resolved differently than expected:
+
+- **H1 — turned out to already be done.** `AUDIT.md` itself has carried
+  `Status: RESOLVED 2026-07-28` since the audit was written — the
+  `ca-certificates` root-cause correction and the `LESSONS.md` lesson were
+  already in place (see the "⚠️ Correction, 2026-07-28" note further down
+  this file). Only `PLAN.md`'s checklist had never been updated to say so.
+  Fixed the doc, no code change needed.
+- **M4 — production image installed the entire frontend toolchain. FIXED,
+  branch `chore/m4-trim-docker-image`.** Root cause was two-layered: `npm
+  ci` ran before `NODE_ENV=production` was set, and separately, plain `npm
+  ci` doesn't reliably honor `NODE_ENV` for the dev/prod split across npm
+  versions anyway (that behavior is deprecated) — needs `--omit=dev`
+  explicitly. Fixed: `apps/web` (the frontend never runs in this container
+  — it deploys separately on Vercel per ADR-0007) added to `.dockerignore`
+  as a whole directory, `npm ci --omit=dev` replaces the bare `npm ci`.
+  **Verified with a real `docker build` + `docker run` + `curl
+  /health`, not just a Dockerfile read** — built both the before and after
+  images locally to compare: **929MB → 454MB**, 244 → 122 installed
+  packages, `npm audit` 2 high-severity findings → 0 (both were in
+  frontend-only deps), install step in the build ~109s → ~26s. The running
+  container still serves `/health` correctly and `/app/apps/` contains
+  only `server/`. Full detail in `LESSONS.md`'s Docker entry. 225/225
+  server tests still green (Node 22) — this was a pure infra/build change,
+  no application code touched, so no TDD unit was applicable; the
+  human-equivalent verification here was the live build/run/curl above.
+  **Not yet done:** PR opened and merged into `dev`.
+
+**Also found this session, flagged for the user, not fixed:** the local
+`main` git branch (and `origin` remote) still point at the old personal
+repo, `Hruday-Kumar/gd-proto` — not the canonical `placemestudy1/gd-proto`
+that `dev` tracks. Running `BRANCHING.md`'s literal step 1
+(`git rebase main` from `dev`) against that stale local `main` produced
+real merge conflicts (replaying already-squash-merged commits against an
+unrelated, further-diverged history), because local `main` is a completely
+different lineage, not just a stale copy of the real one. **No damage
+done** — the rebase was aborted immediately, `dev` was never touched past
+the conflict, and this task branch was recreated cleanly off `dev`. But
+this is a live footgun for the next person or session who runs the literal
+`BRANCHING.md` step 1 without noticing `main` resolves to the wrong repo.
+The canonical main is `placemestudy1-main` (local) / `placemestudy1/main`
+(remote); `dev` is legitimately ~12 commits ahead of it right now (all the
+unreleased Phase 2–4 audit work), which is expected, not a problem — the
+release to `main` is the user's call per `BRANCHING.md`, not something to
+fix by rebasing. **Recommend:** either repoint local `main` to track
+`placemestudy1/main` (or delete it and rename `placemestudy1-main` →
+`main`), or update `BRANCHING.md` to say explicitly which remote/branch
+"main" means — not done here since it's a branch/remote config change,
+not something to do silently.
 
 > **Two people work this repo.** `docs/engineering/PLAN.md` is the shared
 > checklist and ownership board — what's done, what's next, who has it, and
