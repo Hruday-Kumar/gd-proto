@@ -15,7 +15,14 @@ import {
   stopAllTranscriptions,
   recoverLiveRooms,
   getAgentWorkerStatus,
+  isTranscriptionActive,
 } from '../src/agent/roomAgent.js';
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((r) => { resolve = r; });
+  return { promise, resolve };
+}
 
 function fakeRoom({ connect }) {
   return {
@@ -100,6 +107,115 @@ describe('stopTranscriptionForRoom', () => {
       { ...baseOpts, roomFactory: () => room, attachTranscriberFn: () => ({ closeAll }) }
     );
     await stopTranscriptionForRoom('stt-cleanup');
+
+    expect(closeAll).toHaveBeenCalledTimes(1);
+    expect(room.disconnect).toHaveBeenCalledTimes(1);
+  });
+});
+
+// N4 (audit comparison, 2026-07-29): the deterministic completion signal
+// the sweeper now gates feedback generation on -- a room must not report
+// itself inactive (and therefore fair game for feedback generation) until
+// its agent has actually finished flushing every transcript line it
+// captured, not just disconnected from LiveKit.
+describe('isTranscriptionActive', () => {
+  it('is false for a room that was never started', () => {
+    expect(isTranscriptionActive('never-started')).toBe(false);
+  });
+
+  it('is true while a room is being transcribed, false once fully stopped', async () => {
+    const room = fakeRoom({ connect: vi.fn().mockResolvedValue(undefined) });
+    const roomId = 'active-flag-room';
+
+    await startTranscriptionForRoom({ id: roomId, durationSeconds: 600 }, { ...baseOpts, roomFactory: () => room });
+    expect(isTranscriptionActive(roomId)).toBe(true);
+
+    await stopTranscriptionForRoom(roomId);
+    expect(isTranscriptionActive(roomId)).toBe(false);
+  });
+
+  it('stays true until a transcript write still in flight when stop is called actually settles', async () => {
+    const room = fakeRoom({ connect: vi.fn().mockResolvedValue(undefined) });
+    const roomId = 'flush-race-room';
+    let onTranscript;
+    const attachTranscriberFn = (_room, opts) => {
+      onTranscript = opts.onTranscript;
+      return { closeAll: vi.fn() };
+    };
+    const pendingWrite = deferred();
+    const insertTranscriptLineFn = vi.fn().mockReturnValue(pendingWrite.promise);
+
+    await startTranscriptionForRoom(
+      { id: roomId, durationSeconds: 600 },
+      {
+        ...baseOpts,
+        roomFactory: () => room,
+        attachTranscriberFn,
+        insertTranscriptLineFn,
+        listParticipantsFn: async () => [{ livekit_identity: 'someone', user_id: 'user-1' }],
+      }
+    );
+
+    // A final utterance arrives right as the room is ending -- its DB
+    // write (pendingWrite) is still in flight.
+    onTranscript({ identity: 'someone', text: 'the last word', startedAtMs: 1, endedAtMs: 2 });
+
+    let stopped = false;
+    const stopPromise = stopTranscriptionForRoom(roomId).then(() => {
+      stopped = true;
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(isTranscriptionActive(roomId)).toBe(true);
+    expect(stopped).toBe(false);
+
+    pendingWrite.resolve();
+    await stopPromise;
+
+    expect(stopped).toBe(true);
+    expect(isTranscriptionActive(roomId)).toBe(false);
+  });
+
+  it('stays true until a delayed transcriber.closeAll() resolves', async () => {
+    const room = fakeRoom({ connect: vi.fn().mockResolvedValue(undefined) });
+    const roomId = 'delayed-close-room';
+    const closeAllDeferred = deferred();
+    const attachTranscriberFn = () => ({ closeAll: vi.fn().mockReturnValue(closeAllDeferred.promise) });
+
+    await startTranscriptionForRoom(
+      { id: roomId, durationSeconds: 600 },
+      { ...baseOpts, roomFactory: () => room, attachTranscriberFn }
+    );
+
+    let stopped = false;
+    const stopPromise = stopTranscriptionForRoom(roomId).then(() => {
+      stopped = true;
+    });
+
+    await Promise.resolve();
+    expect(isTranscriptionActive(roomId)).toBe(true);
+    expect(stopped).toBe(false);
+
+    closeAllDeferred.resolve();
+    await stopPromise;
+
+    expect(stopped).toBe(true);
+    expect(isTranscriptionActive(roomId)).toBe(false);
+  });
+
+  it('a second concurrent stop call awaits the same in-flight stop rather than tearing down twice', async () => {
+    const room = fakeRoom({ connect: vi.fn().mockResolvedValue(undefined) });
+    const roomId = 'concurrent-stop-room';
+    const closeAll = vi.fn().mockResolvedValue(undefined);
+    const attachTranscriberFn = () => ({ closeAll });
+
+    await startTranscriptionForRoom(
+      { id: roomId, durationSeconds: 600 },
+      { ...baseOpts, roomFactory: () => room, attachTranscriberFn }
+    );
+
+    await Promise.all([stopTranscriptionForRoom(roomId), stopTranscriptionForRoom(roomId)]);
 
     expect(closeAll).toHaveBeenCalledTimes(1);
     expect(room.disconnect).toHaveBeenCalledTimes(1);

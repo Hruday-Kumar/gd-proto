@@ -28,6 +28,27 @@ export const FEEDBACK_RETRY_BACKOFF_MS = 60_000;
 // against a room that's ancient history by pilot-scale usage patterns.
 export const FEEDBACK_RETRY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
+// N4 (audit comparison, 2026-07-29): feedback generation used to dispatch
+// the instant a room's ends_at passed (see findExpiredLiveRooms above),
+// fully decoupled from whether agent/roomAgent.js's transcription agent
+// had actually finished flushing that room's last few seconds of speech.
+// The agent's own STOP_GRACE_MS (4s) plus AssemblyAI's finalization
+// latency mean it's often still running -- with DB writes still in
+// flight -- at the exact moment the sweep decides a room is "over".
+// roomAgent.js's isTranscriptionActive() is the real, deterministic
+// signal for "is this room's agent still connected or still flushing its
+// last writes"; this is the bounded fallback for the one case that signal
+// can't cover -- a stuck or crashed agent that never clears. Comfortably
+// covers STOP_GRACE_MS + a couple of sweep ticks + the AssemblyAI
+// socket-close safety net, so a real bug there can't silently block a
+// room's feedback forever.
+export const FEEDBACK_FLUSH_MAX_WAIT_MS = 15_000;
+
+export function shouldWaitForTranscriptionFlush(endedAt, now, { maxWaitMs = FEEDBACK_FLUSH_MAX_WAIT_MS } = {}) {
+  if (!endedAt) return false; // no stop time to judge age from -- guardrail #10, same as findExpiredLiveRooms
+  return now - new Date(endedAt).getTime() < maxWaitMs;
+}
+
 export function findRoomsReadyForFeedbackRetry(
   rooms,
   now,

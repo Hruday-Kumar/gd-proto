@@ -15,7 +15,7 @@
 // file reacts to.
 import { describe, it, expect, vi } from 'vitest';
 import { sweepExpiredRooms } from '../src/agent/roomSweeper.js';
-import { FEEDBACK_RETRY_MAX_ATTEMPTS } from '../src/domain/roomSweep.js';
+import { FEEDBACK_RETRY_MAX_ATTEMPTS, FEEDBACK_FLUSH_MAX_WAIT_MS } from '../src/domain/roomSweep.js';
 
 const NOW = Date.parse('2026-07-29T10:00:00.000Z');
 
@@ -398,6 +398,156 @@ describe('sweepExpiredRooms', () => {
       expect(agentStatus.recordFeedbackFailure).toHaveBeenCalledWith('last-try', expect.any(Error));
     });
 
+  });
+
+  // N4 (audit comparison, 2026-07-29): feedback generation used to dispatch
+  // the instant a room's ends_at passed, fully decoupled from whether
+  // agent/roomAgent.js's transcription agent had actually finished flushing
+  // that room's last few seconds of speech into transcript_lines. The
+  // sweeper now checks isTranscriptionActive(roomId) before attempting
+  // feedback and defers (no claim taken) while it's still true.
+  describe('transcription flush gating', () => {
+    it('does not attempt feedback for a freshly-expired room whose transcription is still flushing', async () => {
+      const listLiveRoomsFn = vi.fn().mockResolvedValue([expiredRoom()]);
+      const updateRoomStatusFn = vi.fn().mockResolvedValue({
+        id: 'r1',
+        status: 'ended',
+        feedback_attempts: 0,
+        ended_at: new Date(NOW).toISOString(),
+      });
+      const generateFeedbackFn = vi.fn().mockResolvedValue({ complete: true });
+      const claimFeedbackAttemptFn = alwaysClaims();
+      const isTranscriptionActiveFn = vi.fn().mockReturnValue(true);
+
+      await sweepExpiredRooms({
+        listLiveRoomsFn,
+        updateRoomStatusFn,
+        generateFeedbackFn,
+        ...baseFeedbackDeps({ claimFeedbackAttemptFn, isTranscriptionActiveFn }),
+        now: NOW,
+      });
+
+      // Room ending itself still happens on schedule -- only feedback is deferred.
+      expect(updateRoomStatusFn).toHaveBeenCalled();
+      expect(claimFeedbackAttemptFn).not.toHaveBeenCalled();
+      expect(generateFeedbackFn).not.toHaveBeenCalled();
+    });
+
+    it('proceeds normally when transcription is not active for the room (default signal)', async () => {
+      const listLiveRoomsFn = vi.fn().mockResolvedValue([expiredRoom()]);
+      const updateRoomStatusFn = vi.fn().mockResolvedValue({
+        id: 'r1',
+        status: 'ended',
+        feedback_attempts: 0,
+        ended_at: new Date(NOW).toISOString(),
+      });
+      const generateFeedbackFn = vi.fn().mockResolvedValue({ complete: true });
+
+      await sweepExpiredRooms({
+        listLiveRoomsFn,
+        updateRoomStatusFn,
+        generateFeedbackFn,
+        ...baseFeedbackDeps(),
+        now: NOW,
+      });
+
+      expect(generateFeedbackFn).toHaveBeenCalledWith('r1');
+    });
+
+    it('proceeds anyway once the flush max-wait window has elapsed, even if still marked active (stuck agent)', async () => {
+      const listLiveRoomsFn = vi.fn().mockResolvedValue([]);
+      const generateFeedbackFn = vi.fn().mockResolvedValue({ complete: true });
+      const isTranscriptionActiveFn = vi.fn().mockReturnValue(true);
+      const listRoomsNeedingFeedbackRetryFn = vi.fn().mockResolvedValue([
+        {
+          id: 'stuck-transcriber',
+          ended_at: new Date(NOW - FEEDBACK_FLUSH_MAX_WAIT_MS - 1).toISOString(),
+          feedback_attempts: 0,
+          feedback_last_attempted_at: null,
+        },
+      ]);
+
+      await sweepExpiredRooms({
+        listLiveRoomsFn,
+        updateRoomStatusFn: vi.fn(),
+        generateFeedbackFn,
+        ...baseFeedbackDeps({ listRoomsNeedingFeedbackRetryFn, isTranscriptionActiveFn }),
+        now: NOW,
+      });
+
+      expect(generateFeedbackFn).toHaveBeenCalledWith('stuck-transcriber');
+    });
+
+    it('defers a retry-path room still inside the flush max-wait window while transcription is active', async () => {
+      const listLiveRoomsFn = vi.fn().mockResolvedValue([]);
+      const generateFeedbackFn = vi.fn();
+      const isTranscriptionActiveFn = vi.fn().mockReturnValue(true);
+      const listRoomsNeedingFeedbackRetryFn = vi.fn().mockResolvedValue([
+        {
+          id: 'still-flushing',
+          ended_at: new Date(NOW - 1_000).toISOString(),
+          feedback_attempts: 0,
+          feedback_last_attempted_at: null,
+        },
+      ]);
+
+      await sweepExpiredRooms({
+        listLiveRoomsFn,
+        updateRoomStatusFn: vi.fn(),
+        generateFeedbackFn,
+        ...baseFeedbackDeps({ listRoomsNeedingFeedbackRetryFn, isTranscriptionActiveFn }),
+        now: NOW,
+      });
+
+      expect(generateFeedbackFn).not.toHaveBeenCalled();
+    });
+
+    it('handles multiple rooms ending in the same tick independently -- one still flushing, one already done', async () => {
+      const rooms = [expiredRoom({ id: 'still-flushing' }), expiredRoom({ id: 'already-done' })];
+      const listLiveRoomsFn = vi.fn().mockResolvedValue(rooms);
+      const updateRoomStatusFn = vi.fn().mockImplementation((id) =>
+        Promise.resolve({ id, status: 'ended', feedback_attempts: 0, ended_at: new Date(NOW).toISOString() })
+      );
+      const generateFeedbackFn = vi.fn().mockResolvedValue({ complete: true });
+      const isTranscriptionActiveFn = vi.fn().mockImplementation((id) => id === 'still-flushing');
+
+      await sweepExpiredRooms({
+        listLiveRoomsFn,
+        updateRoomStatusFn,
+        generateFeedbackFn,
+        ...baseFeedbackDeps({ isTranscriptionActiveFn }),
+        now: NOW,
+      });
+
+      expect(generateFeedbackFn).not.toHaveBeenCalledWith('still-flushing');
+      expect(generateFeedbackFn).toHaveBeenCalledWith('already-done');
+    });
+
+    it('does not consume a retry attempt while deferring for an active transcription', async () => {
+      const listLiveRoomsFn = vi.fn().mockResolvedValue([expiredRoom()]);
+      const updateRoomStatusFn = vi.fn().mockResolvedValue({
+        id: 'r1',
+        status: 'ended',
+        feedback_attempts: 0,
+        ended_at: new Date(NOW).toISOString(),
+      });
+      const generateFeedbackFn = vi.fn().mockResolvedValue({ complete: true });
+      const claimFeedbackAttemptFn = alwaysClaims();
+      const isTranscriptionActiveFn = vi.fn().mockReturnValue(true);
+
+      await sweepExpiredRooms({
+        listLiveRoomsFn,
+        updateRoomStatusFn,
+        generateFeedbackFn,
+        ...baseFeedbackDeps({ claimFeedbackAttemptFn, isTranscriptionActiveFn }),
+        now: NOW,
+      });
+
+      expect(claimFeedbackAttemptFn).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('recording the outcome (continued)', () => {
     it('records a feedback success again after a prior failure, once a room completes on retry', async () => {
       const listLiveRoomsFn = vi.fn().mockResolvedValue([]);
       const generateFeedbackFn = vi.fn().mockResolvedValue({ complete: true });

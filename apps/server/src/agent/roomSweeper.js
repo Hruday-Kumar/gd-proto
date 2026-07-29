@@ -13,9 +13,14 @@ import {
   claimFeedbackAttempt,
   markFeedbackGenerated,
 } from '../db/rooms.js';
-import { findExpiredLiveRooms, findRoomsReadyForFeedbackRetry, FEEDBACK_RETRY_MAX_ATTEMPTS } from '../domain/roomSweep.js';
+import {
+  findExpiredLiveRooms,
+  findRoomsReadyForFeedbackRetry,
+  shouldWaitForTranscriptionFlush,
+  FEEDBACK_RETRY_MAX_ATTEMPTS,
+} from '../domain/roomSweep.js';
 import { generateAndPersistFeedbackForRoom } from './feedbackWorker.js';
-import { getAgentWorkerStatus } from './roomAgent.js';
+import { getAgentWorkerStatus, isTranscriptionActive } from './roomAgent.js';
 
 // N1 (audit comparison, 2026-07-29): one feedback attempt for one room --
 // used both right after a room ends and on a later retry, since a retry is
@@ -30,9 +35,23 @@ import { getAgentWorkerStatus } from './roomAgent.js';
 async function attemptFeedback(
   roomId,
   previousAttempts,
+  endedAt,
   now,
-  { generateFeedbackFn, claimFeedbackAttemptFn, markFeedbackGeneratedFn, agentStatus }
+  { generateFeedbackFn, claimFeedbackAttemptFn, markFeedbackGeneratedFn, agentStatus, isTranscriptionActiveFn }
 ) {
+  // N4 (audit comparison, 2026-07-29): don't generate feedback from a
+  // transcript that might still be missing its last few seconds --
+  // isTranscriptionActive(roomId) (agent/roomAgent.js) is true until the
+  // room's transcription agent has fully disconnected AND every transcript
+  // write it triggered has actually landed. No claim is taken here, so
+  // feedback_attempts/feedback_last_attempted_at stay untouched and the
+  // very next sweep tick's retry pass (N1) picks this room straight back
+  // up with zero backoff. shouldWaitForTranscriptionFlush bounds this so a
+  // stuck/crashed agent can't block feedback forever.
+  if (isTranscriptionActiveFn(roomId) && shouldWaitForTranscriptionFlush(endedAt, now)) {
+    return;
+  }
+
   const at = new Date(now).toISOString();
 
   let claim;
@@ -83,9 +102,10 @@ export async function sweepExpiredRooms({
   claimFeedbackAttemptFn = claimFeedbackAttempt,
   markFeedbackGeneratedFn = markFeedbackGenerated,
   agentStatus = getAgentWorkerStatus(),
+  isTranscriptionActiveFn = isTranscriptionActive,
   now = Date.now(),
 } = {}) {
-  const feedbackDeps = { generateFeedbackFn, claimFeedbackAttemptFn, markFeedbackGeneratedFn, agentStatus };
+  const feedbackDeps = { generateFeedbackFn, claimFeedbackAttemptFn, markFeedbackGeneratedFn, agentStatus, isTranscriptionActiveFn };
   // Every feedback attempt this tick dispatches, collected rather than
   // awaited one at a time -- a slow Gemini call for one room must not
   // delay ending or retrying any other room in this same tick. Settled
@@ -126,7 +146,7 @@ export async function sweepExpiredRooms({
     // ended this room.
     if (claimed) {
       pendingFeedback.push(
-        attemptFeedback(room.id, claimed.feedback_attempts ?? 0, now, feedbackDeps).catch((e) =>
+        attemptFeedback(room.id, claimed.feedback_attempts ?? 0, claimed.ended_at, now, feedbackDeps).catch((e) =>
           console.error(`[feedback] unexpected error dispatching room ${room.id}: ${e.message}`)
         )
       );
@@ -151,7 +171,7 @@ export async function sweepExpiredRooms({
   const dueForRetry = findRoomsReadyForFeedbackRetry(retryCandidates, now);
   for (const room of dueForRetry) {
     pendingFeedback.push(
-      attemptFeedback(room.id, room.feedback_attempts ?? 0, now, feedbackDeps).catch((e) =>
+      attemptFeedback(room.id, room.feedback_attempts ?? 0, room.ended_at, now, feedbackDeps).catch((e) =>
         console.error(`[feedback] unexpected error retrying room ${room.id}: ${e.message}`)
       )
     );

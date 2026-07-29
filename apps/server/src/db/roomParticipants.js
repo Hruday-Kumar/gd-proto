@@ -12,6 +12,14 @@ export async function addParticipant(roomId, userId, livekitIdentity, { supabase
   if (error && error.code !== '23505') throw error;
 }
 
+// N3 (audit comparison, 2026-07-29): backs out a seat the capacity check
+// in api/rooms.js optimistically inserted, if a concurrent joiner won the
+// race for the room's last spot -- see that route for the full contract.
+export async function removeParticipant(roomId, userId, { supabase = getSupabase() } = {}) {
+  const { error } = await supabase.from('room_participants').delete().eq('room_id', roomId).eq('user_id', userId);
+  if (error) throw error;
+}
+
 export async function listParticipants(roomId, { supabase = getSupabase() } = {}) {
   const { data, error } = await supabase
     .from('room_participants')

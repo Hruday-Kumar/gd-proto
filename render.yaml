@@ -36,3 +36,14 @@ services:
         sync: false
       - key: GEMINI_MODEL
         value: gemini-3.6-flash
+      # M6 (audit 2026-07-28): CORS allowlist -- comma-separated deployed
+      # frontend origin(s). Without this set, only local Vite dev origins
+      # are allowed and the deployed frontend's requests silently fail
+      # CORS. See docs/engineering/DEPLOYMENT.md's secrets checklist.
+      - key: ALLOWED_ORIGINS
+        sync: false
+      # M3 (audit 2026-07-28): optional shared-secret gate for
+      # GET /health/agent. Falls back to open access if unset -- see
+      # docs/engineering/DEPLOYMENT.md's secrets checklist.
+      - key: HEALTH_CHECK_TOKEN
+        sync: false

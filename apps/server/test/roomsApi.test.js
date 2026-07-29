@@ -8,8 +8,9 @@ import { describe, it, expect, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { createRoomsRouter } from '../src/api/rooms.js';
-import { createLlmRateLimiter } from '../src/api/rateLimit.js';
+import { createLlmRateLimiter, createRoomActionRateLimiter } from '../src/api/rateLimit.js';
 import { CURRENT_CONSENT_VERSION } from '../src/domain/consent.js';
+import { DEFAULT_MAX_ROOM_PARTICIPANTS } from '../src/domain/roomCapacity.js';
 
 function stubAuth(userId) {
   return (req, _res, next) => {
@@ -39,6 +40,7 @@ function baseDeps(overrides = {}) {
     // *losing* the claim override this with one returning null.
     updateRoomStatus: vi.fn(async (id, patch) => ({ id, ...patch })),
     addParticipant: vi.fn(),
+    removeParticipant: vi.fn(),
     listQueue: vi.fn().mockResolvedValue([]),
     addToQueue: vi.fn(),
     removeFromQueue: vi.fn(),
@@ -106,6 +108,21 @@ describe('POST /api/rooms (create by code)', () => {
     );
     expect(deps.addParticipant).toHaveBeenCalledWith('r1', 'user-1', 'user-1');
   });
+
+  // N3 (audit comparison, 2026-07-29): confirms the limiter is actually
+  // attached to this route (see roomActionRateLimit.test.js for the
+  // limiter's own behavior).
+  it('is rate-limited per user', async () => {
+    const deps = baseDeps({
+      insertRoom: vi.fn().mockResolvedValue({ id: 'r1', code: 'ABCXYZ', status: 'waiting', topic_id: 't1', duration_seconds: 300 }),
+      roomActionRateLimiter: createRoomActionRateLimiter({ windowMs: 60_000, max: 2 }),
+    });
+    const app = buildApp(deps);
+    await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds: 300 });
+    await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds: 300 });
+    const res = await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds: 300 });
+    expect(res.status).toBe(429);
+  });
 });
 
 describe('POST /api/rooms/join', () => {
@@ -130,6 +147,109 @@ describe('POST /api/rooms/join', () => {
     const res = await request(app).post('/api/rooms/join').send({ code: 'ABCXYZ' });
     expect(res.status).toBe(200);
     expect(deps.addParticipant).toHaveBeenCalledWith('r1', 'user-1', 'user-1');
+  });
+
+  // N3 (audit comparison, 2026-07-29): a leaked room code otherwise let an
+  // unbounded number of participants join a single 'waiting' room -- each
+  // seat costs a live LiveKit connection, a per-speaker AssemblyAI stream
+  // once the room starts, and a Gemini feedback call once it ends.
+  describe('participant cap', () => {
+    function fullRoomDeps(overrides = {}) {
+      return baseDeps({
+        getRoomByCode: vi.fn().mockResolvedValue({ id: 'r1', code: 'ABCXYZ', status: 'waiting' }),
+        isParticipant: vi.fn().mockResolvedValue(false),
+        listParticipantsFn: vi.fn().mockResolvedValue(Array(DEFAULT_MAX_ROOM_PARTICIPANTS).fill({ user_id: 'someone' })),
+        ...overrides,
+      });
+    }
+
+    it('rejects a new joiner once the room already has the maximum number of participants', async () => {
+      const deps = fullRoomDeps();
+      const app = buildApp(deps);
+      const res = await request(app).post('/api/rooms/join').send({ code: 'ABCXYZ' });
+      expect(res.status).toBe(409);
+      expect(res.body).toEqual({ error: expect.any(String) });
+      expect(deps.addParticipant).not.toHaveBeenCalled();
+    });
+
+    it('allows a new joiner while the room is below the maximum', async () => {
+      const deps = baseDeps({
+        getRoomByCode: vi.fn().mockResolvedValue({ id: 'r1', code: 'ABCXYZ', status: 'waiting' }),
+        isParticipant: vi.fn().mockResolvedValue(false),
+        listParticipantsFn: vi.fn().mockResolvedValue(Array(DEFAULT_MAX_ROOM_PARTICIPANTS - 1).fill({ user_id: 'someone' })),
+      });
+      const app = buildApp(deps);
+      const res = await request(app).post('/api/rooms/join').send({ code: 'ABCXYZ' });
+      expect(res.status).toBe(200);
+      expect(deps.addParticipant).toHaveBeenCalledWith('r1', 'user-1', 'user-1');
+    });
+
+    // Duplicate join: a student re-fetching the lobby (browser refresh,
+    // reconnect) is already one of the counted seats, not an additional
+    // one -- the cap must never block a rejoin.
+    it('always allows a rejoin by an already-seated participant, even when the room is at the cap', async () => {
+      const deps = fullRoomDeps({ isParticipant: vi.fn().mockResolvedValue(true) });
+      const app = buildApp(deps);
+      const res = await request(app).post('/api/rooms/join').send({ code: 'ABCXYZ' });
+      expect(res.status).toBe(200);
+      expect(deps.addParticipant).toHaveBeenCalledWith('r1', 'user-1', 'user-1');
+    });
+
+    // Concurrent joins: two requests can both pass the pre-insert check
+    // against the same stale count before either of their inserts lands.
+    // Re-verifying the count after inserting -- and backing the seat back
+    // out if it turns out a concurrent joiner won the race -- bounds this
+    // without needing a schema-level atomic guarantee.
+    it('backs out its own seat if a concurrent joiner fills the room between the pre- and post-insert checks', async () => {
+      const listParticipantsFn = vi
+        .fn()
+        .mockResolvedValueOnce(Array(DEFAULT_MAX_ROOM_PARTICIPANTS - 1).fill({ user_id: 'someone' })) // pre-insert: room for one more
+        .mockResolvedValueOnce(Array(DEFAULT_MAX_ROOM_PARTICIPANTS + 1).fill({ user_id: 'someone' })); // post-insert: a concurrent joiner also landed
+      const deps = baseDeps({
+        getRoomByCode: vi.fn().mockResolvedValue({ id: 'r1', code: 'ABCXYZ', status: 'waiting' }),
+        isParticipant: vi.fn().mockResolvedValue(false),
+        listParticipantsFn,
+      });
+      const app = buildApp(deps);
+      const res = await request(app).post('/api/rooms/join').send({ code: 'ABCXYZ' });
+
+      expect(deps.addParticipant).toHaveBeenCalledWith('r1', 'user-1', 'user-1');
+      expect(deps.removeParticipant).toHaveBeenCalledWith('r1', 'user-1');
+      expect(res.status).toBe(409);
+      expect(res.body).toEqual({ error: expect.any(String) });
+    });
+
+    it('does not back out the seat when the post-insert count lands exactly at the cap', async () => {
+      const listParticipantsFn = vi
+        .fn()
+        .mockResolvedValueOnce(Array(DEFAULT_MAX_ROOM_PARTICIPANTS - 1).fill({ user_id: 'someone' }))
+        .mockResolvedValueOnce(Array(DEFAULT_MAX_ROOM_PARTICIPANTS).fill({ user_id: 'someone' }));
+      const deps = baseDeps({
+        getRoomByCode: vi.fn().mockResolvedValue({ id: 'r1', code: 'ABCXYZ', status: 'waiting' }),
+        isParticipant: vi.fn().mockResolvedValue(false),
+        listParticipantsFn,
+      });
+      const app = buildApp(deps);
+      const res = await request(app).post('/api/rooms/join').send({ code: 'ABCXYZ' });
+
+      expect(res.status).toBe(200);
+      expect(deps.removeParticipant).not.toHaveBeenCalled();
+    });
+  });
+
+  // N3 (audit comparison, 2026-07-29): confirms the limiter is actually
+  // attached to this route (see roomActionRateLimit.test.js for the
+  // limiter's own behavior).
+  it('is rate-limited per user', async () => {
+    const deps = baseDeps({
+      getRoomByCode: vi.fn().mockResolvedValue({ id: 'r1', code: 'ABCXYZ', status: 'waiting' }),
+      roomActionRateLimiter: createRoomActionRateLimiter({ windowMs: 60_000, max: 2 }),
+    });
+    const app = buildApp(deps);
+    await request(app).post('/api/rooms/join').send({ code: 'ABCXYZ' });
+    await request(app).post('/api/rooms/join').send({ code: 'ABCXYZ' });
+    const res = await request(app).post('/api/rooms/join').send({ code: 'ABCXYZ' });
+    expect(res.status).toBe(429);
   });
 });
 

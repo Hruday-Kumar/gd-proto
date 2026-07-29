@@ -2,10 +2,146 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-07-29 (N2 — DONE, migration applied and live-verified;
-see immediately below. The N7 verification session, N1 fix session, Phase
-5 release-to-both-remotes, close-out session, blockers-investigation, and
-M4/H6/M10 notes and older context are preserved further down)
+**Last updated:** 2026-07-29 (reconciled from two parallel work sessions
+that both branched off the same N1-fix state: this session's **N8, N6,
+N3, N4** — CI hardening (server lint, RLS-isolation tests wired into a
+real job, `npm audit` reporting), `render.yaml`/`DEPLOYMENT.md` sync, a
+room participant cap + rate limiting, and the feedback-vs-transcription-
+flush race — are all coded and tested (see each section below) but were
+left **uncommitted** in the working tree, discovered and reconciled in
+this pass, and moved onto their own branch,
+`fix/n3-n4-capacity-ratelimit-flush-race`, off a freshly-synced `dev`.
+They still need review + PR + merge per `BRANCHING.md` before they're
+real — none of these four are reflected in `dev`'s history yet. In
+parallel, a separate session did **N2** and **N7** below, and those *are*
+already merged into `dev` (PR #42) with their migrations applied live.
+All six findings are from `AUDIT_COMPARISON_2026-07-29.md`. See
+`docs/engineering/CODEX_HANDOVER_2026-07-29.md` for exactly what's still
+open and what to build next. Older context — the N1 fix session, Phase 5
+release-to-both-remotes, close-out session, blockers-investigation, and
+M4/H6/M10 notes — is preserved further down.)
+
+## N8 fix — CI now lints the server, runs the RLS isolation tests for real, and reports dependency advisories (2026-07-29)
+
+Picked up per `AUDIT_COMPARISON_2026-07-29.md`'s **N8** finding: three CI
+gaps left the security-critical layers unguarded — `apps/server` was
+never linted in CI despite `PLAN.md` §1 listing it as a required gate;
+`test/historyRlsIsolation.test.js` and `test/roomParticipantsRlsIsolation.test.js`
+— the only automated proof that guardrail #4's "own history only"
+guarantee and the H8/`0011` seating lockdown actually hold at the
+Postgres RLS layer, not just in application code — both
+`describe.skipIf(!hasLiveCreds)` and no CI job ever set live Supabase
+credentials, so they silently reported "skipped" on every run; and
+nothing surfaced dependency advisories (2 known highs in `react-router`
+already, see N10).
+
+**Fix, three new jobs in `.github/workflows/ci.yml`:**
+- **`server-lint`** — `npx oxlint apps/server/src apps/server/test` on
+  Node 22, mirroring the `web` job's existing lint step.
+- **`rls-security`** — runs `test/historyRlsIsolation.test.js` and
+  `test/roomParticipantsRlsIsolation.test.js` directly, fed
+  `SUPABASE_URL`/`SUPABASE_ANON_KEY`/`SUPABASE_SERVICE_ROLE_KEY` from
+  GitHub Actions secrets. **No job-level `if:` gate** — GitHub Actions
+  doesn't expose the `secrets` context to a job's `if:` condition, only
+  to `env:`/steps, so there's no supported way to skip the job itself
+  based on whether a secret is set. Instead it relies on the test files'
+  own `skipIf`: with the secrets unset, the env vars resolve to empty
+  strings, `hasLiveCreds` is false, both files report "skipped" with exit
+  code 0 (confirmed locally), and a `::warning::` annotation makes that
+  visible on the PR rather than a quiet green checkmark. **The secrets
+  still need to be added on GitHub** (Settings → Secrets and variables →
+  Actions) before this job provides real coverage — same values already
+  in `apps/server/.env`, per `DEPLOYMENT.md`'s checklist. That's a
+  dashboard step for the user, not something this fix could do.
+- **`dependency-audit`** — `npm audit --audit-level=high`,
+  `continue-on-error: true` per the audit's own recommendation (a
+  non-blocking reporting step, not a merge gate on a dependency tree this
+  project doesn't fully control).
+- **No application code changed.** Purely CI/workflow YAML — the existing
+  `test`/`web`/`docker-build` jobs are untouched.
+- **Verified locally**, not just by reading the YAML: ran
+  `npx oxlint apps/server/src apps/server/test` (clean),
+  `npx vitest run test/historyRlsIsolation.test.js
+  test/roomParticipantsRlsIsolation.test.js` with no Supabase env vars set
+  (both report skipped, exit 0, confirming the no-secrets path is
+  actually safe rather than assumed), and `npm audit --audit-level=high`
+  (reports the 2 known `react-router` highs, exits non-zero, confirming
+  `continue-on-error` is load-bearing and not decorative).
+- **Guardrail #1 doesn't apply** — this is CI/infra config, not a
+  room/audio/transcription/attribution/feedback feature.
+
+## N6 fix — render.yaml realigned with production config (2026-07-29, after the N3 fix session)
+
+> ⚠️ **Not yet on `dev` as of this reconciliation.** This section and the
+> N3/N4 sections directly below it were written during a session that
+> left its work uncommitted; they've since been moved onto branch
+> `fix/n3-n4-capacity-ratelimit-flush-race`. Treat "DONE" language in
+> these three sections as "code complete, tests green, not yet merged."
+
+Picked up per direct user instruction to implement
+`AUDIT_COMPARISON_2026-07-29.md`'s **N6** finding only, no re-auditing, no
+other findings. N6: "render.yaml has drifted from the actual production
+deployment configuration and could recreate a previously resolved
+deployment/CORS issue if used for a fresh deployment."
+
+**Root cause:** `render.yaml` is this project's Blueprint spec for a
+from-scratch Render deploy (`DEPLOYMENT.md`'s documented from-scratch
+how-to references it directly). Two audit fixes landed after it was last
+written and added env vars the running app actually reads in production —
+`ALLOWED_ORIGINS` (M6, the CORS allowlist, read in `index.js`) and
+`HEALTH_CHECK_TOKEN` (M3, the `/health/agent` shared-secret gate, read in
+`api/health.js`) — but neither var was ever added to `render.yaml`. This
+was invisible on the live service (`gd-proto-1`) because that service was
+never actually created from this Blueprint — it was a manual "New Web
+Service" import, already documented as such in `DEPLOYMENT.md` — so its
+real env vars were set by hand and are correct regardless of what
+`render.yaml` says. The drift only bites on a **fresh** Blueprint deploy:
+with `ALLOWED_ORIGINS` absent from the spec, Render has nothing to prompt
+for, the var stays unset, and (per `index.js`'s own documented fallback)
+only `localhost:5173` would be allowed — silently recreating the exact
+CORS breakage that a real B7 walkthrough already found and fixed live
+against `gd-proto-1` earlier on 2026-07-29 (see this file's blockers-
+investigation section and `DEPLOYMENT.md`'s "Status" section).
+
+**Fix — infra-config only, no application code touched:**
+- `render.yaml`: added `ALLOWED_ORIGINS` and `HEALTH_CHECK_TOKEN` as
+  `sync: false` env var entries (same pattern as the existing 6 secrets),
+  in the same order `DEPLOYMENT.md`'s secrets checklist already lists
+  them, with short comments naming the audit finding each closes. A fresh
+  Blueprint deploy now prompts for both instead of silently omitting
+  them.
+- `DEPLOYMENT.md`: noted next to the secrets checklist that both vars are
+  now declared in `render.yaml`.
+- `PLAN.md`: N6 row added to §4 (DONE).
+- **Reviewed, left unchanged:** the `name: placeme-server` (render.yaml)
+  vs. `gd-proto-1` (live service) mismatch. Already documented in
+  `DEPLOYMENT.md` as the expected, harmless consequence of the live
+  service being a manual import rather than a Blueprint deploy — not
+  something N6 asks to fix, and renaming it would only be cosmetic (Render
+  doesn't rename an existing service to match a Blueprint). `GEMINI_MODEL`,
+  `NODE_ENV`, and the other 6 secrets were checked against `DEPLOYMENT.md`'s
+  checklist and are not drifted.
+- **No migration, no schema change, no live service reconfiguration.**
+  This only changes what a *future* fresh deploy from this Blueprint would
+  ask for; `gd-proto-1`'s actual environment variables are untouched and
+  were already correct before this fix.
+- **Validation:** this is a declarative YAML spec, not executable code —
+  there's no test suite or build step that exercises it. Verified by
+  reading the resulting `render.yaml` back and confirming both new entries
+  match the exact env var names the app code reads (`ALLOWED_ORIGINS` in
+  `apps/server/src/index.js`, `HEALTH_CHECK_TOKEN` in
+  `apps/server/src/api/health.js`) and the exact secrets-checklist wording
+  already in `DEPLOYMENT.md`. Did not run `npx vitest run` since no
+  application code changed; not expected to affect the 309/309 baseline.
+- **Residual risk:** `render.yaml` is still not what actually provisioned
+  `gd-proto-1`, and Render has no built-in drift-detection between a
+  Blueprint file and a manually-created service — a future manual env-var
+  change on the dashboard (or a future new var some later audit fix
+  requires) can still silently drift out of sync with this file again
+  unless whoever makes that change also remembers to update `render.yaml`.
+  Not a new risk introduced by this fix, just not eliminated by it either.
+- **Guardrail #1 doesn't apply** — this is infra config, not a room/audio/
+  transcription/attribution/feedback feature.
 
 ## N2 — close the database-level bypass of H5's prompt-injection mitigation (2026-07-29, after N7)
 
@@ -157,6 +293,203 @@ closed in production, or was quietly still live.
   `AUDIT_COMPARISON_2026-07-29.md` (N1 was already done in the prior
   session; N2–N6, N8–N14 remain untouched) were looked at or touched this
   session, per direct instruction to implement N7 only.
+## N3 fix — participant cap + rate limiting on room creation/join (2026-07-29, after the N4 fix session)
+
+Picked up per direct user instruction to implement `AUDIT_COMPARISON_2026-07-29.md`'s
+**N3** finding only, no re-auditing, no other findings. N3: "There is
+currently no effective participant cap or abuse protection on room
+creation/join. A leaked room code could allow excessive participants and
+unnecessary AssemblyAI/Gemini resource consumption."
+
+**Root cause:** `POST /api/rooms/join` (the code/link path) checked only
+`room.status === 'waiting'` before seating a joiner — no participant-count
+check existed anywhere. Random matching (`POST /api/rooms/match`) was
+already bounded (`matchmake()`'s `maxGroupSize`, default 6) and already
+rate-limited (H4's `llmRateLimiter`, since it calls Gemini), but the
+code/link path had neither. Since `/api/rooms/join` doesn't check
+`joinMode`, this also meant a leaked matched-room code could be joined
+past its intended group size. Neither `POST /api/rooms` (create) nor
+`POST /api/rooms/join` had any rate limiting either — a single account
+could spam either with no throttle.
+
+**Fix:**
+- New `domain/roomCapacity.js`'s `isRoomFull(count, max)` (core, tested
+  first) — the pure decision, same "DB/route reads cheaply, this decides
+  exactly" split as `roomDuration.js`/`roomSweep.js`. Default cap of 6,
+  anchored to the same product-stated range `PHASE1_PLAN.md` §8 already
+  established for matchmaking's group size — there's still no
+  product-specific number for code/link rooms, so this reuses that same
+  anchor rather than inventing a new one (guardrail #10).
+- `api/rooms.js`'s `/join` handler now checks capacity **before**
+  inserting a new joiner, and **re-verifies after inserting**, backing the
+  seat back out (`db/roomParticipants.js`'s new `removeParticipant`) if
+  the post-insert count exceeds the cap — meaning a concurrent joiner won
+  the race for the room's last spot. This bounds the cap tightly without
+  a schema-level atomic count/migration: the existing
+  `unique(room_id, user_id)` constraint already makes the insert itself
+  safe against true duplicates (addParticipant was already idempotent on
+  rejoin — nothing needed there), this only guards against exceeding the
+  total count under a genuine simultaneous race. A rejoin by an
+  already-seated participant (checked via the existing `isParticipant`)
+  is never subject to the cap — they're one of the counted seats already,
+  not an additional one.
+- New `createRoomActionRateLimiter` (`api/rateLimit.js`) — same per-user
+  keying discipline as H4's `createLlmRateLimiter` (never IP, so a shared
+  campus network can't cross-throttle students), kept as a **separate**
+  limiter/counter since neither `/api/rooms` nor `/api/rooms/join` calls
+  Gemini itself; sharing H4's counter would have incorrectly coupled
+  unrelated traffic. Wired onto both `POST /api/rooms` and
+  `POST /api/rooms/join`.
+- **No schema change, no API shape change.** `maxParticipants` and
+  `roomActionRateLimiter` are both injectable router dependencies with
+  sane defaults, matching the existing `minGroupSize`/`maxGroupSize`/
+  `llmRateLimiter` pattern already in this file.
+- **309/309 server tests green** (was 294) — 15 new tests: 5 in
+  `roomCapacity.test.js` (`isRoomFull`), 3 in
+  `roomActionRateLimit.test.js` (mirroring `llmRateLimit.test.js`'s
+  pattern), and 7 in `roomsApi.test.js` (room-at-cap rejected, room
+  below cap allowed, a rejoin always allowed even at the cap, the
+  concurrent-join compensation path backing out a seat, the
+  exactly-at-cap case correctly *not* backing out, and rate-limit wiring
+  tests for both `/api/rooms` and `/api/rooms/join`, mirroring the
+  existing `/api/rooms/match` wiring test). `npx oxlint apps/server/src
+  apps/server/test` clean (only two pre-existing, unrelated unused-import
+  warnings). One transient flake hit mid-session (two unrelated,
+  untouched tests in `roomsApi.test.js` — `/start`'s deleted-creator case
+  and `/participants`'s display-name case — failed once with `401`/`404`
+  instead of their expected statuses); confirmed transient by re-running
+  the same file three times in a row with no code changes, all 65/65
+  green each time. No `apps/web` changes, so its build/lint weren't
+  re-run.
+- **Not done this session, by design (scope discipline, per direct
+  instruction to implement N3 only):** every other still-open finding in
+  `AUDIT_COMPARISON_2026-07-29.md` was left untouched; that file itself
+  was read but not modified, per its own "not modified, appended to, or
+  overwritten" note. Did not touch `POST /api/rooms/match`'s existing
+  `maxGroupSize` bound or its `llmRateLimiter` — both already correct,
+  outside N3's gap.
+- **Migration required: none.** Purely in-process logic plus one new
+  peripheral DB query function (`removeParticipant`) — no new columns, no
+  change to `rooms`/`room_participants`.
+- **Residual risk, named rather than papered over:** the cap is a
+  best-effort, application-level guard, not a hard database-enforced
+  invariant — under a true simultaneous tie at the exact capacity
+  boundary, a room could very rarely admit one seat over the configured
+  cap before the compensation check catches it and removes it again (a
+  brief over-admit, not a permanent one). This is a deliberate,
+  documented trade-off against introducing a Postgres function/trigger
+  (which would need a migration) for what is fundamentally an
+  abuse-prevention limit, not a billing- or safety-critical invariant.
+  Guardrail #1 doesn't strictly apply here (this isn't a room/audio/
+  transcription/feedback feature), but a real multi-account join test
+  against a live room (several real accounts joining one code up to and
+  past the cap) would still be worth doing before fully trusting this
+  under real pilot traffic.
+
+## N4 fix — feedback generation no longer races transcription flush (2026-07-29, after the N1 fix session)
+
+Picked up per direct user instruction to implement `AUDIT_COMPARISON_2026-07-29.md`'s
+**N4** finding only, no re-auditing, no other findings. N4: "Feedback
+generation can begin before the transcription service has completely
+flushed its final utterances, causing the last few seconds of
+conversation to be omitted from the generated feedback."
+
+**Root cause, two independent races stacked on top of each other:**
+1. `agent/roomSweeper.js`'s periodic sweep (M10) flips a room to `ended`
+   and dispatches feedback generation the instant `now >= ends_at` —
+   fully decoupled from `agent/roomAgent.js`'s transcription agent, which
+   doesn't even *begin* stopping until `durationSeconds + STOP_GRACE_MS`
+   (a deliberate 4s grace period for AssemblyAI to flush the last turn).
+   Worst case, the sweeper could claim the ended-transition and dispatch
+   feedback within milliseconds of `ends_at`, while the agent was still
+   4+ seconds from starting to stop.
+2. Even once the agent's stop timer fired, `stopTranscriptionForRoom`
+   called `entry.transcriber.closeAll()` without awaiting it and never
+   waited for the DB writes `onTranscript` triggers (`persistAttributedLine`,
+   fire-and-forget via `.catch()`) — so "the agent has stopped" didn't
+   actually mean "every transcript line has landed." A third, lower-level
+   race sat inside that: `agent/assemblyai.js`'s `close()` sent
+   AssemblyAI's `Terminate` message and called `ws.close()` immediately
+   after, with zero wait — racing the server's own response, which can
+   still contain the final Turn for whatever audio was just sent.
+
+**Fix — synchronizes on a real completion signal instead of adding a
+delay:**
+- `agent/roomAgent.js` now tracks every `persistAttributedLine` promise
+  per room (`entry.pendingPersists`) and exposes a new
+  `isTranscriptionActive(roomId)` — true while the agent is connected
+  *or* while it's mid-teardown (a new `flushingRooms` Set, populated the
+  instant `stopTranscriptionForRoom` begins so there's no window where the
+  signal is wrongly false). `stopTranscriptionForRoom` now awaits
+  `closeAll()`, then `Promise.allSettled(entry.pendingPersists)`, then
+  `room.disconnect()` — a room isn't "done" until every write it
+  triggered has actually settled. Added a `stopPromise` reentrancy guard
+  (a second concurrent call, e.g. the room's own timer firing at the same
+  moment as a shutdown sweep, now awaits the same in-flight stop instead
+  of tearing the room down twice) — this became necessary once deletion
+  from `activeRooms` was deferred past the synchronous point it used to
+  happen at.
+- `agent/assemblyai.js`'s `close()` no longer force-closes the socket —
+  it sends `Terminate`, then waits for the socket's own `close` event
+  (during which the existing `message` handler keeps processing anything
+  that arrives, including a final Turn), with only a bounded 2s safety
+  timeout as a fallback for a socket that never closes on its own.
+  `agent/transcriber.js`'s `closeAll()` now awaits every per-track
+  `close()` (`Promise.allSettled`) instead of firing them and moving on.
+- `agent/roomSweeper.js`'s `attemptFeedback` now checks
+  `isTranscriptionActive(roomId)` before taking a feedback-attempt claim;
+  if still active, it takes **no claim at all** and returns — so
+  `feedback_attempts`/`feedback_last_attempted_at` stay untouched and the
+  very next sweep tick's retry pass (N1's existing machinery) picks the
+  room straight back up with zero backoff. Bounded by a new
+  `domain/roomSweep.js` export, `shouldWaitForTranscriptionFlush(endedAt,
+  now)` / `FEEDBACK_FLUSH_MAX_WAIT_MS` (15s — comfortably covers
+  `STOP_GRACE_MS` + a couple of sweep ticks + the AssemblyAI safety net),
+  so a genuinely stuck or crashed agent can't block a room's feedback
+  forever; past that window, generation proceeds anyway from whatever
+  transcript exists, same "degrade gracefully" philosophy as H2/N1.
+- **No schema change, no API change.** Room-ending is still exactly on
+  schedule from a student's point of view (the status flip happens
+  unconditionally, same as before) — only feedback *generation* is
+  deferred, and only when actually necessary.
+- **294/294 server tests green** (was 272) — 20 new tests: 4 in
+  `roomSweep.test.js` (`shouldWaitForTranscriptionFlush`), 5 in
+  `roomAgent.test.js` (`isTranscriptionActive`, flush-awaiting on stop, a
+  delayed `closeAll()`, the reentrancy guard), 4 in `roomSweeper.test.js`
+  (defers while active, proceeds once inactive, proceeds anyway past the
+  max-wait window, multiple rooms ending in one tick handled
+  independently), plus two new peripheral test files that didn't exist
+  before this fix — `assemblyai.test.js` (4 tests, a fake `ws` module,
+  no real network) and `transcriber.test.js` (3 tests, `@livekit/rtc-node`
+  and `assemblyai.js` both mocked) — added because these two files are
+  exactly where the lowest-level part of this race lived, even though
+  peripheral I/O glue in this codebase doesn't otherwise get unit tests
+  (same precedent as `db/*.js`). `npx oxlint apps/server/src
+  apps/server/test` clean. No `apps/web` changes, so its build/lint
+  weren't re-run.
+- **Not done this session, by design (scope discipline, per direct
+  instruction to implement N4 only):** every other still-open finding in
+  `AUDIT_COMPARISON_2026-07-29.md` (N2, N3, N5–N14) was left untouched;
+  that file itself was read but not modified, per its own "not modified,
+  appended to, or overwritten" note.
+- **Migration required: none.** Purely in-process logic — no new DB
+  columns, no change to `rooms`/`transcript_lines`/`feedback`.
+- **Guardrail #1's real-room check is still outstanding for this fix** —
+  same as N1, this needs a real session where the specific race window
+  matters: a participant still mid-sentence right as the timer ends,
+  confirmed by a human that their last words show up in the generated
+  feedback rather than being silently dropped. Not attempted this
+  session (no live room available); flagged in `PLAN.md`'s N4 row rather
+  than claimed done.
+- **Residual risk, named rather than papered over:** the fix assumes
+  AssemblyAI's v3 API actually closes the WebSocket once it has finished
+  responding to a `Terminate` message — this repo has no prior citation
+  for that specific protocol detail (guardrail #6 territory), so the
+  2-second bounded safety timeout is there deliberately as more than a
+  formality: if that assumption is wrong for some sessions, the fix still
+  degrades to roughly today's timing (a forced close after ~2s) rather
+  than hanging. Worth confirming against a real AssemblyAI session
+  alongside the guardrail #1 check above, not just trusted from here.
 
 ## N1 fix — feedback generation retry (2026-07-29, after the independent audit comparison)
 

@@ -13,6 +13,8 @@ import {
   FEEDBACK_RETRY_MAX_ATTEMPTS,
   FEEDBACK_RETRY_BACKOFF_MS,
   FEEDBACK_RETRY_MAX_AGE_MS,
+  shouldWaitForTranscriptionFlush,
+  FEEDBACK_FLUSH_MAX_WAIT_MS,
 } from '../src/domain/roomSweep.js';
 
 const NOW = Date.parse('2026-07-29T10:00:00.000Z');
@@ -123,5 +125,33 @@ describe('findRoomsReadyForFeedbackRetry', () => {
 
   it('handles an empty room list', () => {
     expect(findRoomsReadyForFeedbackRetry([], NOW)).toEqual([]);
+  });
+});
+
+// N4 (audit comparison, 2026-07-29): the sweeper used to dispatch feedback
+// generation the instant a room's ends_at passed, fully decoupled from
+// whether agent/roomAgent.js's transcription agent had actually finished
+// flushing that room's last few seconds of speech into transcript_lines.
+// This is the pure decision behind the bounded wait: given how long ago a
+// room ended and the server's clock, should the sweeper still hold off on
+// generating feedback for it.
+describe('shouldWaitForTranscriptionFlush', () => {
+  it('waits for a room that only just ended', () => {
+    expect(shouldWaitForTranscriptionFlush(new Date(NOW).toISOString(), NOW)).toBe(true);
+  });
+
+  it('stops waiting once the max wait window has fully elapsed', () => {
+    const endedAt = new Date(NOW - FEEDBACK_FLUSH_MAX_WAIT_MS - 1).toISOString();
+    expect(shouldWaitForTranscriptionFlush(endedAt, NOW)).toBe(false);
+  });
+
+  it('does not wait for a room with no ended_at, rather than guessing an age', () => {
+    expect(shouldWaitForTranscriptionFlush(null, NOW)).toBe(false);
+  });
+
+  it('respects an overridden max wait', () => {
+    const endedAt = new Date(NOW - 5_000).toISOString();
+    expect(shouldWaitForTranscriptionFlush(endedAt, NOW, { maxWaitMs: 1_000 })).toBe(false);
+    expect(shouldWaitForTranscriptionFlush(endedAt, NOW, { maxWaitMs: 10_000 })).toBe(true);
   });
 });

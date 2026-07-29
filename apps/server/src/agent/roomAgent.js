@@ -34,7 +34,20 @@ export function getAgentWorkerStatus() {
 // smoke test used).
 const STOP_GRACE_MS = 4000;
 
-const activeRooms = new Map(); // roomId -> { room, timeout }
+const activeRooms = new Map(); // roomId -> { room, timeout, transcriber, pendingPersists, stopPromise }
+// N4 (audit comparison, 2026-07-29): a room moves here the instant its stop
+// begins, and out again only once every persisted write it triggered has
+// actually landed -- see isTranscriptionActive() below.
+const flushingRooms = new Set();
+
+// N4 (audit comparison, 2026-07-29): the deterministic signal
+// agent/roomSweeper.js gates feedback generation on. True while the agent
+// is connected AND while it's in the middle of tearing down (closing
+// AssemblyAI sockets, waiting for in-flight transcript writes to settle) --
+// only false once a room's transcription is genuinely, fully done.
+export function isTranscriptionActive(roomId) {
+  return activeRooms.has(roomId) || flushingRooms.has(roomId);
+}
 
 export async function startTranscriptionForRoom(
   { id: roomId, durationSeconds },
@@ -75,14 +88,22 @@ export async function startTranscriptionForRoom(
         console.warn(`[agent] room.connect attempt ${attempt} failed for room ${roomId}: ${err.message}`),
     });
 
+    // Built up-front, mutable, so onTranscript below (and stopTranscription
+    // ForRoom later) can reference it by closure before every field is
+    // known -- entry.pendingPersists is what lets stop() (N4, audit
+    // comparison 2026-07-29) wait for every transcript write this room's
+    // agent has issued, not just fire-and-forget them.
+    const entry = { room, timeout: null, transcriber: null, pendingPersists: [], stopPromise: null };
+
     const encoder = new TextEncoder();
     const transcriber = attachTranscriberFn(room, {
       apiKey: assemblyaiApiKey,
       onTranscript: ({ identity, text, startedAtMs, endedAtMs }) => {
-        persistAttributedLine(
+        const persisted = persistAttributedLine(
           { participants, identity, text, startedAtMs, endedAtMs, roomId },
           { insertTranscriptLine: insertTranscriptLineFn }
         ).catch((e) => console.error(`[agent] failed to persist transcript line for room ${roomId}: ${e.message}`));
+        entry.pendingPersists.push(persisted);
 
         // Live captions (peripheral, PHASE1_PLAN.md §5 W5) -- broadcast
         // regardless of whether attribution matched, since a caption is
@@ -92,12 +113,13 @@ export async function startTranscriptionForRoom(
         room.localParticipant.publishData(payload, { reliable: true, topic: 'transcript' });
       },
     });
+    entry.transcriber = transcriber;
 
-    const timeout = setTimeout(() => {
+    entry.timeout = setTimeout(() => {
       stopTranscriptionForRoom(roomId);
     }, durationSeconds * 1000 + STOP_GRACE_MS);
 
-    activeRooms.set(roomId, { room, timeout, transcriber });
+    activeRooms.set(roomId, entry);
     agentStatus.recordDispatchSuccess(roomId);
   } catch (err) {
     agentStatus.recordDispatchFailure(roomId, err);
@@ -108,16 +130,43 @@ export async function startTranscriptionForRoom(
 export async function stopTranscriptionForRoom(roomId) {
   const entry = activeRooms.get(roomId);
   if (!entry) return;
-  clearTimeout(entry.timeout);
-  activeRooms.delete(roomId);
-  agentStatus.recordRoomStopped(roomId);
-  // Close the per-speaker AssemblyAI sockets explicitly (H2, audit
-  // 2026-07-28) rather than relying on room.disconnect() to raise a
-  // TrackUnsubscribed for each one -- during shutdown those events may never
-  // arrive, leaking rate-limited STT connections. Before the disconnect, so
-  // the sockets are released even if disconnect throws.
-  entry.transcriber?.closeAll();
-  await entry.room.disconnect();
+  // A concurrent second call (e.g. the internal timer firing at the same
+  // moment as a shutdown sweep) awaits the same in-flight stop rather than
+  // tearing the room down twice.
+  if (entry.stopPromise) return entry.stopPromise;
+
+  entry.stopPromise = (async () => {
+    clearTimeout(entry.timeout);
+    // Leaves activeRooms immediately but flushingRooms picks it up in the
+    // same synchronous step, so isTranscriptionActive(roomId) never has a
+    // gap where it would wrongly report this room as done (N4, audit
+    // comparison 2026-07-29).
+    activeRooms.delete(roomId);
+    flushingRooms.add(roomId);
+    agentStatus.recordRoomStopped(roomId);
+    try {
+      // Close the per-speaker AssemblyAI sockets explicitly (H2, audit
+      // 2026-07-28) rather than relying on room.disconnect() to raise a
+      // TrackUnsubscribed for each one -- during shutdown those events may
+      // never arrive, leaking rate-limited STT connections. Now awaited
+      // (N4): closeAll()'s own close() waits for AssemblyAI to actually
+      // finish sending back each speaker's final turn instead of racing
+      // it, so any very-last-moment onTranscript call has already fired
+      // (and been pushed onto pendingPersists below) by the time this
+      // resolves.
+      await entry.transcriber?.closeAll();
+      // Every transcript line that final turn (or any earlier one)
+      // triggered must have actually landed in the DB before this room
+      // counts as done -- otherwise a feedback generation dispatched the
+      // instant this promise resolves could still miss it.
+      await Promise.allSettled(entry.pendingPersists);
+      await entry.room.disconnect();
+    } finally {
+      flushingRooms.delete(roomId);
+    }
+  })();
+
+  return entry.stopPromise;
 }
 
 // Shutdown sweep (H2, audit 2026-07-28) -- called from the SIGTERM/SIGINT
