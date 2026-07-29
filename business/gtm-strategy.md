@@ -140,23 +140,38 @@ building Razorpay integration is ~2 weeks of your 2.0 FTE that produces zero pil
 
 Today is **Mon 27 Jul 2026.** Your juniors' drives start in roughly 3–6 weeks.
 
-### Week 0 — Jul 28 – Aug 3 · "Make it real" (nothing else matters until this is done)
+### Week 0 — Jul 28 – Aug 3 · "Make it real" — ✅ engineering side DONE 2026-07-29
 
-The app is on localhost. Every hour it stays there is an hour of placement season you
-cannot get back.
+The app was on localhost when this plan was written. **It no longer is.**
 
-- [ ] **Deploy.** Render + Cloudflare Pages (`DEPLOYMENT.md` has the full checklist)
-- [ ] **Turn Supabase "Confirm email" back ON** — currently anyone can sign up as anyone
-- [ ] **Add analytics.** PostHog free tier. You currently cannot measure a single thing
-      in this document. Non-negotiable before a single user touches it
-- [ ] **Ship scheduled sessions + the soft-landing fallback** (the decided change)
-- [ ] **Verify the P4 keep-alive risk** — a sleeping Render instance means no
-      transcription agent, which means a dead room in front of real students
-- [ ] Recruit **4–5 CRs / champions** over WhatsApp
-- [ ] Book a classroom for the Week 1 demo
+- [x] **Deploy.** Backend live on Render (`gd-proto-1.onrender.com`), frontend live on
+      Vercel (`gd-proto-web.vercel.app`) — not Cloudflare Pages, that host was swapped
+      out per an explicit later decision (see `context-summary.md`)
+- [x] **Turn Supabase "Confirm email" back ON** — verified live, re-confirmed working
+- [x] **Add analytics.** PostHog code is wired (`ceo-dashboard.md` §4 Tier 2) but the
+      key is deliberately still unset — flip it on when you're ready to look at funnel
+      data. The SQL-only Tier 1 metrics (WAD, fill rate, etc.) work today with no key
+- [ ] **Ship scheduled sessions + the soft-landing fallback** — **partially done.** The
+      soft-landing fallback for random matching shipped (90s timeout, honest "nobody's
+      free" message, demoted to a secondary link on `HomePage`). A real *scheduled*
+      session feature (pick a fixed time slot) was **not** built — the practical
+      substitute is create-a-room + share the code/link at an agreed time, same as
+      organizing over WhatsApp. Decide if a real scheduling UI is worth building before
+      Week 1, or if manual coordination is good enough at n=10
+- [x] **Verify the P4 keep-alive risk** — tested live: 18+ minutes fully idle, keep-alive
+      deliberately disabled, then a real room still got a working transcription agent
+      with zero cold-start delay observed
+- [ ] Recruit **4–5 CRs / champions** over WhatsApp — not an engineering task, status
+      unknown from the repo, needs a founder update
+- [ ] Book a classroom for the Week 1 demo — same, needs a founder update
 
 **Gate: do not invite a single student until a founder has run a full session on the
-deployed URL from a phone on mobile data.** Not localhost. Not a tunnel.
+deployed URL from a phone on mobile data.** ✅ **Cleared, 2026-07-29** — two real
+people, two real devices, a real room, on `gd-proto-web.vercel.app` (not localhost, not
+a tunnel). Transcription and speaker attribution both confirmed correct. That same
+walkthrough caught and got fixed a real production bug (an expired Gemini API key
+silently killing all feedback generation) — worth knowing the gate is earning its keep,
+not just a checkbox.
 
 ### Week 1 — Aug 4–10 · "First 10, in a room together"
 
@@ -220,7 +235,7 @@ deployed URL from a phone on mobile data.** Not localhost. Not a tunnel.
 
 | Input | Value | Notes |
 |---|---|---|
-| Final-year (2027) batch size | **600** | ⚠️ Replace with your actual number |
+| Final-year (2027) batch size | **600** | ⚠️ Replace with your actual number. **Audit note, 2026-07-29: this conflicts with `revenue-model.md`'s "Beachhead batch size: 1,000 final-year students," which that document labels a hard founder input, not an assumption.** Never reconciled between the two docs. If 1,000 is correct, every number in the funnel below (§6) roughly scales up 1.67×. Fix by confirming the real number with the founders, not by guessing which document is right |
 | Reachable via campus channels | **65%** = 390 | WhatsApp groups + CRs + TPO |
 | Founder-hours/week on GTM | **20** | 2.0 FTE, split with ongoing build |
 | Sessions runnable/week (Wk 5+) | **5** | Founder-moderated; the real ceiling |
@@ -269,8 +284,8 @@ thin to prove anything. **Show-up rate is the highest-leverage number in this do
 | # | Risk | Kill probability | Mitigation |
 |---|---|---|---|
 | 1 | **Rooms don't fill** — students register, don't show, first-runs see an empty room | **High** | Overbook 2×; 1-hour WhatsApp reminders; founder joins every early session so it's never empty; hard-commit to fixed weekly times |
-| 2 | **Still not deployed by mid-August** | **High** | Week 0 is deploy-only. Nothing else. Placement season does not wait |
-| 3 | **A session breaks live** (Render asleep → no transcription agent → dead room) | Medium | Verify P4 keep-alive before Week 1; a founder monitors every early session; have a "we'll rerun it" recovery script ready |
+| 2 | ~~Still not deployed by mid-August~~ | **Retired 2026-07-29** | Deployed and live-verified well ahead of mid-August. No longer a risk on this list |
+| 3 | **A session breaks live** (Render asleep → no transcription agent → dead room) | Lowered, not eliminated | P4 keep-alive tested live and passed (18+ min idle, no cold start); graceful shutdown + boot-recovery also tested live against a real room restart. Residual risk is now ordinary infra flakiness, not the specific sleep failure mode this row was written about |
 | 4 | **TPO says no** | Medium | You don't need them for Weeks 1–3. Channels #1–4 work without institutional permission. Ask in Week 4 from a position of data |
 | 5 | **Students try it once and don't come back** | Medium | Interview the churned in Week 3. If session-2 return is <25%, stop scaling and fix the product |
 | 6 | **Founder-moderation doesn't scale** — 5 sessions/week is a hard human ceiling | Medium | Fine at pilot scale. Becomes the #1 product problem in Q4. Note it, don't solve it now |
@@ -278,16 +293,18 @@ thin to prove anything. **Show-up rate is the highest-leverage number in this do
 
 ---
 
-## 8. Do this week (Jul 28 – Aug 3)
+## 8. Do this week — engineering items done, distribution items still open
 
-Ordered. Do not start item 6 before item 1 is done.
-
-1. **Deploy to Render + Cloudflare Pages.** Blocks everything else.
-2. **Turn on Supabase email confirmation.**
-3. **Install PostHog.** You cannot run any of §6 blind.
-4. **Ship scheduled sessions + soft-landing fallback.**
-5. **Full session test on the deployed URL, from a phone, on mobile data.** Not localhost.
-6. **WhatsApp 5 CRs/juniors** — book the Week 1 demo, confirm the classroom.
+1. ~~Deploy to Render + Cloudflare Pages.~~ **DONE** (Render + Vercel, not Cloudflare Pages).
+2. ~~Turn on Supabase email confirmation.~~ **DONE.**
+3. ~~Install PostHog.~~ **DONE, code-complete** — inert until `VITE_POSTHOG_KEY` is set;
+   Tier-1 SQL metrics (`ceo-dashboard.md` §4) already work without it.
+4. **Ship scheduled sessions + soft-landing fallback.** Soft-landing shipped; a real
+   scheduling UI did not — see the Week 0 checklist note above.
+5. ~~Full session test on the deployed URL, from a phone, on mobile data.~~ **DONE** —
+   two real people, real devices, real room, on the live Vercel URL.
+6. **WhatsApp 5 CRs/juniors** — book the Week 1 demo, confirm the classroom. **Still
+   open** — this is a distribution task, not something the repo can confirm.
 
 ### Copy you can send today (edit the brackets)
 

@@ -34,26 +34,34 @@ mint, room status/participants/transcript, feedback read, history.
 
 ## 2. Stage
 
-**Pre-launch. Pre-revenue. Pre-user. Code-complete, not deployed.**
+**Updated 2026-07-29 — deployed and instrumented. Still pre-revenue, pre-external-user.**
+The section below is left as the original 2026-07-27 snapshot; the table's "Evidence"
+column is corrected where reality has since moved. See `PROGRESS.md`/`PLAN.md` for the
+full engineering record.
 
 | Signal | Evidence |
 |---|---|
-| Feature completeness | **[E]** W1–W8 done: auth, consent, topics, rooms, matching, live audio, STT, attribution, LLM feedback, history, deploy config |
-| Test coverage | **[E]** 133 test cases / 21 files, server-side. Strict TDD discipline documented and followed |
-| Auth | **[E]** Yes — Supabase Auth, JWT verified against JWKS, RLS enforced at DB level (an RLS recursion bug was caught by a real isolation test) |
-| Billing / payments | **[E]** **None.** Zero references to Stripe, Razorpay, subscriptions, or pricing anywhere in the codebase |
-| Analytics | **[E]** **None.** No PostHog, Mixpanel, GA, Segment. There is no instrumentation to measure a funnel |
+| Feature completeness | **[E]** W1–W8 done: auth, consent, topics, rooms, matching, live audio, STT, attribution, LLM feedback, history, deploy config. Since 07-27: a full engineering-audit remediation pass also shipped (security hardening, graceful shutdown + boot recovery, rate limiting, account-deletion path, feedback thumbs-rating) |
+| Test coverage | **[E]** 247 test cases, server-side (was 133 on 07-27). Strict TDD discipline documented and followed |
+| Auth | **[E]** Yes — Supabase Auth, JWT verified against JWKS, RLS enforced at DB level (an RLS recursion bug was caught by a real isolation test). "Confirm email" is now **ON** in production (was off during dev testing) |
+| Billing / payments | **[E]** **None.** Zero references to Stripe, Razorpay, subscriptions, or pricing anywhere in the codebase — unchanged, not scheduled until Nov 2026 (`revenue-model.md` §8) |
+| Analytics | **[E]** **Code shipped, not switched on.** `apps/web/src/lib/analytics.js` wires 5 PostHog events (signup funnel, consent funnel, session-join failures), but `VITE_POSTHOG_KEY` is unset in production so it's dead-code-eliminated from the bundle — inert by design until someone sets the key. Separately, `supabase/queries/ceo-dashboard-metrics.sql` packages the 4 Tier-1 SQL metrics (WAD, fill rate, session-2 return, broken-session rate) as paste-and-run, no PostHog needed for those |
 | Production config | **[E]** `render.yaml` Blueprint + Dockerfile + CI + keep-alive workflow all written and committed |
-| Actually deployed? | **[E]** **No.** `PROGRESS.md` W8: Render project, Cloudflare Pages project, and `RENDER_APP_URL` all still outstanding — needs dashboard access nobody has done yet |
-| README | **[E]** No root README. Extensive internal engineering docs, zero external-facing copy |
+| Actually deployed? | **[E]** **Yes, as of 2026-07-29.** Backend live on Render (`gd-proto-1.onrender.com`, healthy, auto-deploys from `main`), frontend live on Vercel (`gd-proto-web.vercel.app`). CORS, Render free-tier sleep risk, and a real crash-mid-session recovery path have all been tested live and pass. `placeme.study` is a separate, deliberate pre-launch waitlist page, not the app |
+| README | **[E]** Real root `Readme.md` now exists (was missing on 07-27) — repo layout, dev setup, doc pointers |
 
-**[E]** Build history: **57 commits over 3 calendar days** (2026-07-25 → 07-27). This
+**[E]** Build history: **57 commits over 3 calendar days** (2026-07-25 → 07-27) for the
+original build; a further audit-remediation pass (2026-07-28 → 07-29) added ~35 more
+commits across 20 PRs hardening security, reliability, and DPDP compliance. This
 is an AI-agent-accelerated build, not a 6-month slog — the engineering docs are
 unusually rigorous for the elapsed time (8 ADRs, phase plans, guardrails).
 
-**[I]** Translation for a board: you have a technically credible v1 with no
-distribution, no instrumentation, no pricing, and no users. The engineering risk is
-largely retired; **100% of remaining risk is commercial.**
+**[I]** Translation for a board: you have a technically credible, **now-live** v1 —
+deployed, hardened, and confirmed working end-to-end by two real people on real devices
+on the real production URL. There is still no distribution, no active instrumentation,
+no pricing, and **no user who isn't a founder or tester**. The engineering risk is
+retired; **100% of remaining risk is commercial and distributional**, not "is it built
+and does it work."
 
 ---
 
@@ -80,25 +88,55 @@ at all — the data model is purely individual-student.
 
 ## 4. Traction signals
 
-**[E] Effectively zero, and honestly recorded as such.**
+**[E] Still effectively zero external usage, and honestly recorded as such — but the
+verification bar has moved from local/tunnel to the real deployed product.**
 
-- No analytics code → no funnel data exists, even privately.
+- Analytics code exists but is switched off (`VITE_POSTHOG_KEY` unset) → no funnel data
+  exists yet, even privately. The SQL side (Tier 1) is runnable today against the live DB.
 - Schema has `profiles`, `consents`, `rooms`, `room_participants`, `transcript_lines`,
-  `feedback`, `matchmaking_queue` — but the only recorded usage is founders' own
-  verification walkthroughs (2 devices, 2 accounts, over Cloudflare tunnels).
+  `feedback`, `matchmaking_queue` — the only recorded usage is still founders'/testers'
+  own verification walkthroughs, but as of 2026-07-29 those ran **on the live deployed
+  URL** (`gd-proto-web.vercel.app`), not localhost/tunnels: two real people, two real
+  devices, a real room, transcription and speaker attribution both confirmed correct.
+  That same live walkthrough also caught and got a fix shipped for a real production bug
+  (an expired Gemini API key that was silently failing 100% of feedback generation) —
+  worth citing as evidence the human-verification discipline (guardrail #1) is catching
+  real issues, not just a formality.
 - **[E]** Real qualitative signal worth noting: the human-verification gate for
   feedback quality passed with the founder's verdict *"the feedback is excellent."*
   That's n=1 and it's the founder, but the core value artifact demonstrably works.
-- **[E]** No changelog, no waitlist, no landing page, no external docs.
+- **[E]** No changelog, no waitlist (aside from the separate `placeme.study` landing
+  page), no external docs. **Still zero students who aren't the founding team.**
+- **[E] Live database counts, queried directly against the production Supabase project,
+  2026-07-29:** 11 `profiles`, 30 `rooms` (28 ended, 2 waiting), 42 `room_participants`
+  seatings, 299 `transcript_lines`, 28 `feedback` rows, 6 `consents`. **Read this as
+  cumulative dev/testing volume since the project was provisioned 2026-07-26, not pilot
+  traction** — every room ever created tops out at **2 participants**; not one has ever
+  reached the 3-person minimum a real GD needs. This is expected (all of it is founder/
+  agent testing across the W1–W8 build and the audit-remediation pass), but it means
+  `ceo-dashboard.md`'s SQL metrics, if run today, would report numbers shaped by test
+  data, not by anything resembling a pilot session — see that file's own note on this.
+- **[E]** Of the 28 `feedback` rows that exist, **zero have a rating** (the 👍/👎
+  feature — checked live, `rating` is `null` on all 28). The mechanism is deployed and
+  reachable; nobody, including testers, has clicked it yet.
 
 ---
 
 ## 5. Team
 
-**[E]** Git history shows 4 identities, which collapse to **[I] 2 humans**:
-`shiva9198` / `Shiva Santosh Reddy Aenugu` (47+26 commits) and `Hruday-Kumar` /
-`Hruday Kumar Pagadala` (35+18). **[?]** Confirm: is this 2 co-founders, or 1 founder
-across 2 machines?
+**Resolved by the founders directly — see §9 below: 3 people (2 co-founders + 1 CTO,
+2 full-time).** The open question originally posed in this section is answered there;
+kept here only as the paper trail for how the answer was reached.
+
+**[E]** Git history, re-checked 2026-07-29 (`git shortlog -sne --all`), now shows **5
+identities**: `shiva9198` (79 commits) / `Shiva Santosh Reddy Aenugu` (41) — same
+person, same name pattern as the GitHub-noreply vs. real-name split seen elsewhere in
+this repo; `Hruday-Kumar` (7) / `Hruday Kumar Pagadala` (18) — confirmed same person,
+identical email on both; and a fifth, **`placemestudy1`** (38 commits,
+`place.me.study1@gmail.com`) — new since the 07-27 snapshot (2 identities then). This
+is also the name of the GitHub org the repo now lives under, so it may be a shared
+company/infra account rather than a third distinct human — **`[?]` not resolved from
+git alone; worth a 30-second founder confirmation** rather than assumed to be the CTO.
 
 **[E]** `TEAM.md` states plainly: the builders are **not experienced** in React,
 Node/APIs, WebRTC, or TDD, and **rely heavily on AI coding agents to build**. Tech
@@ -117,21 +155,34 @@ in docs:
 
 - **Roadmap:** `PlaceMe_Product_Context_v2.md` build order → GD Multiplayer → GD AI
   Voice → JAM/Aptitude/Roleplay → Drive Simulator.
-- **Open blockers (from `PROGRESS.md`):**
-  1. **Not deployed** — Render + Cloudflare Pages accounts not created.
-  2. **Random-match path never tested live** with 3+ real simultaneous students. Only
-     the room-code path has been human-verified.
-  3. Supabase "Confirm email" is **OFF** — anyone can sign up with any email. Must be
-     on before real students.
-  4. **AssemblyAI runs on one-time trial credits** that will expire; card-vs-new-trial
-     explicitly deferred.
-  5. **Gemini free tier** trains on submitted data with human review — students'
-     transcripts. Disclosed in consent copy, but flagged in ADR-0008 as needing paid
-     tier eventually.
-  6. Render free tier sleeps after 15 min; neutralized by a GitHub Actions keep-alive
-     ping — **never verified against a real deploy** (pre-flight P4).
+- **Open blockers, updated 2026-07-29 (most of the 07-27 list is now closed — see
+  `PROGRESS.md`/`PLAN.md` §6 for the full verification record):**
+  1. ~~Not deployed~~ **DONE** — live on Render + Vercel, both healthy.
+  2. **Random-match path still never tested live with 3+ real simultaneous students.**
+     Only the room-code path has been human-verified. (Also now lower-priority
+     commercially — `founder-decisions.md` D1 and `market-strategy.md` §8 Q2 both
+     concluded random matching should be de-emphasized for the pilot anyway, and the
+     soft-landing/demotion changes from that decision have shipped in code.)
+  3. ~~Supabase "Confirm email" is OFF~~ **DONE** — turned ON and re-verified live.
+  4. **AssemblyAI runs on one-time trial credits.** Decision made (2026-07-29, not
+     just deferred): open a fresh trial account when the current ~$50 credit runs out,
+     rather than add a card — stays card-free longer at the cost of periodic
+     account-rotation overhead.
+  5. **Gemini free tier** still trains on submitted data with human review — students'
+     transcripts. Still disclosed in consent copy (now consent v2), still flagged as
+     needing a paid tier before any B2B contract (`board-governance.md` §2). Unchanged.
+  6. ~~Render free tier sleeps after 15 min, never verified~~ **DONE, verified live** —
+     18+ minutes idle with the keep-alive deliberately disabled, then a real room still
+     got a working transcription agent. Bonus finding: the process didn't even restart
+     during the idle window in that test.
+  7. **New since 07-27, not yet resolved:** the deployed backend's `GEMINI_API_KEY`
+     silently failed for a period (backing service account deleted/disabled) — caught
+     by the B7 human-verification walkthrough, fixed by rotating the key, re-verified
+     with a second live room. No new blocker from this, but worth knowing a live-key
+     health check doesn't currently exist — a silent-failure class that could recur.
 - **[E] Budget is a stated hard constraint: $0 out-of-pocket**, not "under $100/mo."
-  Plan of record: bootstrap free → demo → raise → then spend.
+  Plan of record: bootstrap free → demo → raise → then spend. Still holding — the
+  live deploy runs entirely on free tiers.
 
 ---
 
