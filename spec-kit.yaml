@@ -1,0 +1,33 @@
+---
+name: spec-kit
+description: "Spec Kit project configuration manifest. Defines the framework version, included components, and configuration."
+---
+
+# Spec Kit v1.0.0
+
+## Components
+
+### Agents (13)
+godmode, council, sceptic, oracle, debug, tdd, review,
+brainstorm, checkpoint, verify, unstuck, parallel, defense
+
+### Weights (6)
+security, compliance, engineering, reasoning, persona, identity
+
+### Skills (280)
+Full library including: consciousness-council, what-if-oracle, systematic-debugging,
+test-driven-development, differential-review, writing-plans,
+verification-before-completion, defense-in-depth, collision-zone-thinking,
+meta-pattern-recognition, scale-game, brainstorming, subagent-driven-development,
+executing-plans, prompt-optimization, hypothesis-generation, scientific-critical-thinking,
+scanpy, pytorch-lightning, rdkit, polars, dask, networkx, nextflow, transformers,
+and 250+ more domain-specific skills
+
+### Templates (3)
+skill_template, instructions_template, agent_template
+
+## Origin
+- Commands: Claude Skills community library
+- Weights: Fable 5 system prompt analysis (public sources)
+- Templates: InstructionsAndSkills best practices (dhanishtaa-atos)
+- Structure: VS Code Copilot customization primitives
