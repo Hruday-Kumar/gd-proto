@@ -140,6 +140,42 @@ surprises:
   - `PLAN.md` §6 and `DEPLOYMENT.md` both updated to record all of the
     above — see their own change history rather than duplicating detail
     here.
+- **Third follow-up, same day: `placeme.study` confirmed intentional, and
+  H2's recovery path exercised for real.**
+  - **`placeme.study` → `waitlist` is deliberate, not a bug.** Asked the
+    user directly rather than assuming; it's the intended pre-launch
+    public landing page. `gd-proto-web.vercel.app` stays the working URL
+    for the app until public launch. No code/config change — just closed
+    out the open question from the earlier follow-up.
+  - **H2 (boot recovery of live rooms) — exercised against a genuinely
+    live room for the first time, PASS.** Recorded a baseline
+    (`activeRooms: 0`), had the user start a real room, confirmed
+    `activeRooms: 1` and a fresh dispatch, then ran `render restart` on
+    the live service mid-discussion. Render logs show the sequence
+    cleanly: new instance boots at 08:15:01, its boot-recovery scan
+    re-attaches the live room "with 166s remaining" by 08:15:03, and the
+    *old* instance's own graceful-shutdown log (stopping its one active
+    transcription) lands in the same window — the design this code was
+    built for (`domain/roomRecovery.js`'s remaining-time arithmetic,
+    `PROGRESS.md`'s 2026-07-28 H2 entry) working exactly as intended
+    against real traffic for the first time.
+  - **One transient artifact, not a bug:** a tester's page reload landed
+    in the ~1-2 second window between the old instance stopping and the
+    new one being ready, and got a browser-side CORS error
+    (`No 'Access-Control-Allow-Origin' header`) instead of a clean retry.
+    Root cause isn't a CORS regression — re-checked immediately after and
+    the live preflight against the exact room-status URL came back
+    correct (`access-control-allow-origin: https://gd-proto-web.vercel.app`).
+    What actually happened: the request hit Render's own infrastructure
+    error page during the instance swap, which naturally has none of this
+    app's CORS headers, and the browser reports that as a CORS failure
+    since it can't distinguish "no headers because the app said no" from
+    "no headers because this wasn't the app." **Both participants got the
+    complete, gap-free transcript once the room ended** — the actual
+    guarantee H2 exists to provide held up even though one client saw a
+    confusing error message mid-restart. Not chasing this further; it's a
+    narrow, self-resolving race window inherent to any rolling restart,
+    not specific to this app's CORS config.
 
 ## Released to `main`, 2026-07-29
 

@@ -33,14 +33,13 @@ had never been updated — this is the first record of the real state):
   for Production. **Origin unclear** — this predates this session and
   isn't documented anywhere else; if you set this up, worth adding a note
   here for the next session.
-- **⚠️ `placeme.study` does NOT point at this app.** Found while trying to
-  use it for the B7 human-verification walkthrough: the custom domain is
-  attached to a *different* Vercel project, `waitlist` (last deployed ~20
-  days before this session), not `gd-proto-web`. Visiting it shows the
-  waitlist page, not PlaceMe. **`https://gd-proto-web.vercel.app` is the
-  only working deployed frontend URL right now.** Fixing this needs a
-  decision (move the domain? get a new one?) plus Vercel dashboard access
-  — not attempted here.
+- **`placeme.study` intentionally points at the waitlist page, not this
+  app — confirmed with the user, 2026-07-29.** The custom domain is
+  attached to a separate Vercel project (`waitlist`), which is the
+  intended pre-launch public landing page. **`https://gd-proto-web.vercel.app`
+  is the correct URL for the actual app** (pilot testers, further
+  verification sessions, etc.) until the user decides to launch publicly
+  under the root domain.
 - **✅ CORS fixed and re-verified, 2026-07-29 (same day).** `ALLOWED_ORIGINS`
   is now set on `gd-proto-1` to include both deployed frontend origins —
   a real `OPTIONS` preflight from `https://placeme.study` and
