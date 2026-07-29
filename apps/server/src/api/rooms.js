@@ -1,13 +1,12 @@
 import { Router } from 'express';
 import { generateUniqueRoomCode } from '../domain/roomCode.js';
 import { claimMatchOrQueue } from '../domain/matchmakingClaim.js';
-import { startSession, endSession, isTimerExpired } from '../domain/sessionStateMachine.js';
+import { startSession } from '../domain/sessionStateMachine.js';
 import { isValidDurationSeconds, MIN_DURATION_SECONDS, MAX_DURATION_SECONDS } from '../domain/roomDuration.js';
 import { generateTopic } from '../llm/geminiClient.js';
 import { createConsentGate } from './consentGate.js';
 import { mintToken } from '../livekit/token.js';
 import { startTranscriptionForRoom } from '../agent/roomAgent.js';
-import { generateAndPersistFeedbackForRoom } from '../agent/feedbackWorker.js';
 import { getFeedbackForRoomAndUser, rateFeedback } from '../db/feedback.js';
 import { listParticipants } from '../db/roomParticipants.js';
 import { listProfiles } from '../db/profiles.js';
@@ -58,7 +57,6 @@ export function createRoomsRouter(requireAuth, deps) {
     mintTokenFn = mintToken,
     liveKitUrl = process.env.LIVEKIT_URL,
     startTranscriptionFn = startTranscriptionForRoom,
-    generateFeedbackFn = generateAndPersistFeedbackForRoom,
     getFeedbackForRoomAndUserFn = getFeedbackForRoomAndUser,
     rateFeedbackFn = rateFeedback,
     listParticipantsFn = listParticipants,
@@ -227,54 +225,19 @@ export function createRoomsRouter(requireAuth, deps) {
     const room = await getRoomById(req.params.id);
     if (!room) return res.status(404).json({ error: 'Room not found' });
 
-    // Polling this route is not read-only -- it lazily flips an expired
-    // room to 'ended' and dispatches feedback generation below. Gate it on
-    // being seated in the room, exactly like the token/participants/
-    // transcript routes, so nobody holding a room id can drive another
-    // group's session state or read their topic.
+    // Gate on being seated in the room, exactly like the token/
+    // participants/transcript routes, so nobody holding a room id can read
+    // another group's topic or status.
     const participant = await isParticipant(room.id, req.userId);
     if (!participant) return res.status(403).json({ error: 'Not a participant of this room' });
 
-    let session = toSessionShape(room);
-    // Server-authoritative: whichever client polls first after ends_at
-    // passes is the one that flips the room to 'ended' for everyone else.
-    //
-    // That claim has to be made by the database, not by this read (C3,
-    // audit 2026-07-28). Every client polls on the same interval and the
-    // timer expires for all of them at the same instant, so several
-    // pollers really do read 'live' here before any of them has written
-    // 'ended' -- an earlier version of this comment assumed the write
-    // always landed before the next read, which measurement disproved.
-    // Passing expectedStatus makes the update conditional on the room
-    // still being 'live', so Postgres picks exactly one winner.
-    if (isTimerExpired(session, Date.now())) {
-      session = endSession(session, Date.now());
-      const claimed = await updateRoomStatus(room.id, {
-        status: session.status,
-        endedAt: new Date(session.endedAt).toISOString(),
-        expectedStatus: 'live',
-      });
-
-      // Only the poller that actually won the transition dispatches
-      // feedback. Losing is normal and not an error -- the room is ended
-      // either way, and this response still reports 'ended' below.
-      // Dispatching unconditionally meant N participants triggered N
-      // feedback runs, each fanning out one Gemini call per participant:
-      // N*N calls against a rate-limited free tier, where the students
-      // whose calls were throttled silently got no feedback at all.
-      //
-      // Fire-and-forget, same reasoning as /start's transcription
-      // dispatch: generating feedback is real LLM network time and must
-      // not delay the status response. A failure here must not fail the
-      // response -- the room still shows 'ended' even if feedback
-      // generation has a problem; that's a degraded state to alert on
-      // (W8), not a reason to error this poll.
-      if (claimed) {
-        generateFeedbackFn(room.id).catch((e) =>
-          console.error(`[feedback] failed to generate feedback for room ${room.id}: ${e.message}`)
-        );
-      }
-    }
+    // M10 (audit 2026-07-28): this route used to lazily flip an expired
+    // room to 'ended' and dispatch feedback generation as a side effect of
+    // a GET -- any retry, prefetch, or proxy replay could re-trigger it.
+    // That job now belongs to a periodic server-side sweep
+    // (agent/roomSweeper.js), so this route only ever reads whatever the
+    // sweep already wrote; it never transitions anything itself.
+    const endsAt = toSessionShape(room).endsAt;
 
     // code/topicText/isCreator come from the room itself rather than from
     // the client's navigation state, so a browser refresh in the lobby
@@ -283,12 +246,12 @@ export function createRoomsRouter(requireAuth, deps) {
     // (db/rooms.js), so this costs no extra round trip.
     res.status(200).json({
       id: room.id,
-      status: session.status,
+      status: room.status,
       code: room.code,
       topicText: room.topics?.text ?? null,
       durationSeconds: room.duration_seconds,
       isCreator: room.created_by === req.userId,
-      ...(session.endsAt ? { endsAt: session.endsAt } : {}),
+      ...(endsAt ? { endsAt } : {}),
     });
   });
 

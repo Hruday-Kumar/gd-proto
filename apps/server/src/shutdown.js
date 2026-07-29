@@ -5,7 +5,13 @@
 //
 // Built as a factory rather than registering process.on() itself so the
 // behaviour is testable: index.js does the wiring, this does the work.
-export function createGracefulShutdown({ server, stopAllTranscriptions, exit = (code) => process.exit(code), forceExitMs = 10_000 }) {
+export function createGracefulShutdown({
+  server,
+  stopAllTranscriptions,
+  stopSweeper = () => {},
+  exit = (code) => process.exit(code),
+  forceExitMs = 10_000,
+}) {
   let shuttingDown = false;
 
   return async function shutdown(signal) {
@@ -14,6 +20,11 @@ export function createGracefulShutdown({ server, stopAllTranscriptions, exit = (
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`[server] ${signal} received — shutting down`);
+
+    // M10 (audit 2026-07-28): stop the periodic room sweep first -- it has
+    // nothing to flush (unlike a transcription disconnect), so there's no
+    // reason for it to keep firing DB writes while the rest of shutdown runs.
+    stopSweeper();
 
     // The graceful path has to be bounded: a LiveKit disconnect that never
     // resolves must not hold the process open until the platform SIGKILLs it.

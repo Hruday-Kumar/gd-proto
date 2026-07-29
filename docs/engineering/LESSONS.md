@@ -378,6 +378,29 @@ addon/Rust/Go binary bundled into a Node app may bypass Node's own
 everything a native dependency needs just because plain Node code works
 in it.**
 
+**Gotcha (hit 2026-07-29, audit finding M4):** the image was shipping the
+entire frontend toolchain — Vite, Tailwind, oxlint, `@vitest`, Supertest —
+even though this container only ever runs `apps/server`; the frontend
+builds/deploys separately on Vercel (ADR-0007). Two causes stacked: `npm
+ci` ran before `NODE_ENV=production` was set, and even with that fixed,
+plain `npm ci` isn't reliably read as "production only" across npm
+versions (the `production`/`NODE_ENV` implicit-omit behavior is
+deprecated) — needs the explicit `--omit=dev` flag. Fixed by adding
+`apps/web` to `.dockerignore` (the frontend's entire directory, not just
+its `node_modules`) and switching to `npm ci --omit=dev`. **This does not
+contradict the "gotcha we hit" note above about needing every workspace's
+`package.json` present** — that failure was from hand-copying individual
+manifests out of directory structure; excluding one *whole* workspace
+directory via `.dockerignore` and letting `npm ci` see the rest of the
+monorepo intact still resolves workspaces correctly, since `apps/web` is
+simply absent rather than malformed. **Result, measured locally:** image
+929MB → 454MB, 244 → 122 installed packages, npm's own audit dropped from
+2 high-severity findings (both in frontend-only deps) to 0, and install
+time in the build roughly quartered (~109s → ~26s) — directly helps the
+still-open B4 cold-start risk this finding named. Verified with a real
+`docker build` + `docker run` + a real `curl` against `/health`, not just
+inspection of the Dockerfile.
+
 ---
 
 ## React + Vite

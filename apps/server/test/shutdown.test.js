@@ -26,6 +26,19 @@ describe('createGracefulShutdown', () => {
     expect(exit).toHaveBeenCalledWith(0);
   });
 
+  it('stops the room sweeper before tearing down transcriptions', async () => {
+    // M10 (audit 2026-07-28): startRoomSweeper's interval must not keep
+    // running (or firing DB writes) after the process has decided to exit.
+    const server = fakeServer();
+    const stopAllTranscriptions = vi.fn().mockResolvedValue(0);
+    const stopSweeper = vi.fn();
+    const exit = vi.fn();
+
+    await createGracefulShutdown({ server, stopAllTranscriptions, stopSweeper, exit })('SIGTERM');
+
+    expect(stopSweeper).toHaveBeenCalledTimes(1);
+  });
+
   it('ignores a repeat signal already in flight', async () => {
     // Render sends SIGTERM and, if the process lingers, follows up. Running
     // the teardown twice would double-disconnect rooms mid-flush.

@@ -2,7 +2,6 @@ node_modules
 **/node_modules
 .git
 spike
-apps/web/dist
-apps/web/node_modules
+apps/web
 *.env
 .env

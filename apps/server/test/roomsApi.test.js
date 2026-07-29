@@ -55,7 +55,6 @@ function baseDeps(overrides = {}) {
     mintTokenFn: vi.fn().mockResolvedValue('signed.jwt.token'),
     liveKitUrl: 'wss://example.livekit.cloud',
     startTranscriptionFn: vi.fn().mockResolvedValue(undefined),
-    generateFeedbackFn: vi.fn().mockResolvedValue(undefined),
     getFeedbackForRoomAndUserFn: vi.fn().mockResolvedValue(null),
     rateFeedbackFn: vi.fn().mockResolvedValue({ rating: true, rating_reason: null }),
     listParticipantsFn: vi.fn().mockResolvedValue([]),
@@ -449,106 +448,31 @@ describe('GET /api/rooms/:id/status', () => {
     expect(res.body.endsAt).toBeUndefined();
   });
 
-  it('lazily transitions to ended once the server-side timer has expired, for every poller', async () => {
+  // M10 (audit 2026-07-28): this route used to lazily flip an expired room
+  // to 'ended' and dispatch feedback generation as a side effect of a GET
+  // -- any retry, prefetch, or proxy replay could re-trigger it. That job
+  // now belongs to the periodic sweep (agent/roomSweeper.js, test/
+  // roomSweeper.test.js); this route only ever reads whatever the sweep
+  // already wrote, even if the room's ends_at has already passed.
+  it('does not transition or dispatch feedback even when the timer has expired -- that is the sweep\'s job now', async () => {
     const endsAt = Date.now() - 1_000;
     const deps = baseDeps({
       getRoomById: vi.fn().mockResolvedValue({ id: 'r1', status: 'live', duration_seconds: 300, ends_at: new Date(endsAt).toISOString() }),
     });
     const app = buildApp(deps);
     const res = await request(app).get('/api/rooms/r1/status');
-    expect(res.body.status).toBe('ended');
-    expect(deps.updateRoomStatus).toHaveBeenCalledWith('r1', expect.objectContaining({ status: 'ended' }));
+    expect(res.body.status).toBe('live');
+    expect(deps.updateRoomStatus).not.toHaveBeenCalled();
   });
 
-  it('dispatches feedback generation exactly when the room newly transitions to ended', async () => {
-    const endsAt = Date.now() - 1_000;
+  it('reports whatever status the sweep already wrote, without touching it', async () => {
     const deps = baseDeps({
-      getRoomById: vi.fn().mockResolvedValue({ id: 'r1', status: 'live', duration_seconds: 300, ends_at: new Date(endsAt).toISOString() }),
-    });
-    const app = buildApp(deps);
-    await request(app).get('/api/rooms/r1/status');
-    expect(deps.generateFeedbackFn).toHaveBeenCalledWith('r1');
-  });
-
-  // C3 (audit 2026-07-28). Every client in a room polls /status on the same
-  // 3-second interval and the timer expires for all of them at the same
-  // instant, so several pollers routinely read `status: 'live'` before any
-  // of them has written 'ended'. Each one then dispatched its own full
-  // feedback run, and generateFeedbackForRoom fans out one Gemini call per
-  // participant -- so N participants produced N*N calls against a
-  // rate-limited free tier, and the students whose calls got 429'd silently
-  // received no feedback at all. Reproduced 4/4 at 0ms, 5ms and 25ms of
-  // simulated DB latency.
-  //
-  // The transition must therefore be *claimed*, not just written: the
-  // update carries a precondition on the room still being 'live', and only
-  // the caller whose update actually matched a row dispatches feedback.
-  // The mock below models exactly what Postgres does with that
-  // precondition -- the first caller matches a row, everyone after gets
-  // null.
-  it('dispatches feedback only once when several participants poll an expired room together', async () => {
-    const endsAt = Date.now() - 1_000;
-    let claimed = false;
-    const deps = baseDeps({
-      getRoomById: vi.fn().mockResolvedValue({ id: 'r1', status: 'live', duration_seconds: 300, ends_at: new Date(endsAt).toISOString() }),
-      updateRoomStatus: vi.fn(async (id) => {
-        if (claimed) return null;
-        claimed = true;
-        return { id, status: 'ended' };
-      }),
-    });
-    const app = buildApp(deps);
-
-    const responses = await Promise.all([
-      request(app).get('/api/rooms/r1/status'),
-      request(app).get('/api/rooms/r1/status'),
-      request(app).get('/api/rooms/r1/status'),
-      request(app).get('/api/rooms/r1/status'),
-    ]);
-
-    // Every poller still gets a correct answer -- losing the race is not an
-    // error, it just means someone else already ended the room.
-    expect(responses.map((r) => r.status)).toEqual([200, 200, 200, 200]);
-    expect(responses.map((r) => r.body.status)).toEqual(['ended', 'ended', 'ended', 'ended']);
-    expect(deps.generateFeedbackFn).toHaveBeenCalledTimes(1);
-  });
-
-  // The claim has to be enforced by Postgres, not by JS state: under the
-  // deployment target (Render, one container) module state would happen to
-  // work, but the precondition is what makes this correct at all, and it's
-  // the only thing that keeps it correct if this ever runs as more than one
-  // instance.
-  it('claims the ended transition with a precondition on the room still being live', async () => {
-    const endsAt = Date.now() - 1_000;
-    const deps = baseDeps({
-      getRoomById: vi.fn().mockResolvedValue({ id: 'r1', status: 'live', duration_seconds: 300, ends_at: new Date(endsAt).toISOString() }),
-      updateRoomStatus: vi.fn().mockResolvedValue({ id: 'r1', status: 'ended' }),
-    });
-    const app = buildApp(deps);
-    await request(app).get('/api/rooms/r1/status');
-    expect(deps.updateRoomStatus).toHaveBeenCalledWith('r1', expect.objectContaining({ status: 'ended', expectedStatus: 'live' }));
-  });
-
-  it('does not dispatch feedback generation when the room is not yet ended', async () => {
-    const endsAt = Date.now() + 60_000;
-    const deps = baseDeps({
-      getRoomById: vi.fn().mockResolvedValue({ id: 'r1', status: 'live', duration_seconds: 300, ends_at: new Date(endsAt).toISOString() }),
-    });
-    const app = buildApp(deps);
-    await request(app).get('/api/rooms/r1/status');
-    expect(deps.generateFeedbackFn).not.toHaveBeenCalled();
-  });
-
-  it('still responds 200 even if dispatching feedback generation fails', async () => {
-    const endsAt = Date.now() - 1_000;
-    const deps = baseDeps({
-      getRoomById: vi.fn().mockResolvedValue({ id: 'r1', status: 'live', duration_seconds: 300, ends_at: new Date(endsAt).toISOString() }),
-      generateFeedbackFn: vi.fn().mockRejectedValue(new Error('gemini unreachable')),
+      getRoomById: vi.fn().mockResolvedValue({ id: 'r1', status: 'ended', duration_seconds: 300, ends_at: new Date(Date.now() - 1_000).toISOString() }),
     });
     const app = buildApp(deps);
     const res = await request(app).get('/api/rooms/r1/status');
-    expect(res.status).toBe(200);
     expect(res.body.status).toBe('ended');
+    expect(deps.updateRoomStatus).not.toHaveBeenCalled();
   });
 });
 
