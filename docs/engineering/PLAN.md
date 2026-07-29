@@ -185,7 +185,7 @@ now fully complete.** Next up per the roadmap: Phase 5 (§5d).
 
 | ✅ | ID | Task | Owner | Notes |
 |---|---|---|---|---|
-| ☐ | **H6** | CI never builds or lints the frontend | — | Two lines in `ci.yml`; protects half the product. Do early — it's nearly free. |
+| ✅ | **H6** | CI never builds or lints the frontend | — | **DONE, 2026-07-29.** New `web` job in `ci.yml` (`npm run lint` + `npm run build` for `@placeme/web`), mirrors the existing `test` job's shape. Verified locally before pushing: both pass (one pre-existing lint warning, unrelated). |
 | ✅ | **H7** | Matchmaking is check-then-act with no lock | — | **DONE, PR #11.** See §4. Pulled forward ahead of Phase 5 — see the ordering note in §4. |
 | ☐ | **M10** | `GET /status` performs writes | — | Still open — C3 made the write *conditional*, but it's still a GET with side effects. |
 | ☐ | **M3** | `/health/agent` unauthenticated, in-memory only | — | Leaks `roomId` + raw error text; always reports healthy after a restart. |
