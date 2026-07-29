@@ -2,9 +2,38 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-07-29 (Phase 5 close-out session — see immediately
-below; the release session, blockers-investigation, and M4/H6/M10 notes
-and older context are preserved further down)
+**Last updated:** 2026-07-29 (Phase 5 released to `main` on **both**
+remotes — see immediately below; the close-out session, blockers-
+investigation, and M4/H6/M10 notes and older context are preserved
+further down)
+
+## Released to `main` on both remotes, 2026-07-29 (third release of the day)
+
+Per the same direct user instruction as the Phase 5 close-out session
+below ("push and merge changes to both main branches of placemestudy1 and
+Hruday-Kumar"). PRs #32–#37 (M3, M5, M8, M9, L-series, docs) merged into
+`dev`, then `dev` → `main` via PR #38 (regular merge commit, matching this
+repo's existing release style) on `placemestudy1/gd-proto` — CI (`test`,
+`web`, `docker-build`) and both Vercel deployments green. Task branches
+were already gone at PR-merge time (`--delete-branch`); `dev` was then
+fast-forwarded to `main` per step 6c (no force needed).
+
+**The "both main branches" half needed a real identity switch, not just a
+second push.** `origin` (`Hruday-Kumar/gd-proto`) and `placemestudy1/main`
+were confirmed identical before this release (`git rev-list --left-right
+--count` → `0 0`), so syncing the second remote was a plain fast-forward
+— but pushing it while authenticated as the `placemestudy1` `gh` account
+hit a hard `403` (`Permission to Hruday-Kumar/gd-proto.git denied to
+placemestudy1`), confirming these really are two separate GitHub accounts
+sharing this one local clone, not just two remote names for the same
+credential. `gh auth switch --user Hruday-Kumar` (a second account
+already logged in on this machine, just not active) resolved it; switched
+back to `placemestudy1` immediately after for the rest of the session's
+`gh` calls (branch cleanup, PR checks). Re-verified both mains identical
+afterward (`0 0`). Also fast-forwarded the local `main` branch ref itself
+to `placemestudy1/main` — it had been stuck on a stale ancestor commit
+since the 2026-07-28 W1 session (the "wrong repo" footgun flagged there),
+purely a local-ref fix, no remote impact.
 
 ## Audit remediation, Phase 5 close-out (2026-07-29, later same day)
 
