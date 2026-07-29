@@ -16,6 +16,11 @@ describe('createAgentWorkerStatus', () => {
       lastFailure: null,
       lastSuccess: null,
       healthy: true,
+      feedbackSuccesses: 0,
+      feedbackFailures: 0,
+      lastFeedbackFailure: null,
+      lastFeedbackSuccess: null,
+      feedbackHealthy: true,
     });
   });
 
@@ -76,5 +81,48 @@ describe('createAgentWorkerStatus', () => {
     status.recordDispatchSuccess('room-1');
     status.recordDispatchFailure('room-2', new Error('boom'));
     expect(status.getStatus().healthy).toBe(false);
+  });
+
+  // N1 (audit comparison, 2026-07-29): a separate set of counters for
+  // feedback generation's own dispatch health -- parallel to the
+  // transcription counters above, but tracked independently since feedback
+  // has no "active" concept and its failure is only recorded once retries
+  // are exhausted (agent/roomSweeper.js), not on every transient attempt.
+  describe('feedback tracking', () => {
+    it('records a successful feedback generation, correlated to its room', () => {
+      const status = createAgentWorkerStatus();
+      status.recordFeedbackSuccess('room-1');
+      const s = status.getStatus();
+      expect(s.feedbackSuccesses).toBe(1);
+      expect(s.lastFeedbackSuccess).toMatchObject({ roomId: 'room-1' });
+      expect(s.feedbackHealthy).toBe(true);
+    });
+
+    it('records a feedback failure and flips feedbackHealthy to false', () => {
+      const status = createAgentWorkerStatus();
+      status.recordFeedbackFailure('room-1', new Error('exhausted retries'));
+      const s = status.getStatus();
+      expect(s.feedbackFailures).toBe(1);
+      expect(s.lastFeedbackFailure).toMatchObject({ roomId: 'room-1', message: 'exhausted retries' });
+      expect(s.feedbackHealthy).toBe(false);
+    });
+
+    it('reports feedbackHealthy again once a later success follows an earlier failure', () => {
+      const status = createAgentWorkerStatus();
+      status.recordFeedbackFailure('room-1', new Error('boom'));
+      status.recordFeedbackSuccess('room-2');
+      const s = status.getStatus();
+      expect(s.feedbackHealthy).toBe(true);
+      expect(s.feedbackFailures).toBe(1);
+    });
+
+    it('keeps transcription and feedback health independent of one another', () => {
+      const status = createAgentWorkerStatus();
+      status.recordDispatchFailure('room-1', new Error('livekit down'));
+      status.recordFeedbackSuccess('room-1');
+      const s = status.getStatus();
+      expect(s.healthy).toBe(false);
+      expect(s.feedbackHealthy).toBe(true);
+    });
   });
 });

@@ -50,3 +50,9 @@ jobs:
           echo "$status"
           echo "$status" | jq -e '.healthy == true' > /dev/null \
             || { echo "::error::Transcription agent is reporting an unhealthy dispatch (see .lastFailure above) -- a room may have gone live with no transcription."; exit 1; }
+          # N1 (audit comparison, 2026-07-29): feedback generation now retries
+          # with backoff, but if it exhausts every attempt for a room, that's
+          # exactly the kind of silent, permanent failure this workflow exists
+          # to surface -- same "check .healthy" pattern, parallel counter.
+          echo "$status" | jq -e '.feedbackHealthy == true' > /dev/null \
+            || { echo "::error::Feedback generation is reporting a permanently failed room (see .lastFeedbackFailure above) after exhausting its retries."; exit 1; }

@@ -109,3 +109,59 @@ export async function updateRoomStatus(
   if (error) throw error;
   return data;
 }
+
+// N1 (audit comparison, 2026-07-29): every ended room still missing
+// feedback, for the sweep's retry pass. Only filters cheaply on status +
+// feedback_generated_at -- the actual "is a retry due right now" judgment
+// (age, attempt count, backoff) is domain/roomSweep.js's
+// findRoomsReadyForFeedbackRetry, same split as listLiveRooms/
+// findExpiredLiveRooms above. Newest-ended-first and bounded (M9
+// discipline) so a large backlog of old, likely-unfixable rooms can't
+// crowd out fresh, actionable failures within the limit.
+const MAX_FEEDBACK_RETRY_CANDIDATES = 100;
+
+export async function listRoomsNeedingFeedbackRetry({ supabase = getSupabase() } = {}) {
+  const { data, error } = await supabase
+    .from('rooms')
+    .select('id, ended_at, feedback_attempts, feedback_last_attempted_at')
+    .eq('status', 'ended')
+    .is('feedback_generated_at', null)
+    .order('ended_at', { ascending: false })
+    .limit(MAX_FEEDBACK_RETRY_CANDIDATES);
+  if (error) throw error;
+  return data ?? [];
+}
+
+// Claims one feedback attempt for a room, atomically -- same conditional-
+// update contract as updateRoomStatus's expectedStatus (C3, audit
+// 2026-07-28): the write only lands if feedback_attempts still matches
+// what the caller last read, so if the sweeper's setInterval tick overlaps
+// itself (a slow Gemini call outliving the 3s interval) or the "just
+// ended this tick" and "found via the retry query" paths ever collide on
+// the same room, only one of them actually calls Gemini. Returns the
+// updated row (with the new attempt count) or null when the claim was
+// already taken.
+export async function claimFeedbackAttempt(
+  id,
+  { expectedAttempts, at },
+  { supabase = getSupabase() } = {}
+) {
+  const { data, error } = await supabase
+    .from('rooms')
+    .update({ feedback_attempts: expectedAttempts + 1, feedback_last_attempted_at: at })
+    .eq('id', id)
+    .eq('feedback_attempts', expectedAttempts)
+    .select('id, feedback_attempts')
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+// Marks a room's feedback as fully generated -- every participant has a
+// persisted row -- so the retry query above stops finding it. No
+// precondition needed: only the caller that actually won the attempt
+// claim reaches this call.
+export async function markFeedbackGenerated(id, { at }, { supabase = getSupabase() } = {}) {
+  const { error } = await supabase.from('rooms').update({ feedback_generated_at: at }).eq('id', id);
+  if (error) throw error;
+}

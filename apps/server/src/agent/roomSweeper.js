@@ -6,22 +6,102 @@
 // recoverLiveRooms(): nothing here may throw, since it runs unattended on an
 // interval -- a database hiccup should just mean this tick did nothing,
 // not a crashed process.
-import { listLiveRooms, updateRoomStatus } from '../db/rooms.js';
-import { findExpiredLiveRooms } from '../domain/roomSweep.js';
+import {
+  listLiveRooms,
+  updateRoomStatus,
+  listRoomsNeedingFeedbackRetry,
+  claimFeedbackAttempt,
+  markFeedbackGenerated,
+} from '../db/rooms.js';
+import { findExpiredLiveRooms, findRoomsReadyForFeedbackRetry, FEEDBACK_RETRY_MAX_ATTEMPTS } from '../domain/roomSweep.js';
 import { generateAndPersistFeedbackForRoom } from './feedbackWorker.js';
+import { getAgentWorkerStatus } from './roomAgent.js';
+
+// N1 (audit comparison, 2026-07-29): one feedback attempt for one room --
+// used both right after a room ends and on a later retry, since a retry is
+// exactly the same operation with a non-zero starting attempt count. Claims
+// the attempt atomically first (same conditional-update contract as
+// updateRoomStatus's expectedStatus, C3 audit 2026-07-28): if this room's
+// attempt was already claimed by an overlapping sweep tick, or by the other
+// dispatch path finding the same room in the same tick, the claim simply
+// doesn't match and this call does nothing. Never throws -- every failure
+// path is logged and swallowed, since this always runs fire-and-forget from
+// sweepExpiredRooms below.
+async function attemptFeedback(
+  roomId,
+  previousAttempts,
+  now,
+  { generateFeedbackFn, claimFeedbackAttemptFn, markFeedbackGeneratedFn, agentStatus }
+) {
+  const at = new Date(now).toISOString();
+
+  let claim;
+  try {
+    claim = await claimFeedbackAttemptFn(roomId, { expectedAttempts: previousAttempts, at });
+  } catch (err) {
+    console.error(`[feedback] failed to claim a retry attempt for room ${roomId}: ${err.message}`);
+    return;
+  }
+  if (!claim) return; // someone else already claimed this attempt
+
+  let complete = false;
+  let failure = null;
+  try {
+    const result = await generateFeedbackFn(roomId);
+    complete = Boolean(result?.complete);
+    if (!complete) failure = new Error('one or more participants did not receive feedback');
+  } catch (err) {
+    failure = err;
+  }
+
+  if (complete) {
+    try {
+      await markFeedbackGeneratedFn(roomId, { at });
+    } catch (err) {
+      console.error(`[feedback] failed to record completion for room ${roomId}: ${err.message}`);
+    }
+    agentStatus.recordFeedbackSuccess(roomId);
+    return;
+  }
+
+  console.error(`[feedback] attempt ${claim.feedback_attempts} failed for room ${roomId}: ${failure.message}`);
+  // Only report a health failure once retries are actually exhausted --
+  // a transient blip that resolves on the next attempt a minute later
+  // shouldn't page anyone, same "recency over count" philosophy as the
+  // transcription tracker's `healthy` flag.
+  if (claim.feedback_attempts >= FEEDBACK_RETRY_MAX_ATTEMPTS) {
+    console.error(`[feedback] giving up on room ${roomId} after ${claim.feedback_attempts} attempts`);
+    agentStatus.recordFeedbackFailure(roomId, failure);
+  }
+}
 
 export async function sweepExpiredRooms({
   listLiveRoomsFn = listLiveRooms,
   updateRoomStatusFn = updateRoomStatus,
   generateFeedbackFn = generateAndPersistFeedbackForRoom,
+  listRoomsNeedingFeedbackRetryFn = listRoomsNeedingFeedbackRetry,
+  claimFeedbackAttemptFn = claimFeedbackAttempt,
+  markFeedbackGeneratedFn = markFeedbackGenerated,
+  agentStatus = getAgentWorkerStatus(),
   now = Date.now(),
 } = {}) {
+  const feedbackDeps = { generateFeedbackFn, claimFeedbackAttemptFn, markFeedbackGeneratedFn, agentStatus };
+  // Every feedback attempt this tick dispatches, collected rather than
+  // awaited one at a time -- a slow Gemini call for one room must not
+  // delay ending or retrying any other room in this same tick. Settled
+  // together at the end so this function's own promise reflects "this
+  // tick's work is done" (useful for tests and for anything that ever
+  // wants to observe tick completion) without changing when the *next*
+  // tick fires -- startRoomSweeper's setInterval already doesn't wait on
+  // the previous tick's promise either way.
+  const pendingFeedback = [];
+
   let liveRooms;
   try {
     liveRooms = await listLiveRoomsFn();
   } catch (err) {
     console.error(`[sweep] could not read live rooms: ${err.message}`);
-    return;
+    liveRooms = [];
   }
 
   const expired = findExpiredLiveRooms(liveRooms, now);
@@ -43,15 +123,41 @@ export async function sweepExpiredRooms({
     }
 
     // Losing the claim is normal, not an error -- someone else already
-    // ended this room. Fire-and-forget, same reasoning as the route this
-    // replaced: generating feedback is real LLM network time, and a
-    // failure here must not stop the rest of this tick's sweep.
+    // ended this room.
     if (claimed) {
-      generateFeedbackFn(room.id).catch((e) =>
-        console.error(`[feedback] failed to generate feedback for room ${room.id}: ${e.message}`)
+      pendingFeedback.push(
+        attemptFeedback(room.id, claimed.feedback_attempts ?? 0, now, feedbackDeps).catch((e) =>
+          console.error(`[feedback] unexpected error dispatching room ${room.id}: ${e.message}`)
+        )
       );
     }
   }
+
+  // N1 (audit comparison, 2026-07-29): separately, retry every already-
+  // `ended` room whose feedback never completed -- covers a process
+  // crash/redeploy between the claim above and Gemini returning, and a
+  // Gemini outage that failed every participant on the very first
+  // attempt (this happened for real: PROGRESS.md's 2026-07-29 B7 entry
+  // records a dead Gemini service account 401ing both participants of a
+  // real session, with no way to ever regenerate that room's feedback
+  // before this fix).
+  let retryCandidates = [];
+  try {
+    retryCandidates = await listRoomsNeedingFeedbackRetryFn();
+  } catch (err) {
+    console.error(`[feedback] could not read feedback retry candidates: ${err.message}`);
+  }
+
+  const dueForRetry = findRoomsReadyForFeedbackRetry(retryCandidates, now);
+  for (const room of dueForRetry) {
+    pendingFeedback.push(
+      attemptFeedback(room.id, room.feedback_attempts ?? 0, now, feedbackDeps).catch((e) =>
+        console.error(`[feedback] unexpected error retrying room ${room.id}: ${e.message}`)
+      )
+    );
+  }
+
+  await Promise.allSettled(pendingFeedback);
 }
 
 // Runs sweepExpiredRooms on a timer. Returns a stop function so index.js

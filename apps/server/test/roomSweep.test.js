@@ -7,7 +7,13 @@
 // (no DB) for the same reason domain/roomRecovery.js is -- the expiry rule
 // is the part worth testing in isolation, not the orchestration around it.
 import { describe, it, expect } from 'vitest';
-import { findExpiredLiveRooms } from '../src/domain/roomSweep.js';
+import {
+  findExpiredLiveRooms,
+  findRoomsReadyForFeedbackRetry,
+  FEEDBACK_RETRY_MAX_ATTEMPTS,
+  FEEDBACK_RETRY_BACKOFF_MS,
+  FEEDBACK_RETRY_MAX_AGE_MS,
+} from '../src/domain/roomSweep.js';
 
 const NOW = Date.parse('2026-07-29T10:00:00.000Z');
 
@@ -53,5 +59,69 @@ describe('findExpiredLiveRooms', () => {
 
   it('handles an empty room list', () => {
     expect(findExpiredLiveRooms([], NOW)).toEqual([]);
+  });
+});
+
+// N1 (audit comparison, 2026-07-29): a room's one feedback dispatch used to
+// be permanent -- an ended room that never got feedback (a crash mid-call,
+// or Gemini failing every participant, both of which have actually
+// happened) was never revisited. This is the pure decision behind the
+// retry pass: given every ended room the DB still says is missing
+// feedback and the server's clock, which are actually due for another
+// attempt right now.
+function endedRoom(overrides = {}) {
+  return {
+    id: 'room-1',
+    ended_at: new Date(NOW - 5_000).toISOString(),
+    feedback_attempts: 0,
+    feedback_last_attempted_at: null,
+    ...overrides,
+  };
+}
+
+describe('findRoomsReadyForFeedbackRetry', () => {
+  it('includes a room with zero attempts and no prior attempt timestamp', () => {
+    expect(findRoomsReadyForFeedbackRetry([endedRoom()], NOW)).toEqual([endedRoom()]);
+  });
+
+  it('excludes a room that already reached the max attempt count', () => {
+    const room = endedRoom({ feedback_attempts: FEEDBACK_RETRY_MAX_ATTEMPTS });
+    expect(findRoomsReadyForFeedbackRetry([room], NOW)).toEqual([]);
+  });
+
+  it('excludes a room whose last attempt was too recent (still backing off)', () => {
+    const room = endedRoom({
+      feedback_attempts: 1,
+      feedback_last_attempted_at: new Date(NOW - 1_000).toISOString(),
+    });
+    expect(findRoomsReadyForFeedbackRetry([room], NOW)).toEqual([]);
+  });
+
+  it('includes a room whose backoff window has fully elapsed', () => {
+    const room = endedRoom({
+      feedback_attempts: 1,
+      feedback_last_attempted_at: new Date(NOW - FEEDBACK_RETRY_BACKOFF_MS - 1).toISOString(),
+    });
+    expect(findRoomsReadyForFeedbackRetry([room], NOW)).toEqual([room]);
+  });
+
+  it('excludes a room that ended too long ago to still be worth auto-retrying', () => {
+    const room = endedRoom({ ended_at: new Date(NOW - FEEDBACK_RETRY_MAX_AGE_MS - 1).toISOString() });
+    expect(findRoomsReadyForFeedbackRetry([room], NOW)).toEqual([]);
+  });
+
+  it('excludes a room with no ended_at, rather than guessing an age', () => {
+    const room = endedRoom({ ended_at: null });
+    expect(findRoomsReadyForFeedbackRetry([room], NOW)).toEqual([]);
+  });
+
+  it('respects overridden thresholds', () => {
+    const room = endedRoom({ feedback_attempts: 2 });
+    expect(findRoomsReadyForFeedbackRetry([room], NOW, { maxAttempts: 2 })).toEqual([]);
+    expect(findRoomsReadyForFeedbackRetry([room], NOW, { maxAttempts: 3 })).toEqual([room]);
+  });
+
+  it('handles an empty room list', () => {
+    expect(findRoomsReadyForFeedbackRetry([], NOW)).toEqual([]);
   });
 });

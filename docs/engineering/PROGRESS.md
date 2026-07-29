@@ -2,10 +2,101 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-07-29 (Phase 5 released to `main` on **both**
-remotes — see immediately below; the close-out session, blockers-
+**Last updated:** 2026-07-29 (N1 fix session — see immediately below; the
+Phase 5 release-to-both-remotes, close-out session, blockers-
 investigation, and M4/H6/M10 notes and older context are preserved
 further down)
+
+## N1 fix — feedback generation retry (2026-07-29, after the independent audit comparison)
+
+A second, independent audit (`docs/engineering/AUDIT_COMPARISON_2026-07-29.md`,
+run against `main` after the Phase 5 close-out below) found the most
+serious gap the 2026-07-28 audit's own remediation work had missed: **N1**
+— feedback generation had no retry and no persisted record of whether it
+ever completed. `agent/roomSweeper.js` (M10's replacement for the old
+GET-with-side-effects route) dispatched exactly one feedback attempt per
+room, fire-and-forget, the moment a room's status flipped to `ended`. If
+that one attempt failed — a process crash/redeploy mid-call, or Gemini
+erroring for every participant — the room's feedback was gone forever,
+because `ended` rooms are dropped from `listLiveRooms()` and nothing ever
+looked at them again. **This wasn't hypothetical: it already happened**,
+per this file's own 2026-07-29 B7 entry — a dead Gemini service account
+401'd both participants of a real session, and there was no way to
+regenerate that room's feedback afterward.
+
+Picked up per direct user instruction to implement this one finding only
+(no re-auditing, no scope creep into the comparison doc's other findings).
+
+- **Schema (migration `0012_rooms_feedback_retry_tracking.sql`, not yet
+  run against the live project):** three new nullable/defaulted columns on
+  `rooms` — `feedback_generated_at`, `feedback_attempts`, and
+  `feedback_last_attempted_at`. Additive and safe; existing rows just
+  start as "not yet generated, zero attempts", which is the correct state
+  either way (a genuinely-broken past room gets picked up and retried; a
+  past room that already has complete feedback gets marked done on the
+  very next sweep tick and never touched again).
+- **`domain/roomSweep.js`'s `findRoomsReadyForFeedbackRetry`** (core,
+  tests-first) — the pure decision, same "DB filters cheaply, this decides
+  exactly" split as the existing `findExpiredLiveRooms`. Bounded by
+  attempt count (5), backoff (60s between attempts — deliberately much
+  longer than the 3s sweep interval), and age (24h — a room broken longer
+  than that needs a human, not an infinite auto-retry).
+- **`agent/feedbackWorker.js`'s `generateAndPersistFeedbackForRoom`** now
+  skips participants who already have a persisted feedback row (cheap
+  retries, and avoids hitting `feedback`'s `unique(room_id, user_id)`
+  constraint) and returns `{ complete }` — derived from actual persisted
+  outcomes, not "did the call throw" — instead of void, so the sweeper
+  knows whether to mark the room done or leave it for another attempt.
+- **`agent/roomSweeper.js`** now has two passes per tick: the existing
+  freshly-expired-room pass, and a new pass over already-`ended` rooms
+  still missing feedback. Both funnel through one `attemptFeedback()`
+  helper that claims the attempt atomically first (`db/rooms.js`'s new
+  `claimFeedbackAttempt`, same conditional-update contract as C3's
+  `updateRoomStatus.expectedStatus`) — this is what stops an overlapping
+  sweep tick (a slow Gemini call outliving the 3s interval is plausible
+  for a full room) or the two passes finding the same room in one tick
+  from double-dispatching. On success, `markFeedbackGenerated` stamps
+  `feedback_generated_at` so the retry query stops finding the room. Also
+  refactored to collect each tick's fire-and-forget feedback promises and
+  `Promise.allSettled` them before the tick's own promise resolves —
+  doesn't change any real concurrency guarantee (`startRoomSweeper`'s
+  `setInterval` never waited on the previous tick's promise either way),
+  but makes the sweeper deterministically testable instead of depending on
+  microtask-ordering luck.
+- **`domain/agentWorkerStatus.js`** gained a parallel set of
+  `feedbackSuccesses`/`feedbackFailures`/`lastFeedbackFailure`/
+  `lastFeedbackSuccess`/`feedbackHealthy` counters, exposed on the existing
+  `/health/agent` endpoint alongside the transcription ones. Deliberately
+  only recorded as a *failure* once a room's retries are actually
+  exhausted, not on every transient attempt — a blip that resolves on the
+  next attempt a minute later shouldn't page anyone, same "recency over
+  count" reasoning the transcription tracker's `healthy` flag already
+  uses. `keepalive.yml` now also asserts `feedbackHealthy == true`,
+  alongside the existing `healthy` check, so a permanently-stuck room's
+  feedback shows up as a failed GitHub Actions run the same way a dead
+  transcription dispatch already does.
+- **272/272 server tests green** (was 247) — 25 new tests across
+  `roomSweep.test.js` (the new pure retry-decision function),
+  `roomSweeper.test.js` (rewritten: every existing test updated for the
+  new required mocks, plus new coverage for the retry pass, attempt
+  claiming/collision, and outcome recording), a new `feedbackWorker.test.js`
+  (previously untested — the skip-already-persisted-participants logic and
+  the `{ complete }` contract), and `agentWorkerStatus.test.js`/
+  `health.test.js` (the new feedback counters). `npx oxlint apps/server/src`
+  clean. No `apps/web` changes, so its build/lint weren't re-run.
+- **Not done this session, by design (scope discipline, per direct
+  instruction to implement N1 only):** none of the audit comparison's
+  other 13 new findings (N2–N14) were touched, even ones that looked like
+  quick fixes (e.g. N7's missing `0011` migration-status row, N4's
+  feedback-vs-transcript-flush race). `AUDIT_COMPARISON_2026-07-29.md`
+  itself was read but not modified, per its own "this document is a new
+  artifact... not modified, appended to, or overwritten" note.
+- **Still open:** migration `0012` needs the usual manual Supabase SQL
+  Editor step before the retry pass actually works against the live
+  project (the sweep's existing "never throw" discipline means it
+  degrades gracefully to today's single-attempt behavior until then, not
+  a crash). No PR opened/merged yet — this session only implemented and
+  tested the fix locally.
 
 ## Released to `main` on both remotes, 2026-07-29 (third release of the day)
 

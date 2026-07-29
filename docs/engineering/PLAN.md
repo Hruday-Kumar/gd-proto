@@ -1,6 +1,10 @@
 # PLAN — audit remediation & road to pilot
 
-**Last updated:** 2026-07-29 (Phase 5 close-out — M3, M5, M8, M9, and the
+**Last updated:** 2026-07-29 (N1 fixed — feedback generation now retries
+with backoff instead of failing permanently and silently. This finding is
+from the separate `AUDIT_COMPARISON_2026-07-29.md`, not the 2026-07-28
+`AUDIT.md` this file otherwise tracks. See `PROGRESS.md` for the session
+record. Previous update: Phase 5 close-out — M3, M5, M8, M9, and the
 L-series all done; §4/§5d/§6 updated. This is the last open work from the
 2026-07-28 audit. See `PROGRESS.md` for the session record.)
 
@@ -47,7 +51,7 @@ how it was verified*. Don't duplicate one into the other.
 **Test commands** (from repo root, on Node 22):
 
 ```
-npx vitest run --root apps/server    # 247 tests, all must pass
+npx vitest run --root apps/server    # 272 tests, all must pass
 npx oxlint apps/server/src           # 1 known pre-existing warning (L5)
 npm run build --workspace=apps/web   # must build clean
 ```
@@ -104,6 +108,8 @@ C2) — this only concerns the static frontend build.
 | `0008_rooms_created_by_on_delete_set_null.sql` | ✅ **Confirmed applied — live-tested 2026-07-28** | Re-verified after the user ran it: deleting a scratch user who'd created a room now succeeds (was `23503` FK violation before), and the room survives with `created_by` set to `NULL`. Account deletion (DPDP, guardrail #4) is fixed for real. |
 | `0009_rooms_duration_seconds_bounds.sql` | ✅ **Confirmed applied — live-tested 2026-07-28** | |
 | `0010_tighten_rooms_duration_seconds_bounds.sql` | ✅ **Confirmed applied — live-tested 2026-07-28** | Re-verified after the user ran both: a scratch room now rejects `duration_seconds` updates at both 5000 and 2000 (proving 0010's tighter 1500 ceiling is live, not just 0009's original 3600), and accepts a valid 900. Check constraint `rooms_duration_seconds_bounds` confirmed enforcing 60–1500 in the live DB. |
+| `0011_drop_room_participants_client_insert.sql` | ? | Fix for H8 (audit 2026-07-28) — code/migration file exists, live-application status was never recorded here (flagged as its own gap, N7, by `AUDIT_COMPARISON_2026-07-29.md`; out of scope for the N1 fix below). |
+| `0012_rooms_feedback_retry_tracking.sql` | ☐ **Not yet run** | N1 fix (`AUDIT_COMPARISON_2026-07-29.md`): adds `rooms.feedback_generated_at`/`feedback_attempts`/`feedback_last_attempted_at`. Additive/nullable, safe to run any time. Until it's run, the sweeper's new retry queries (`listRoomsNeedingFeedbackRetry`/`claimFeedbackAttempt`/`markFeedbackGenerated` in `db/rooms.js`) will fail against the live project (caught and logged, per the "never throw" sweep discipline — feedback dispatch degrades back to today's single-attempt behavior, not a crash). |
 
 ---
 
@@ -114,6 +120,7 @@ Audit findings closed, newest first. Evidence and root causes are in
 
 | ID | What | Where |
 |---|---|---|
+| **N1** (`AUDIT_COMPARISON_2026-07-29.md`) | Feedback generation had no retry and no persisted record of completion — a crash mid-call or a Gemini outage (this happened for real: a dead service account 401'd every participant of a real session, see `PROGRESS.md`'s 2026-07-29 B7 entry) meant that room's feedback was gone forever, since `ended` rooms are dropped from the live-room sweep and nothing ever revisited them. Fixed: the sweeper now also retries any `ended` room still missing feedback, bounded by attempt count (5), backoff (60s), and age (24h) — `domain/roomSweep.js`'s `findRoomsReadyForFeedbackRetry`. Each attempt is claimed atomically (same conditional-update pattern as C3/H7) so overlapping sweep ticks can't double-dispatch. `generateAndPersistFeedbackForRoom` now skips participants who already have persisted feedback and returns `{ complete }` instead of void, so the sweeper knows when to stop retrying a room. A room whose retries are exhausted surfaces on `/health/agent` as `feedbackHealthy: false`, alongside the existing transcription `healthy` flag — `keepalive.yml` now checks both. **Migration `0012` (additive/nullable) still needs the usual manual Supabase SQL Editor step — see §3.** | `agent/roomSweeper.js`, `agent/feedbackWorker.js`, `domain/roomSweep.js`, `domain/agentWorkerStatus.js`, `db/rooms.js`, `db/feedback.js`, migration `0012`, `.github/workflows/keepalive.yml` |
 | **M2** | Global Express error-handling middleware, registered last — an uncaught route error now returns the same JSON `{error}` shape every other endpoint uses (was Express's default HTML error page) with a structured JSON log line, instead of vanishing with nothing logged anywhere the team would see it during a live pilot session | `api/errorHandler.js`, `index.js` |
 | **H1** | `PROGRESS.md`'s transcription-outage write-up corrected to name the real cause (`node:22-slim` missing `ca-certificates`, so `@livekit/rtc-node`'s native Rust engine's HTTPS calls failed deterministically on every attempt) instead of the original "transient region-fetch blip" misdiagnosis; the retry logic stays, reframed as protection against genuine transient failures, not credited with fixing this one | `PROGRESS.md`'s "⚠️ Correction" note, `LESSONS.md`'s Docker entry, `Dockerfile` |
 | **M4** | Production image no longer installs the frontend toolchain (Vite, Tailwind, oxlint, Vitest, Supertest, `@types`) — `apps/web` excluded via `.dockerignore`, `npm ci --omit=dev` instead of a bare `npm ci`. Verified with a real `docker build`/`run`: 929MB → 454MB, 244 → 122 packages, `npm audit` 2 high → 0, `/health` still responds correctly | `Dockerfile`, `.dockerignore` |

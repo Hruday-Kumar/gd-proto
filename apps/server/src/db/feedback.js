@@ -14,6 +14,17 @@ export async function insertFeedback({ roomId, userId, body, model }, { supabase
   return data;
 }
 
+// N1 (audit comparison, 2026-07-29): lets a retried generation skip
+// participants who already have a persisted row -- both for efficiency
+// (no repeat Gemini spend for students who already succeeded) and
+// correctness (feedback has a unique(room_id, user_id) constraint, so
+// re-inserting for someone who already has a row would just fail).
+export async function listFeedbackUserIdsForRoom(roomId, { supabase = getSupabase() } = {}) {
+  const { data, error } = await supabase.from('feedback').select('user_id').eq('room_id', roomId);
+  if (error) throw error;
+  return (data ?? []).map((row) => row.user_id);
+}
+
 export async function getFeedbackForRoomAndUser(roomId, userId, { supabase = getSupabase() } = {}) {
   const { data, error } = await supabase
     .from('feedback')
