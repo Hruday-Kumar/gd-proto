@@ -9,6 +9,7 @@ import express from 'express';
 import request from 'supertest';
 import { createRoomsRouter } from '../src/api/rooms.js';
 import { createLlmRateLimiter } from '../src/api/rateLimit.js';
+import { CURRENT_CONSENT_VERSION } from '../src/domain/consent.js';
 
 function stubAuth(userId) {
   return (req, _res, next) => {
@@ -51,7 +52,7 @@ function baseDeps(overrides = {}) {
     minGroupSize: 3,
     maxGroupSize: 6,
     isParticipant: vi.fn().mockResolvedValue(true),
-    getLatestConsent: vi.fn().mockResolvedValue({ consent_version: 1 }),
+    getLatestConsent: vi.fn().mockResolvedValue({ consent_version: CURRENT_CONSENT_VERSION }),
     mintTokenFn: vi.fn().mockResolvedValue('signed.jwt.token'),
     liveKitUrl: 'wss://example.livekit.cloud',
     startTranscriptionFn: vi.fn().mockResolvedValue(undefined),
