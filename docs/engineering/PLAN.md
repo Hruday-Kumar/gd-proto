@@ -198,24 +198,25 @@ now fully complete.** Next up per the roadmap: Phase 5 (§5d).
 
 ## 6. Blocked on a human — not code
 
-These cannot be finished by working in the repo. They are the actual
-remaining distance to real students in a live room.
-
-**Updated 2026-07-29 (third pass, same day) — B1, B3, B4, B7 are all now
-DONE.** A session investigating these blockers found a real, live, healthy
-deploy already existed (frontend on Vercel, backend on Render as service
-`gd-proto-1`) that neither this file nor `PROGRESS.md` had ever recorded —
-origin unclear, possibly a teammate. B1/B3's gaps (CORS, Confirm email)
-were fixed by the user and re-verified live. B4 was then tested directly
-(idle wait + real room) and passed. B7 was run as a real two-person
-walkthrough on `gd-proto-web.vercel.app` (**not** `placeme.study` — see
-the new follow-up row below, that domain is misconfigured) and **caught a
-real, previously-undetected production bug**: the live `GEMINI_API_KEY`'s
-backing Google Cloud service account was deleted/disabled, so 100% of
-feedback generation was failing with a 401 (and would have silently done
-the same for Gemini-generated topics). User rotated the key; re-verified
-directly against Gemini's API (200 OK) and with a second real room that
-generated feedback successfully. Full detail in `PROGRESS.md`.
+**✅ Section fully cleared, 2026-07-29.** Every row below is now done —
+this table drove an entire session's worth of real-deploy verification,
+not just dashboard checkbox-ticking. Kept in full (rather than deleted)
+as the record of what was actually checked and how, per this file's own
+"PROGRESS.md says why and how it was verified" convention. Summary: a
+real, live, healthy deploy already existed (frontend on Vercel, backend
+on Render as service `gd-proto-1`) that neither this file nor
+`PROGRESS.md` had ever recorded — origin unclear, possibly a teammate.
+B1/B3's gaps (CORS, Confirm email) were fixed by the user and re-verified
+live. B4 (Render sleep risk) and H2 (boot recovery) were both tested
+directly against a real live room and passed. B7's real two-person
+walkthrough **caught a real, previously-undetected production bug**: the
+live `GEMINI_API_KEY`'s backing Google Cloud service account was
+deleted/disabled, so 100% of feedback generation was failing with a 401.
+User rotated the key; re-verified directly against Gemini's API (200 OK)
+and with a second real room that generated feedback successfully. The
+`placeme.study` domain question and the AssemblyAI trial-credit question
+were both resolved as direct user decisions, not code changes. Full
+detail in `PROGRESS.md`.
 
 | ✅ | ID | Task | Owner | Why it's blocked |
 |---|---|---|---|---|
@@ -225,7 +226,7 @@ generated feedback successfully. Full detail in `PROGRESS.md`.
 | ✅ | **B7** | Guardrail #1 human gate for the UI/live-room/flows work | — | **DONE, 2026-07-29.** Two real people, two real devices, a real room on the deployed stack (`gd-proto-web.vercel.app`), real conversation. Transcription and speaker attribution both confirmed correct by the user. **Also caught a real bug** — see the Gemini key incident above/in `PROGRESS.md` — fixed and re-verified with a second live room before calling this done. |
 | ✅ | — | `placeme.study` custom domain points at a *different* Vercel project (`waitlist`) | — | **Confirmed intentional with the user, 2026-07-29** — pre-launch landing page, not a misconfiguration. `gd-proto-web.vercel.app` is the correct URL for the app until public launch. |
 | ✅ | — | Exercise H2's recovery path against a genuinely live room | — | **DONE, PASS, 2026-07-29.** Real room started, service restarted mid-discussion (`render restart`): logs show the new instance's boot recovery re-attached the room with time remaining within 2 seconds of boot, while the old instance's own shutdown log (stopping its transcription) arrived in the same log window — no gap. Both participants confirmed the final transcript was complete despite the restart and a page reload mid-session. One transient artifact noted, not a bug — see `PROGRESS.md`. |
-| ☐ | — | Revoke the old `DEEPGRAM_API_KEY` in the Deepgram dashboard | — | Removed from `.env`; the key itself is still live. |
+| ✅ | — | Revoke the old `DEEPGRAM_API_KEY` in the Deepgram dashboard | — | **DONE, 2026-07-29** — user deleted it from the Deepgram dashboard. Already removed from `.env` (S2, pilot-readiness pass); now fully dead. |
 | ✅ | — | AssemblyAI trial credit will run out | — | **DECIDED, 2026-07-29** — open a fresh trial account rather than add a card, per direct user instruction. See ADR-0002's "Payment decision — RESOLVED" section. Nothing to action until the current $50 credit is actually spent. |
 
 ---

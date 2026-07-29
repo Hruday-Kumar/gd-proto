@@ -176,6 +176,20 @@ surprises:
     confusing error message mid-restart. Not chasing this further; it's a
     narrow, self-resolving race window inherent to any rolling restart,
     not specific to this app's CORS config.
+- **Fourth and final follow-up, same day: the last two minor items
+  closed.** AssemblyAI's trial-credit question (deferred since ADR-0002)
+  was put to the user directly — decision: open a fresh trial account
+  when the current $50 credit runs out, not add a card, staying
+  card-free longer at the cost of account-rotation overhead later.
+  Recorded in ADR-0002 as a resolution superseding the 2026-07-25
+  deferral. The user then confirmed the old `DEEPGRAM_API_KEY` was
+  deleted from the Deepgram dashboard directly (no CLI/API access to
+  Deepgram existed in this session to do it any other way, and the key
+  itself was already out of `.env`, so there was nothing more to verify
+  from this side beyond the user's confirmation). **`PLAN.md` §6 is now
+  fully cleared — every row is done.** Per direct user instruction, held
+  off starting Phase 5 (§5d) at the end of this session; next session
+  should pick up there once the user gives the go-ahead.
 
 ## Released to `main`, 2026-07-29
 
