@@ -2,10 +2,222 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-07-29 (audit Phase 4: closed out H1 + M4, see the
-new subsection immediately below; older "Last updated" context — doc-sync +
-Vercel frontend decision, after audit remediation Phase 2 reliability and
-an undocumented second-session merge — is preserved further down)
+**Last updated:** 2026-07-29 (blockers-investigation session — see the note
+immediately below; the M4/H6/M10 release note and older context are
+preserved further down)
+
+## Blockers investigation (PLAN.md §6), 2026-07-29
+
+Picked up per direct user instruction ("steer and complete the blockers
+issue before proceeding with other tasks of phase 5"). Went through B1,
+B3, B4, B7 one at a time using live checks rather than trusting what
+`PLAN.md` said, since that table hadn't been touched in a while. Two real
+surprises:
+
+- **B1 (deploy) was far more done than documented — a live deploy already
+  existed that no doc mentioned.** Found via `render` CLI (already
+  authenticated on this machine as `place.me.study1@gmail.com`) and
+  `npx vercel ls`/`vercel env ls`/`vercel domains ls`:
+  - **Frontend:** Vercel project `gd-proto-web`, custom domain
+    `placeme.study` registered and wired (308 redirect confirmed),
+    `gd-proto-web.vercel.app` also live (200), all three `VITE_*` env vars
+    set for Production. Origin unknown — doesn't match anything in this
+    file's history, most likely a teammate working outside a recorded
+    session, per `PLAN.md`'s "two people work this repo" note. Left
+    untouched per direct user instruction, since it might be someone
+    else's in-progress work.
+  - **Backend:** three Render services existed, not one. `gd-proto` and
+    `placeme-server` were both already suspended by a user and both
+    pointed at the stale `Hruday-Kumar/gd-proto` repo — dead ends, not
+    referenced by anything live. **`gd-proto-1` was the real one:** live,
+    healthy (`/health` → `{"status":"ok"}`, `/health/agent` →
+    `healthy: true`), tracking `placemestudy1/gd-proto`'s `main` branch
+    with auto-deploy on, last deployed automatically 2026-07-29T06:30Z —
+    literally the same session that merged the M4/H6/M10 release
+    (`805031c`). It wasn't created from `render.yaml`'s Blueprint (it'd be
+    named `placeme-server` if so) — a direct "New Web Service" import
+    instead, functionally equivalent.
+  - **Fixed this session:** `RENDER_APP_URL` GitHub Actions variable was
+    never set, so `keepalive.yml` had been silently no-op'ing every run
+    (visible in its own "success" status — the workflow's no-op path
+    always exits 0, so a green checkmark didn't mean it was actually
+    pinging anything). Set it to `https://gd-proto-1.onrender.com` via
+    `gh variable set`, then manually triggered the workflow once to
+    confirm: it pinged real `/health` and `/health/agent` and both came
+    back healthy. **Deleted the two stale/suspended services** (per
+    explicit user confirmation) since they were confusing dead weight on
+    the wrong repo.
+  - **Found, not yet fixed — needs the user's Render dashboard access:**
+    `ALLOWED_ORIGINS` is not set on `gd-proto-1`. Verified directly with a
+    real CORS preflight (`OPTIONS` + `Origin` header) against both
+    `https://placeme.study` and `https://gd-proto-web.vercel.app` — no
+    `Access-Control-Allow-Origin` came back for either, while the same
+    request with `Origin: http://localhost:5173` correctly got one. This
+    means **the live deployed frontend cannot successfully call the API
+    right now** — it loads, but every request fails client-side. This is
+    the one concrete thing standing between "deploy exists" and "deploy
+    actually works." See `DEPLOYMENT.md`'s new status section for the
+    exact value to set.
+- **B3 confirmed still open, checked live rather than assumed:** hit the
+  Supabase project's public `/auth/v1/settings` endpoint directly (needs
+  only the anon/publishable key, already in `apps/server/.env`) —
+  `mailer_autoconfirm: true`, so "Confirm email" is still off, exactly as
+  `PLAN.md` said. No change possible from here (needs the Supabase
+  dashboard); confirmed the exact toggle location in `DEPLOYMENT.md`.
+- **B4 and B7 are genuinely still blocked**, both now unblocked-in-principle
+  by B1's backend being live (B4 needs a real idle-then-room test against
+  it; B7 needs real humans on real devices, and can't meaningfully run
+  against the deployed stack until the CORS fix lands) but neither attempted
+  this session — both need the user directly.
+- Updated `DEPLOYMENT.md` throughout to match reality: Vercel replaces the
+  stale Cloudflare Pages instructions, `placemestudy1/gd-proto` replaces
+  the stale `Hruday-Kumar/gd-proto` repo reference, and a new "Status as of
+  2026-07-29" section at the top records exactly what's live vs. still
+  needed so the next session doesn't have to re-discover any of this.
+  `PLAN.md` §6 updated to match.
+- **Follow-up, same day:** the user made both dashboard changes
+  (`ALLOWED_ORIGINS` on Render, Supabase "Confirm email" ON) and asked for
+  re-verification. Re-ran the identical live checks from earlier in this
+  session: a real CORS preflight from both `https://placeme.study` and
+  `https://gd-proto-web.vercel.app` now returns a correct
+  `Access-Control-Allow-Origin` header (previously neither did), and
+  `/auth/v1/settings` now reports `mailer_autoconfirm: false` (previously
+  `true`). **B1 and B3 are both DONE as of this update** — see `PLAN.md`
+  §6. Didn't touch the Vercel project's settings at all, per direct user
+  instruction, since its origin is unconfirmed and might be a teammate's
+  active work.
+- **Second follow-up, same day: B4 and B7 both run for real, and B7 caught
+  a genuine production incident.**
+  - **B4 (Render sleep risk) — PASS.** Disabled the keepalive GitHub
+    Actions workflow, recorded a baseline `/health/agent` check at 07:14
+    UTC, waited 18 minutes with deliberately zero traffic, then had the
+    user start a real room. Result: `dispatchSuccesses: 1,
+    dispatchFailures: 0` — the transcription agent connected successfully
+    right after the idle window. **Bonus finding from the Render logs:**
+    the process never actually restarted during the idle window at all —
+    continuously up since its last deploy, no cold-start observed. This is
+    more reassuring than ADR-0007's assumption (written expecting a
+    15-minute sleep timer to bite); worth treating as one good data point,
+    not a guarantee the free tier never sleeps. Re-enabled the keepalive
+    workflow immediately after the test — it must not be left disabled.
+  - **B7 (guardrail #1 human gate) — real two-person walkthrough,
+    caught a real bug.** First attempt used `https://placeme.study`, which
+    turned out to show a waitlist page — investigated and found the custom
+    domain is attached to a *different* Vercel project (`waitlist`, last
+    deployed ~20 days before this session), not `gd-proto-web`. Switched
+    to `https://gd-proto-web.vercel.app`, the actual working deployed URL.
+    Two real people, two real devices, a real room, real conversation —
+    **user confirmed transcription and speaker attribution were both
+    correct**, satisfying guardrail #1's specific requirement.
+  - **Then feedback got stuck "Generating…" for 5+ minutes.** Checked the
+    Render logs directly rather than guessing: `[feedback] generation
+    failed for user ... Gemini API error: 401 {"message": "The bound
+    service account is deleted or disabled. The service account bound to
+    the API key must be active."}` — for **both** participants. Reproduced
+    independently by calling Gemini's API directly with the same key
+    (also 401), and confirmed the identical key is used both locally
+    (`apps/server/.env`) and on the deployed Render service — so this
+    wasn't a Render-config mismatch, the actual Google Cloud service
+    account backing the API key had been deleted or disabled. **This
+    would have silently broken feedback for every real student session**
+    (and Gemini-generated topics, though that path wasn't exercised this
+    time) — a genuinely serious, previously-undetected production bug
+    that a real human test caught before real students would have.
+  - **User rotated the key in Google AI Studio.** Verified the fix two
+    independent ways before calling it done: (1) a direct call to
+    Gemini's `generateContent` endpoint with the new key returned `200
+    OK`, and (2) `render deploys list` confirmed a fresh manual deploy
+    at 07:50–07:51 UTC (env var saves trigger an auto-redeploy on
+    Render), consistent with the dashboard update. Then, rather than
+    trust indirect evidence alone for something guardrail #1 cares about,
+    **ran a second real room end-to-end** — feedback generated
+    successfully this time, no error lines in the logs, user confirmed
+    visually. **B4 and B7 are both DONE.**
+  - **Not fixed, flagged as a new follow-up:** `placeme.study`'s Vercel
+    domain mapping. Needs a decision (repoint it at `gd-proto-web`, or
+    it's meant for something else entirely) plus dashboard access — not
+    attempted here since it's not this session's call to make.
+  - `PLAN.md` §6 and `DEPLOYMENT.md` both updated to record all of the
+    above — see their own change history rather than duplicating detail
+    here.
+- **Third follow-up, same day: `placeme.study` confirmed intentional, and
+  H2's recovery path exercised for real.**
+  - **`placeme.study` → `waitlist` is deliberate, not a bug.** Asked the
+    user directly rather than assuming; it's the intended pre-launch
+    public landing page. `gd-proto-web.vercel.app` stays the working URL
+    for the app until public launch. No code/config change — just closed
+    out the open question from the earlier follow-up.
+  - **H2 (boot recovery of live rooms) — exercised against a genuinely
+    live room for the first time, PASS.** Recorded a baseline
+    (`activeRooms: 0`), had the user start a real room, confirmed
+    `activeRooms: 1` and a fresh dispatch, then ran `render restart` on
+    the live service mid-discussion. Render logs show the sequence
+    cleanly: new instance boots at 08:15:01, its boot-recovery scan
+    re-attaches the live room "with 166s remaining" by 08:15:03, and the
+    *old* instance's own graceful-shutdown log (stopping its one active
+    transcription) lands in the same window — the design this code was
+    built for (`domain/roomRecovery.js`'s remaining-time arithmetic,
+    `PROGRESS.md`'s 2026-07-28 H2 entry) working exactly as intended
+    against real traffic for the first time.
+  - **One transient artifact, not a bug:** a tester's page reload landed
+    in the ~1-2 second window between the old instance stopping and the
+    new one being ready, and got a browser-side CORS error
+    (`No 'Access-Control-Allow-Origin' header`) instead of a clean retry.
+    Root cause isn't a CORS regression — re-checked immediately after and
+    the live preflight against the exact room-status URL came back
+    correct (`access-control-allow-origin: https://gd-proto-web.vercel.app`).
+    What actually happened: the request hit Render's own infrastructure
+    error page during the instance swap, which naturally has none of this
+    app's CORS headers, and the browser reports that as a CORS failure
+    since it can't distinguish "no headers because the app said no" from
+    "no headers because this wasn't the app." **Both participants got the
+    complete, gap-free transcript once the room ended** — the actual
+    guarantee H2 exists to provide held up even though one client saw a
+    confusing error message mid-restart. Not chasing this further; it's a
+    narrow, self-resolving race window inherent to any rolling restart,
+    not specific to this app's CORS config.
+- **Fourth and final follow-up, same day: the last two minor items
+  closed.** AssemblyAI's trial-credit question (deferred since ADR-0002)
+  was put to the user directly — decision: open a fresh trial account
+  when the current $50 credit runs out, not add a card, staying
+  card-free longer at the cost of account-rotation overhead later.
+  Recorded in ADR-0002 as a resolution superseding the 2026-07-25
+  deferral. The user then confirmed the old `DEEPGRAM_API_KEY` was
+  deleted from the Deepgram dashboard directly (no CLI/API access to
+  Deepgram existed in this session to do it any other way, and the key
+  itself was already out of `.env`, so there was nothing more to verify
+  from this side beyond the user's confirmation). **`PLAN.md` §6 is now
+  fully cleared — every row is done.** Per direct user instruction, held
+  off starting Phase 5 (§5d) at the end of this session; next session
+  should pick up there once the user gives the go-ahead.
+
+## Released to `main`, 2026-07-29
+
+PRs #19 (M4), #20 (H6), #21 (M10) merged into `dev`, then `dev` → `main`
+via PR #22 (regular merge commit, matching this repo's existing release
+style) — all per direct user instruction ("approve all prs, push and merge
+to main branch"), the explicit go-ahead `BRANCHING.md` requires before any
+release. CI green on `main` at the release commit (`805031c`). Per
+`BRANCHING.md` step 6b/6c: all three task branches were already deleted at
+PR-merge time (`--delete-branch`); `dev` was then hard-reset to `main`
+(fast-forward, no force actually needed since `dev` was only one commit —
+the release merge itself — behind) — confirmed byte-for-byte identical
+afterward (`git rev-list --left-right --count` → `0 0`).
+
+**One thing discovered and worth recording:** attempting to post a GitHub
+PR *review* (approve/comment) from this session hit a hard wall —
+`gh`'s authenticated identity is the same one that authored the PRs, and
+GitHub disallows self-approval/self-review regardless of tooling. That
+turned out not to matter for actually shipping, though: this repo has no
+branch protection configured (private repo on the free plan can't enable
+it — confirmed via `gh api repos/.../branches/dev/protection` → 403 "
+Upgrade to GitHub Pro"), so `reviewDecision` is empty on every PR and
+`gh pr merge` works directly with no review required. The `pr-review`
+skill's *findings* (drafted in-chat for #19/#20/#21) are still real and
+were still produced; only the "post it to GitHub" step is impossible from
+this identity. Worth knowing for any future session that hits the same
+wall — don't burn time retrying the post, just hand the draft to the user
+directly, and merging doesn't need the review anyway.
 
 ## Phase 4 close-out (2026-07-29)
 

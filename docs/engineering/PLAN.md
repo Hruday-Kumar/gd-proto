@@ -198,18 +198,36 @@ now fully complete.** Next up per the roadmap: Phase 5 (§5d).
 
 ## 6. Blocked on a human — not code
 
-These cannot be finished by working in the repo. They are the actual
-remaining distance to real students in a live room.
+**✅ Section fully cleared, 2026-07-29.** Every row below is now done —
+this table drove an entire session's worth of real-deploy verification,
+not just dashboard checkbox-ticking. Kept in full (rather than deleted)
+as the record of what was actually checked and how, per this file's own
+"PROGRESS.md says why and how it was verified" convention. Summary: a
+real, live, healthy deploy already existed (frontend on Vercel, backend
+on Render as service `gd-proto-1`) that neither this file nor
+`PROGRESS.md` had ever recorded — origin unclear, possibly a teammate.
+B1/B3's gaps (CORS, Confirm email) were fixed by the user and re-verified
+live. B4 (Render sleep risk) and H2 (boot recovery) were both tested
+directly against a real live room and passed. B7's real two-person
+walkthrough **caught a real, previously-undetected production bug**: the
+live `GEMINI_API_KEY`'s backing Google Cloud service account was
+deleted/disabled, so 100% of feedback generation was failing with a 401.
+User rotated the key; re-verified directly against Gemini's API (200 OK)
+and with a second real room that generated feedback successfully. The
+`placeme.study` domain question and the AssemblyAI trial-credit question
+were both resolved as direct user decisions, not code changes. Full
+detail in `PROGRESS.md`.
 
 | ✅ | ID | Task | Owner | Why it's blocked |
 |---|---|---|---|---|
-| ☐ | **B1** | Deploy: Render Blueprint + Cloudflare Pages + `RENDER_APP_URL` | — | Needs dashboard access. `render.yaml` is ready. |
-| ☐ | **B3** | Turn Supabase "Confirm email" back ON | — | Dashboard toggle. Off since W2 testing — anyone can sign up as anyone. |
-| ☐ | **B4** | Render free-tier sleep vs. the agent worker | — | **Highest technical risk.** Needs B1 first: idle >15 min, then start a room and confirm it still gets a transcription agent. |
-| ☐ | **B7** | Guardrail #1 human gate for the UI/live-room/flows work | — | Needs real multiple humans on real devices. Everything so far is solo/headless. |
-| ☐ | — | Exercise H2's recovery path against a genuinely live room | — | Start a room, restart the server mid-discussion, confirm transcription resumes. The 2026-07-28 live check confirmed shutdown + the boot scan, but there were no live rooms to re-attach. |
-| ☐ | — | Revoke the old `DEEPGRAM_API_KEY` in the Deepgram dashboard | — | Removed from `.env`; the key itself is still live. |
-| ☐ | — | AssemblyAI trial credit will run out | — | Card vs. fresh trial account — deferred product decision (ADR-0002). |
+| ✅ | **B1** | Deploy: Render + Vercel + `RENDER_APP_URL` | — | **DONE, 2026-07-29.** Backend live at `https://gd-proto-1.onrender.com` (healthy, tracking `main`, auto-deploy on), frontend live at `gd-proto-web.vercel.app`, `RENDER_APP_URL` set, `ALLOWED_ORIGINS` set and verified working live. |
+| ✅ | **B3** | Turn Supabase "Confirm email" back ON | — | **DONE, 2026-07-29.** Re-verified live: `mailer_autoconfirm: false`. |
+| ✅ | **B4** | Render free-tier sleep vs. the agent worker | — | **DONE, 2026-07-29 — PASS.** Keepalive workflow deliberately disabled, backend left with zero traffic for 18+ min, then a real room started: `dispatchSuccesses: 1, dispatchFailures: 0`. Render logs showed no restart/cold-boot during the idle window at all — the process stayed continuously up, more reassuring than ADR-0007's assumption. Keepalive workflow re-enabled immediately after the test. |
+| ✅ | **B7** | Guardrail #1 human gate for the UI/live-room/flows work | — | **DONE, 2026-07-29.** Two real people, two real devices, a real room on the deployed stack (`gd-proto-web.vercel.app`), real conversation. Transcription and speaker attribution both confirmed correct by the user. **Also caught a real bug** — see the Gemini key incident above/in `PROGRESS.md` — fixed and re-verified with a second live room before calling this done. |
+| ✅ | — | `placeme.study` custom domain points at a *different* Vercel project (`waitlist`) | — | **Confirmed intentional with the user, 2026-07-29** — pre-launch landing page, not a misconfiguration. `gd-proto-web.vercel.app` is the correct URL for the app until public launch. |
+| ✅ | — | Exercise H2's recovery path against a genuinely live room | — | **DONE, PASS, 2026-07-29.** Real room started, service restarted mid-discussion (`render restart`): logs show the new instance's boot recovery re-attached the room with time remaining within 2 seconds of boot, while the old instance's own shutdown log (stopping its transcription) arrived in the same log window — no gap. Both participants confirmed the final transcript was complete despite the restart and a page reload mid-session. One transient artifact noted, not a bug — see `PROGRESS.md`. |
+| ✅ | — | Revoke the old `DEEPGRAM_API_KEY` in the Deepgram dashboard | — | **DONE, 2026-07-29** — user deleted it from the Deepgram dashboard. Already removed from `.env` (S2, pilot-readiness pass); now fully dead. |
+| ✅ | — | AssemblyAI trial credit will run out | — | **DECIDED, 2026-07-29** — open a fresh trial account rather than add a card, per direct user instruction. See ADR-0002's "Payment decision — RESOLVED" section. Nothing to action until the current $50 credit is actually spent. |
 
 ---
 
