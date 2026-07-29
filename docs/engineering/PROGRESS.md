@@ -91,12 +91,21 @@ Picked up per direct user instruction to implement this one finding only
   feedback-vs-transcript-flush race). `AUDIT_COMPARISON_2026-07-29.md`
   itself was read but not modified, per its own "this document is a new
   artifact... not modified, appended to, or overwritten" note.
-- **Still open:** migration `0012` needs the usual manual Supabase SQL
-  Editor step before the retry pass actually works against the live
-  project (the sweep's existing "never throw" discipline means it
-  degrades gracefully to today's single-attempt behavior until then, not
-  a crash). No PR opened/merged yet — this session only implemented and
-  tested the fix locally.
+- **PR #40 opened, reviewed (self-review drafted in chat — same
+  self-approval wall as every prior PR in this repo, see the 2026-07-29
+  release-session note further down; merged directly since this repo has
+  no branch protection), and squash-merged into `dev`. Task branch
+  deleted per `BRANCHING.md`.** 272/272 server tests green on `dev` after.
+- **Migration `0012` confirmed run by the user, 2026-07-29** (same day,
+  shortly after merge) — not independently re-verified against the live
+  schema from this session (no live DB access here), taken on the user's
+  word same as every other migration in this project.
+- **Still open: guardrail #1's real-room check.** The user tried to run
+  one right after the migration but couldn't at that moment ("cant run
+  the room now") — planned for later the same night instead. Until that
+  happens, N1 is code-complete and schema-complete but not yet verified
+  end-to-end against a real session per guardrail #1's letter (see
+  `PLAN.md`'s N1 row in §4, updated to reflect this).
 
 ## Released to `main` on both remotes, 2026-07-29 (third release of the day)
 
