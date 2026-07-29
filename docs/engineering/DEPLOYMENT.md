@@ -172,14 +172,29 @@ Steps below are the from-scratch how-to, kept for reference / redeploy.)**
 
 ## 3. Keep-alive + agent health monitoring
 
-Already built and merged (`.github/workflows/keepalive.yml`): every 10
-minutes it pings `GET /health` (keeps Render's free tier from sleeping,
-per ADR-0007) and checks `GET /health/agent` (W8's dispatch tracker,
+Already built and merged (`.github/workflows/keepalive.yml`): every 5
+minutes (tightened from 10, M5 audit 2026-07-28 — see below) it pings
+`GET /health` (keeps Render's free tier from sleeping, per ADR-0007) and
+checks `GET /health/agent` (W8's dispatch tracker,
 `domain/agentWorkerStatus.js`) — if a transcription dispatch has failed
 more recently than the last successful one, the workflow run fails, and
 GitHub emails the repo's watchers by default. That's the "monitoring/
 alerting on the worker's connection status" ADR-0007's Consequences
 flagged as still needed — no new paid service required.
+
+**M5 (audit 2026-07-28) — real limit, not fully closed by code alone:**
+GitHub's own docs warn scheduled workflows "may be delayed during periods
+of high load" and are auto-disabled after 60 days of repo inactivity.
+This session tightened the cron to every 5 minutes (more margin against
+drift before hitting Render's 15-minute sleep) and added `curl --retry` so
+a single transient network blip within a run doesn't count as a missed
+ping — both free, code-only. **Neither fixes GitHub Actions itself being
+briefly unavailable or auto-disabled** — genuine redundancy against that
+needs an independent, non-GitHub watchdog (e.g. a free
+[UptimeRobot](https://uptimerobot.com) or [cron-job.org](https://cron-job.org)
+monitor hitting `GET /health` every few minutes, no card required for
+either). That needs a dashboard account this session doesn't have — **flag
+for the user, not closed outright.**
 
 **Nothing to do here except step 4 above** (set `RENDER_APP_URL`) — the
 workflow already no-ops safely if that variable isn't set yet.
@@ -216,6 +231,12 @@ it'll start getting 401s once the token is set on Render but not here.
       name — see the secrets checklist and step 3 above. Optional (the
       endpoint stays open until this is set), but closes a minor
       information-disclosure gap on `/health/agent`.
+- [ ] **New (M5, audit 2026-07-28):** sign up for a free
+      UptimeRobot/cron-job.org monitor pinging `GET /health` every few
+      minutes, independent of GitHub Actions — see step 3 above for why.
+      Not a blocker (the GH Actions cron already works, per B4's real
+      test), but the single-point-of-failure gap stays open until this
+      exists.
 
 ## Notes
 
