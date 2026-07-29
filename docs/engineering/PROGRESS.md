@@ -2,10 +2,37 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-07-29 (audit Phase 4: closed out H1 + M4, see the
-new subsection immediately below; older "Last updated" context — doc-sync +
-Vercel frontend decision, after audit remediation Phase 2 reliability and
-an undocumented second-session merge — is preserved further down)
+**Last updated:** 2026-07-29 (M4/H6/M10 shipped to `main` — see the release
+note immediately below; older "Last updated" context — audit Phase 4
+close-out, doc-sync + Vercel frontend decision — is preserved further down)
+
+## Released to `main`, 2026-07-29
+
+PRs #19 (M4), #20 (H6), #21 (M10) merged into `dev`, then `dev` → `main`
+via PR #22 (regular merge commit, matching this repo's existing release
+style) — all per direct user instruction ("approve all prs, push and merge
+to main branch"), the explicit go-ahead `BRANCHING.md` requires before any
+release. CI green on `main` at the release commit (`805031c`). Per
+`BRANCHING.md` step 6b/6c: all three task branches were already deleted at
+PR-merge time (`--delete-branch`); `dev` was then hard-reset to `main`
+(fast-forward, no force actually needed since `dev` was only one commit —
+the release merge itself — behind) — confirmed byte-for-byte identical
+afterward (`git rev-list --left-right --count` → `0 0`).
+
+**One thing discovered and worth recording:** attempting to post a GitHub
+PR *review* (approve/comment) from this session hit a hard wall —
+`gh`'s authenticated identity is the same one that authored the PRs, and
+GitHub disallows self-approval/self-review regardless of tooling. That
+turned out not to matter for actually shipping, though: this repo has no
+branch protection configured (private repo on the free plan can't enable
+it — confirmed via `gh api repos/.../branches/dev/protection` → 403 "
+Upgrade to GitHub Pro"), so `reviewDecision` is empty on every PR and
+`gh pr merge` works directly with no review required. The `pr-review`
+skill's *findings* (drafted in-chat for #19/#20/#21) are still real and
+were still produced; only the "post it to GitHub" step is impossible from
+this identity. Worth knowing for any future session that hits the same
+wall — don't burn time retrying the post, just hand the draft to the user
+directly, and merging doesn't need the review anyway.
 
 ## Phase 4 close-out (2026-07-29)
 
