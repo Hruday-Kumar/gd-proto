@@ -2,9 +2,44 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-07-29 (blockers-investigation session — see the note
-immediately below; the M4/H6/M10 release note and older context are
-preserved further down)
+**Last updated:** 2026-07-29 (release session — see the note immediately
+below; the blockers-investigation and M4/H6/M10 release notes and older
+context are preserved further down)
+
+## Released to `main`, 2026-07-29 (second release of the day)
+
+Per direct user instruction ("merge dev with main by following branching
+rules, close all the open prs and merge them with dev and then with
+main"). Checked live rather than trusting any doc: `gh pr list` came back
+empty on `placemestudy1/gd-proto` (the canonical repo) and on the two
+abandoned remotes (`Hruday-Kumar/gd-proto`, `Place-Me-study/gd-proto` — the
+latter no longer even resolves, presumably renamed to `placemestudy1`) — so
+there were no open PRs anywhere to close. The actual releasable work was
+`dev` sitting 7 commits ahead of `main`: PRs #23–#29 from the
+blockers-investigation session above, all docs-only (no application code),
+CI green on `dev`'s head (`71a23cd`). Opened PR #30 (`dev` → `main`, regular
+merge commit, matching this repo's existing release style) and merged it
+(`ee3f4c2`). Per `BRANCHING.md` step 6b: deleted the 10 task branches
+already merged into this and the immediately-prior (M4/H6/M10) release —
+`chore/m4-trim-docker-image`, `fix/h6-web-ci-coverage`,
+`fix/m10-get-status-read-only`, `docs/record-m4-h6-m10-release`,
+`docs/blockers-investigation-2026-07-29`, `docs/b1-b3-verified-done`,
+`docs/b4-b7-done-gemini-key-incident`,
+`docs/h2-recovery-verified-domain-confirmed`,
+`docs/assemblyai-credit-decision`, `docs/plan-section6-fully-cleared`.
+Turned out the remote copies were already gone (properly deleted via
+`--delete-branch` at each PR's original merge time) — only local copies
+were stale; `git branch -D` cleared those. Step 6c: hard-reset local `dev`
+to `placemestudy1/main` and pushed — landed as a fast-forward (no force
+actually needed, `dev` was only the one merge commit behind). Confirmed
+byte-for-byte identical after (`git rev-list --left-right --count
+placemestudy1/main...placemestudy1/dev` → `0 0`), and re-confirmed zero
+open PRs remain. **Did not touch** local `main` (still tracks the stale
+`origin`/`Hruday-Kumar` remote — the footgun flagged in the 2026-07-28 W1
+session) or the dozens of pre-repo-move local branches (`feature/w4-*`,
+`w5-*`, `w6-*`, `w7-*`, etc.) — those are leftover artifacts from before
+the repo migrated to `placemestudy1/gd-proto` and were out of scope for
+this release's branch cleanup.
 
 ## Blockers investigation (PLAN.md §6), 2026-07-29
 
