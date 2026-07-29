@@ -75,11 +75,17 @@ surprises:
   2026-07-29" section at the top records exactly what's live vs. still
   needed so the next session doesn't have to re-discover any of this.
   `PLAN.md` §6 updated to match.
-- **Not done, explicitly deferred to the user:** the actual `ALLOWED_ORIGINS`
-  dashboard edit and the Supabase "Confirm email" toggle — both are single
-  clicks in dashboards this session has no access to. Also didn't touch the
-  Vercel project's settings at all, per direct user instruction, since its
-  origin is unconfirmed and might be a teammate's active work.
+- **Follow-up, same day:** the user made both dashboard changes
+  (`ALLOWED_ORIGINS` on Render, Supabase "Confirm email" ON) and asked for
+  re-verification. Re-ran the identical live checks from earlier in this
+  session: a real CORS preflight from both `https://placeme.study` and
+  `https://gd-proto-web.vercel.app` now returns a correct
+  `Access-Control-Allow-Origin` header (previously neither did), and
+  `/auth/v1/settings` now reports `mailer_autoconfirm: false` (previously
+  `true`). **B1 and B3 are both DONE as of this update** — see `PLAN.md`
+  §6. Didn't touch the Vercel project's settings at all, per direct user
+  instruction, since its origin is unconfirmed and might be a teammate's
+  active work.
 
 ## Released to `main`, 2026-07-29
 

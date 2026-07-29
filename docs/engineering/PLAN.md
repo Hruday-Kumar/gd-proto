@@ -201,22 +201,24 @@ now fully complete.** Next up per the roadmap: Phase 5 (§5d).
 These cannot be finished by working in the repo. They are the actual
 remaining distance to real students in a live room.
 
-**Updated 2026-07-29 — B1 turned out to be substantially further along
-than this table said.** A session investigating these blockers found a
-real, live, healthy deploy already existed (frontend on Vercel, backend on
-Render as service `gd-proto-1`) that neither this file nor `PROGRESS.md`
-had ever recorded — origin unclear, possibly a teammate. See
-`DEPLOYMENT.md`'s new "Status as of 2026-07-29" section for the full
-detail of what's live, what was fixed this session (`RENDER_APP_URL` set,
-two stale wrong-repo Render services deleted), and the one thing still
-concretely broken (CORS — see B1 row below).
+**Updated 2026-07-29 (second pass, same day) — B1 and B3 are now DONE.**
+A session investigating these blockers found a real, live, healthy deploy
+already existed (frontend on Vercel, backend on Render as service
+`gd-proto-1`) that neither this file nor `PROGRESS.md` had ever recorded —
+origin unclear, possibly a teammate. The two concrete gaps found (CORS not
+allowlisting the deployed frontend; Supabase "Confirm email" still off)
+were fixed by the user in the Render/Supabase dashboards and **re-verified
+live** in this pass: a real CORS preflight from both `placeme.study` and
+`gd-proto-web.vercel.app` now gets a correct `Access-Control-Allow-Origin`
+header back, and `/auth/v1/settings` now reports `mailer_autoconfirm:
+false`. See `DEPLOYMENT.md`'s "Status as of 2026-07-29" section for detail.
 
 | ✅ | ID | Task | Owner | Why it's blocked |
 |---|---|---|---|---|
-| ⚠️ | **B1** | Deploy: Render + Vercel + `RENDER_APP_URL` | — | **Mostly done, discovered 2026-07-29.** Backend live at `https://gd-proto-1.onrender.com` (healthy, tracking `main`, auto-deploy on), frontend live at `placeme.study` / `gd-proto-web.vercel.app`. `RENDER_APP_URL` now set. **One concrete thing left, needs dashboard access:** set `ALLOWED_ORIGINS` on the Render service to `https://placeme.study,https://gd-proto-web.vercel.app` — verified live that CORS currently blocks both origins, so the deployed frontend can't successfully call the API yet. See `DEPLOYMENT.md`. |
-| ☐ | **B3** | Turn Supabase "Confirm email" back ON | — | Dashboard toggle. **Confirmed still OFF, 2026-07-29** (checked live via `/auth/v1/settings` → `mailer_autoconfirm: true`). Off since W2 testing — anyone can sign up as anyone. |
-| ☐ | **B4** | Render free-tier sleep vs. the agent worker | — | **Highest technical risk.** B1's backend is now live, so this is unblocked — needs the keep-alive workflow to be *not* triggered manually for 15+ min, then a real room started to confirm the agent still joins. Not yet done. |
-| ☐ | **B7** | Guardrail #1 human gate for the UI/live-room/flows work | — | Needs real multiple humans on real devices. Everything so far is solo/headless. Also can't meaningfully run against the deployed stack until the CORS fix above lands. |
+| ✅ | **B1** | Deploy: Render + Vercel + `RENDER_APP_URL` | — | **DONE, 2026-07-29.** Backend live at `https://gd-proto-1.onrender.com` (healthy, tracking `main`, auto-deploy on), frontend live at `placeme.study` / `gd-proto-web.vercel.app`, `RENDER_APP_URL` set, `ALLOWED_ORIGINS` now set and verified working live. |
+| ✅ | **B3** | Turn Supabase "Confirm email" back ON | — | **DONE, 2026-07-29.** Re-verified live: `mailer_autoconfirm: false`. |
+| ☐ | **B4** | Render free-tier sleep vs. the agent worker | — | **Highest technical risk, now genuinely actionable** since B1's backend is live. Needs the keep-alive workflow to be *not* triggered manually for 15+ min, then a real room started to confirm the agent still joins. Not yet done. |
+| ☐ | **B7** | Guardrail #1 human gate for the UI/live-room/flows work | — | Needs real multiple humans on real devices. Everything so far is solo/headless. Now unblocked by the CORS fix — the deployed stack is actually reachable. |
 | ☐ | — | Exercise H2's recovery path against a genuinely live room | — | Start a room, restart the server mid-discussion, confirm transcription resumes. The 2026-07-28 live check confirmed shutdown + the boot scan, but there were no live rooms to re-attach. |
 | ☐ | — | Revoke the old `DEEPGRAM_API_KEY` in the Deepgram dashboard | — | Removed from `.env`; the key itself is still live. |
 | ☐ | — | AssemblyAI trial credit will run out | — | Card vs. fresh trial account — deferred product decision (ADR-0002). |

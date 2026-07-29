@@ -34,15 +34,14 @@ had never been updated — this is the first record of the real state):
   for Production. **Origin unclear** — this predates this session and
   isn't documented anywhere else; if you set this up, worth adding a note
   here for the next session.
-- **⚠️ Still broken as of this update: CORS.** The backend's
-  `ALLOWED_ORIGINS` env var does not yet include `https://placeme.study` or
-  `https://gd-proto-web.vercel.app` — verified directly (an `OPTIONS`
-  preflight from those origins gets no `Access-Control-Allow-Origin`
-  header back, while `localhost:5173` correctly does). **Every API call
-  from the live deployed frontend is currently failing in the browser**
-  until this is set. See the secrets checklist below — this is the one
-  concrete action still needed to make the existing deploy actually work
-  end-to-end.
+- **✅ CORS fixed and re-verified, 2026-07-29 (same day).** `ALLOWED_ORIGINS`
+  is now set on `gd-proto-1` to include both deployed frontend origins —
+  a real `OPTIONS` preflight from `https://placeme.study` and
+  `https://gd-proto-web.vercel.app` now gets a correct
+  `Access-Control-Allow-Origin` header back (previously neither did).
+  The deploy is now genuinely end-to-end reachable.
+- **✅ Supabase "Confirm email" turned back ON, 2026-07-29.** Re-verified
+  live via `/auth/v1/settings` → `mailer_autoconfirm: false`.
 
 ## 1. Backend — Render
 
@@ -145,16 +144,10 @@ workflow already no-ops safely if that variable isn't set yet.
 
 ## 4. Pre-launch checklist (do before real students use the deployed app)
 
-- [ ] **Set `ALLOWED_ORIGINS` on the live Render service** — the one
-      concrete thing currently broken. See the secrets checklist above.
-      Without it, the deployed frontend can load but every API call fails
-      client-side (CORS).
-- [ ] **Turn Supabase "Confirm email" back ON** — Authentication →
-      Sign In / Providers → Email. Still OFF as of 2026-07-29 (confirmed
-      live via the project's `/auth/v1/settings` endpoint —
-      `mailer_autoconfirm: true`). It's been off since 2026-07-25 to make
-      W2's testing possible (see `PROGRESS.md`'s Blockers section);
-      leaving it off means anyone can sign up with an unconfirmed email.
+- [x] **Set `ALLOWED_ORIGINS` on the live Render service.** **Done and
+      re-verified live, 2026-07-29.**
+- [x] **Turn Supabase "Confirm email" back ON.** **Done and re-verified
+      live, 2026-07-29** — `mailer_autoconfirm: false`.
 - [ ] **Pre-flight P4 — verify the keep-alive pattern actually works**:
       let the deployed backend sit quiet for >15 minutes with no traffic
       (don't trigger the workflow manually), then start a real room and
@@ -169,18 +162,17 @@ workflow already no-ops safely if that variable isn't set yet.
 - [ ] Full end-to-end run on the **deployed** stack (not local dev) with
       real people: signup → consent → create/join a room → live audio →
       attributed transcription → feedback → history. This is
-      `PHASE1_PLAN.md` §5 W8's actual "done when." Blocked on the CORS fix
-      above — can't do a real browser run until the frontend can reach
-      the API.
+      `PHASE1_PLAN.md` §5 W8's actual "done when." Now unblocked — the
+      frontend can reach the API — but not yet attempted (this is B7 in
+      `PLAN.md` §6).
 
 ## Notes
 
 - **CORS is now an allowlist** (M6, audit 2026-07-28; was previously wide
-  open) — set `ALLOWED_ORIGINS` (see the secrets checklist above) to the
-  real deployed frontend origin(s), or requests from the deployed frontend
-  will be missing CORS headers (local dev is unaffected either way —
-  `localhost:5173` is always allowed). **This is not yet set on the live
-  service as of 2026-07-29** — see "Status" above.
+  open) — `ALLOWED_ORIGINS` (see the secrets checklist above) is set on
+  the live service to the real deployed frontend origins, verified
+  working 2026-07-29 (local dev is unaffected either way —
+  `localhost:5173` is always allowed).
 - Render's free Web Service restarts (cold start) on every deploy and
   after any sleep period. `domain/agentWorkerStatus.js`'s counters reset
   on restart — that's fine, it's meant to answer "is dispatch healthy
