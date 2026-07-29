@@ -34,11 +34,25 @@ export async function isParticipant(roomId, userId, { supabase = getSupabase() }
   return Boolean(data);
 }
 
+// M9 (audit 2026-07-28): caps how many past rooms feed a single
+// /api/history/mine call. A student's session history is what this bounds,
+// not any cross-student total, so this is generous relative to how many GD
+// rounds any one student could realistically attend during a pilot.
+const MAX_HISTORY_ROOMS = 200;
+
 // Every room a student has ever been seated in (W7 session history) --
 // unlike getActiveRoomForUser below, includes ended rooms and isn't
-// limited to one result.
+// limited to one result. Ordered newest-joined-first then capped so a
+// heavy user's history can't grow the query without bound (M9); the order
+// itself doesn't need to survive downstream -- listRoomsByIds re-sorts by
+// created_at itself.
 export async function listRoomIdsForUser(userId, { supabase = getSupabase() } = {}) {
-  const { data, error } = await supabase.from('room_participants').select('room_id').eq('user_id', userId);
+  const { data, error } = await supabase
+    .from('room_participants')
+    .select('room_id')
+    .eq('user_id', userId)
+    .order('joined_at', { ascending: false })
+    .limit(MAX_HISTORY_ROOMS);
   if (error) throw error;
   return data.map((row) => row.room_id);
 }

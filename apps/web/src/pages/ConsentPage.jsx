@@ -32,6 +32,11 @@ const DISCLOSURES = [
     title: "Feedback via Google's Gemini API (free tier)",
     body: "Under Gemini's free-tier terms, the transcript sent for feedback may be used by Google to improve their products, and may be reviewed by a human at Google. If you're not comfortable with this, please don't proceed until a paid-tier option is available.",
   },
+  {
+    icon: 'analytics',
+    title: 'Usage analytics',
+    body: 'We may track basic usage events (like page views and whether signup or consent succeeded) to understand how PlaceMe is used and improve it. This never includes your transcript or feedback content.',
+  },
 ];
 
 // The hard gate from guardrail #3: this copy must be shown, and agreed to,

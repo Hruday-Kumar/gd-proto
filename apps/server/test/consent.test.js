@@ -20,4 +20,16 @@ describe('canEnableMic', () => {
     const current = { consent_version: CURRENT_CONSENT_VERSION, granted_at: new Date().toISOString() };
     expect(canEnableMic(current)).toBe(true);
   });
+
+  // M8 (audit 2026-07-28): PostHog analytics (apps/web/src/lib/analytics.js)
+  // was added without bumping this version, so a student who consented
+  // before that disclosure existed would be silently carried forward as
+  // "current" the moment VITE_POSTHOG_KEY is set live. Pinning the version
+  // number itself (not just comparing against the constant, like the tests
+  // above) is deliberate -- it's the only way to catch a future PR
+  // reintroducing this exact gap by adding a new data use without bumping.
+  it('requires re-consent from a student who only agreed to the pre-analytics-disclosure version', () => {
+    expect(canEnableMic({ consent_version: 1 })).toBe(false);
+    expect(CURRENT_CONSENT_VERSION).toBeGreaterThanOrEqual(2);
+  });
 });

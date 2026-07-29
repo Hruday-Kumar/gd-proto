@@ -9,6 +9,7 @@ import express from 'express';
 import request from 'supertest';
 import { createRoomsRouter } from '../src/api/rooms.js';
 import { createLlmRateLimiter } from '../src/api/rateLimit.js';
+import { CURRENT_CONSENT_VERSION } from '../src/domain/consent.js';
 
 function stubAuth(userId) {
   return (req, _res, next) => {
@@ -51,7 +52,7 @@ function baseDeps(overrides = {}) {
     minGroupSize: 3,
     maxGroupSize: 6,
     isParticipant: vi.fn().mockResolvedValue(true),
-    getLatestConsent: vi.fn().mockResolvedValue({ consent_version: 1 }),
+    getLatestConsent: vi.fn().mockResolvedValue({ consent_version: CURRENT_CONSENT_VERSION }),
     mintTokenFn: vi.fn().mockResolvedValue('signed.jwt.token'),
     liveKitUrl: 'wss://example.livekit.cloud',
     startTranscriptionFn: vi.fn().mockResolvedValue(undefined),
@@ -612,6 +613,21 @@ describe('POST /api/rooms/:id/token', () => {
       roomName: 'r1',
     });
     expect(deps.mintTokenFn).toHaveBeenCalledWith('user-1', 'r1', expect.objectContaining({ name: 'user-1' }));
+  });
+
+  // L6 (audit 2026-07-28): tokens used to be minted with name: req.userId --
+  // a raw UUID in the participant name on any default LiveKit surface. The
+  // above test's fallback (baseDeps' default listProfilesFn resolves no
+  // profile, so name stays the raw id) still covers "no display name on
+  // file"; this covers the common case where one exists.
+  it('mints a token using the participant\'s display name, not their raw user id', async () => {
+    const deps = baseDeps({
+      getRoomById: vi.fn().mockResolvedValue({ id: 'r1', status: 'live', created_by: 'user-1' }),
+      listProfilesFn: vi.fn().mockResolvedValue([{ id: 'user-1', display_name: 'Asha' }]),
+    });
+    const app = buildApp(deps);
+    await request(app).post('/api/rooms/r1/token').send();
+    expect(deps.mintTokenFn).toHaveBeenCalledWith('user-1', 'r1', expect.objectContaining({ name: 'Asha' }));
   });
 
   // M1 (engineering audit, 2026-07-28): a student token that grants

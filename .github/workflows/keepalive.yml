@@ -7,9 +7,21 @@ name: Render keep-alive + agent health check
 # free alerting, no extra service needed. See docs/engineering/DEPLOYMENT.md
 # for how to set the RENDER_APP_URL repository variable this workflow
 # needs.
+#
+# M5 (audit 2026-07-28): GitHub's own scheduled-workflow docs warn runs
+# "may be delayed during periods of high load" -- a single */10 cron with
+# no retry means one delayed or dropped run can silently exceed Render's
+# 15-minute sleep window. Two mitigations here, both free/code-only:
+# tightened to */5 (more margin against drift) and curl now retries a
+# transient network blip within a run instead of counting it as a miss.
+# Neither fixes GitHub Actions itself being unavailable or this workflow
+# getting auto-disabled after 60 days of repo inactivity -- true
+# redundancy against *that* needs an independent, non-GitHub watchdog
+# (e.g. a free UptimeRobot or cron-job.org monitor hitting /health) which
+# needs a dashboard account this session doesn't have. See DEPLOYMENT.md.
 on:
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch: {}
 
 jobs:
@@ -23,12 +35,18 @@ jobs:
             echo "::warning::RENDER_APP_URL repository variable isn't set yet -- nothing to ping. See docs/engineering/DEPLOYMENT.md."
             exit 0
           fi
-          curl -sf "${{ vars.RENDER_APP_URL }}/health"
+          curl -sf --retry 3 --retry-delay 2 "${{ vars.RENDER_APP_URL }}/health"
 
       - name: Check transcription agent dispatch health
         if: ${{ vars.RENDER_APP_URL != '' }}
+        env:
+          HEALTH_CHECK_TOKEN: ${{ secrets.HEALTH_CHECK_TOKEN }}
         run: |
-          status=$(curl -sf "${{ vars.RENDER_APP_URL }}/health/agent")
+          # M3 (audit 2026-07-28): /health/agent is gated on this shared
+          # secret once HEALTH_CHECK_TOKEN is set on Render -- see
+          # DEPLOYMENT.md. Sending an empty header when the secret isn't
+          # configured yet is harmless (the endpoint stays open until then).
+          status=$(curl -sf --retry 3 --retry-delay 2 -H "x-health-token: ${HEALTH_CHECK_TOKEN}" "${{ vars.RENDER_APP_URL }}/health/agent")
           echo "$status"
           echo "$status" | jq -e '.healthy == true' > /dev/null \
             || { echo "::error::Transcription agent is reporting an unhealthy dispatch (see .lastFailure above) -- a room may have gone live with no transcription."; exit 1; }

@@ -128,6 +128,7 @@ had never been updated — this is the first record of the real state):
 | `ASSEMBLYAI_API_KEY` | AssemblyAI dashboard |
 | `GEMINI_API_KEY` | Google AI Studio |
 | `ALLOWED_ORIGINS` | **⚠️ Not yet set on the live service as of 2026-07-29 — this is the one thing currently broken.** The deployed frontend's real origin(s) (M6, audit 2026-07-28) — comma-separated if there's more than one. No trailing slash, scheme required. Current value needed: `https://placeme.study,https://gd-proto-web.vercel.app`. Without this set, only the local Vite dev origins (`localhost:5173`) are allowed — the deployed frontend's requests are silently missing CORS headers right now. Render dashboard → `gd-proto-1` service → Environment → add it → save (auto-redeploys). |
+| `HEALTH_CHECK_TOKEN` | **New (M3, audit 2026-07-28).** Any long random string you generate yourself (e.g. `openssl rand -hex 32`) — not from a vendor dashboard. Gates `GET /health/agent` behind a shared-secret header so `lastFailure`'s roomId and raw error text aren't public to anyone who finds the URL. Must be set in **two** places with the same value: this Render env var, and a GitHub Actions **secret** (not variable) of the same name on the repo, so `keepalive.yml` can send it. Optional — the endpoint stays open (previous behavior) until this is set. |
 
 Same values already sitting in `apps/server/.env` locally — this is
 copying them into Render's dashboard, not generating new ones.
@@ -171,17 +172,39 @@ Steps below are the from-scratch how-to, kept for reference / redeploy.)**
 
 ## 3. Keep-alive + agent health monitoring
 
-Already built and merged (`.github/workflows/keepalive.yml`): every 10
-minutes it pings `GET /health` (keeps Render's free tier from sleeping,
-per ADR-0007) and checks `GET /health/agent` (W8's dispatch tracker,
+Already built and merged (`.github/workflows/keepalive.yml`): every 5
+minutes (tightened from 10, M5 audit 2026-07-28 — see below) it pings
+`GET /health` (keeps Render's free tier from sleeping, per ADR-0007) and
+checks `GET /health/agent` (W8's dispatch tracker,
 `domain/agentWorkerStatus.js`) — if a transcription dispatch has failed
 more recently than the last successful one, the workflow run fails, and
 GitHub emails the repo's watchers by default. That's the "monitoring/
 alerting on the worker's connection status" ADR-0007's Consequences
 flagged as still needed — no new paid service required.
 
+**M5 (audit 2026-07-28) — real limit, not fully closed by code alone:**
+GitHub's own docs warn scheduled workflows "may be delayed during periods
+of high load" and are auto-disabled after 60 days of repo inactivity.
+This session tightened the cron to every 5 minutes (more margin against
+drift before hitting Render's 15-minute sleep) and added `curl --retry` so
+a single transient network blip within a run doesn't count as a missed
+ping — both free, code-only. **Neither fixes GitHub Actions itself being
+briefly unavailable or auto-disabled** — genuine redundancy against that
+needs an independent, non-GitHub watchdog (e.g. a free
+[UptimeRobot](https://uptimerobot.com) or [cron-job.org](https://cron-job.org)
+monitor hitting `GET /health` every few minutes, no card required for
+either). That needs a dashboard account this session doesn't have — **flag
+for the user, not closed outright.**
+
 **Nothing to do here except step 4 above** (set `RENDER_APP_URL`) — the
 workflow already no-ops safely if that variable isn't set yet.
+
+**New, optional (M3, audit 2026-07-28):** if you set `HEALTH_CHECK_TOKEN`
+on the Render service (see the secrets checklist above), also add it as a
+**repo secret** of the same name (Settings → Secrets and variables →
+Actions → **Secrets** tab, not the Variables tab where `RENDER_APP_URL`
+lives) so this workflow's `/health/agent` check keeps working — otherwise
+it'll start getting 401s once the token is set on Render but not here.
 
 ## 4. Pre-launch checklist (do before real students use the deployed app)
 
@@ -203,6 +226,17 @@ workflow already no-ops safely if that variable isn't set yet.
       a different Vercel project (`waitlist`), not this app. Not a
       blocker for a pilot using the `.vercel.app` URL, but should be
       fixed before advertising `placeme.study` to real students.
+- [ ] **New (M3, audit 2026-07-28):** set `HEALTH_CHECK_TOKEN` on the live
+      Render service **and** as a GitHub Actions repo secret of the same
+      name — see the secrets checklist and step 3 above. Optional (the
+      endpoint stays open until this is set), but closes a minor
+      information-disclosure gap on `/health/agent`.
+- [ ] **New (M5, audit 2026-07-28):** sign up for a free
+      UptimeRobot/cron-job.org monitor pinging `GET /health` every few
+      minutes, independent of GitHub Actions — see step 3 above for why.
+      Not a blocker (the GH Actions cron already works, per B4's real
+      test), but the single-point-of-failure gap stays open until this
+      exists.
 
 ## Notes
 

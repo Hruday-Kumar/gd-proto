@@ -2,9 +2,156 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-07-29 (blockers-investigation session — see the note
-immediately below; the M4/H6/M10 release note and older context are
-preserved further down)
+**Last updated:** 2026-07-29 (Phase 5 close-out session — see immediately
+below; the release session, blockers-investigation, and M4/H6/M10 notes
+and older context are preserved further down)
+
+## Audit remediation, Phase 5 close-out (2026-07-29, later same day)
+
+Picked up per direct user instruction ("start phase 5 remaining tasks,
+push and merge changes to both main branches of placemestudy1 and
+Hruday-Kumar"). This closes out the last open rows in the entire
+2026-07-28 engineering audit — `PLAN.md` §5b through §5d are now fully
+checked. Five small branches/PRs into `dev` (#32–#36), each following the
+usual TDD RED→GREEN discipline where the finding was testable core logic,
+each with a self-review drafted in chat before merge (see the note below
+on why the review couldn't be *posted* to GitHub).
+
+- **M3 — `/health/agent` unauthenticated + info disclosure. FIXED, PR
+  #32.** Optional `HEALTH_CHECK_TOKEN` shared-secret header gate —
+  falls back to the previous open behavior when unset, so local dev/CI
+  can't break. `keepalive.yml` sends it from a new GitHub Actions
+  **secret**. Setting the token on Render + as the matching GH secret is
+  a remaining dashboard step (tracked in `PLAN.md` §6) — the in-memory,
+  resets-on-restart nature of the tracker itself is unchanged, that was
+  never in scope for this fix.
+- **M5 — Render-sleep mitigation is a single unguarded cron. PARTIALLY
+  FIXED, PR #33.** Cron tightened `*/10`→`*/5`, `curl --retry 3` added to
+  both pings — both free, code-only. **Deliberately not marked fully
+  resolved**: GitHub's own docs say scheduled workflows can be delayed or
+  auto-disabled, and closing that for real needs an independent,
+  non-GitHub watchdog (free UptimeRobot/cron-job.org) that needs a
+  dashboard account this session doesn't have. New row added to `PLAN.md`
+  §6 rather than silently claiming the audit finding fully closed.
+- **M8 — consent version not bumped for PostHog analytics. FIXED, PR
+  #34.** `CURRENT_CONSENT_VERSION` 1→2, plus a fifth disclosure added to
+  `ConsentPage.jsx` covering usage analytics. Bumping the version means
+  every existing student is required to re-consent before their next
+  mic-enabled room — confirmed this is the intended effect (guardrail #3),
+  not a side effect to design around. Caught its own regression in
+  passing: `roomsApi.test.js`'s base test fixture hardcoded
+  `consent_version: 1`, which the bump alone broke (the `/token` route's
+  consent gate started 403ing every previously-passing case) — fixed to
+  reference `CURRENT_CONSENT_VERSION` instead of a hardcoded number.
+- **M9 — unbounded DB reads. FIXED, PR #35.** Explicit `LIMIT` on
+  `listQueue` (500), `listRoomIdsForUser`/`listRoomsByIds` (200 each,
+  ordered so the most recent rooms are what's kept), and
+  `listTranscriptLinesForRoom` (5000 — much larger, since a real session
+  is already time-bounded by `roomDuration.js`'s 25-minute cap and
+  truncating a genuine transcript would hurt feedback quality more than
+  the other caps binding ever would). No unit-test infrastructure exists
+  for these thin Supabase query-builder wrappers anywhere in this repo
+  (same as every other `db/*.js` change in this project's history) —
+  verified via the full suite staying green (these are mocked at the
+  function-injection boundary in route tests) and via reasoning about the
+  query shape, not a live DB check (no Supabase access this session).
+- **L-series (L1–L8). FIXED/VERIFIED, PR #36.** L5: `recordDispatchSuccess`
+  now tracks `lastSuccess: { roomId, at }` (was silently discarding
+  `roomId`). L6: LiveKit tokens now use the participant's display name via
+  the existing `listProfilesFn`, not a raw UUID. L4: removed
+  `matchmake()`'s dead `remainingQueue` return value (updated the two
+  `matchmaking.test.js` assertions that pinned its old shape). L1: real
+  `Readme.md` replacing the `"# This is the readme"` placeholder — repo
+  layout, dev setup, doc pointers, folding in **L7**'s nvm/Node-22
+  friction note. L2: removed `spike/` (21 tracked files, own lockfile) —
+  superseded by `apps/server` since Phase 1, already Docker-excluded, but
+  still shipped to every clone; `.agents/` and the stray UI-overhaul
+  folder the audit also named were already gone. L3: removed
+  `packages/shared` (existed solely to `export {}`, nothing imports
+  `@placeme/shared`) and the now-empty `packages/*` glob from root
+  `package.json`'s workspaces. **L8 needed no fix** — verified the
+  uncommitted work the audit found (the `LobbyPage` `beforeunload` guard,
+  the Vercel/Cloudflare host configs) had already landed via an
+  intervening commit (`2d2b0ac`) before this session started.
+- **A real regression, caught before it shipped, not after.** Removing
+  `packages/shared` meant editing `package-lock.json`. A first attempt did
+  a full regen (`rm package-lock.json && npm install`) on this Windows dev
+  machine — which silently collapsed `@livekit/rtc-ffi-bindings`'s
+  `optionalDependencies` down to just the `win32-x64-msvc` platform
+  variant, dropping the `linux-x64-gnu` one the Docker image actually
+  needs. This wasn't caught by the server test suite (which doesn't touch
+  Docker) — it was caught by actually running `docker build` + `docker
+  run` + `curl /health` before pushing, per this project's own established
+  verification habit for anything Docker/deploy-adjacent (same pattern as
+  the M4 session). The broken image failed at container boot with `Cannot
+  find module './rtc-node.linux-x64-gnu.node'`. Fixed by reverting to the
+  original lockfile and hand-editing out only the `@placeme/shared`-
+  specific entries, preserving every platform's optional native binding.
+  Re-verified with `npm ci` (the exact command the Dockerfile uses), a
+  fresh `docker build`/`run`/`curl /health` → `{"status":"ok"}` locally,
+  and confirmed again by GitHub's own `docker-build` CI check passing on
+  the PR before merge — this one only needed a Linux CI runner to
+  surface, so the local-Windows-Docker-Desktop check and the GitHub
+  Actions check both mattered here, not just one or the other.
+- **Self-review posting hit the same wall as the 2026-07-29 release
+  session (recorded further down this file): `gh`'s authenticated
+  identity is the same one that authored every PR, and GitHub rejects
+  self-approval outright** (`gh pr review --approve` failed with
+  `GraphQL: Review Can not approve your own pull request`). Confirmed
+  this repo still has no branch protection (`reviewDecision` empty on
+  every PR, private repo on the free plan), so merging never actually
+  needed the review. Followed the same precedent as before: drafted each
+  PR's review in chat (findings, guardrail check, verdict), got the
+  user's explicit go-ahead to merge each one, and merged directly rather
+  than repeatedly retrying an API call that structurally cannot succeed
+  from this identity.
+- **247/247 server tests green** throughout (was 192 per `PLAN.md` §1's
+  test command before this session, now updated), `apps/web` lint + build
+  clean. One environmental flake hit twice mid-session
+  (`verifyToken.test.js`'s `beforeAll` hook timing out generating an RSA
+  keypair under this session's load) — confirmed transient both times by
+  re-running the file alone with a longer hook timeout; nothing in any
+  branch touched `verifyToken.js` or auth code.
+- **`PLAN.md` and `AUDIT.md` both updated to close out every row** — see
+  their own diffs rather than duplicating the detail here. Two new
+  dashboard-dependent follow-ups added to `PLAN.md` §6 (M3's
+  `HEALTH_CHECK_TOKEN`, M5's external watchdog) rather than pretending
+  those findings are 100% closed by code alone.
+
+## Released to `main`, 2026-07-29 (second release of the day)
+
+Per direct user instruction ("merge dev with main by following branching
+rules, close all the open prs and merge them with dev and then with
+main"). Checked live rather than trusting any doc: `gh pr list` came back
+empty on `placemestudy1/gd-proto` (the canonical repo) and on the two
+abandoned remotes (`Hruday-Kumar/gd-proto`, `Place-Me-study/gd-proto` — the
+latter no longer even resolves, presumably renamed to `placemestudy1`) — so
+there were no open PRs anywhere to close. The actual releasable work was
+`dev` sitting 7 commits ahead of `main`: PRs #23–#29 from the
+blockers-investigation session above, all docs-only (no application code),
+CI green on `dev`'s head (`71a23cd`). Opened PR #30 (`dev` → `main`, regular
+merge commit, matching this repo's existing release style) and merged it
+(`ee3f4c2`). Per `BRANCHING.md` step 6b: deleted the 10 task branches
+already merged into this and the immediately-prior (M4/H6/M10) release —
+`chore/m4-trim-docker-image`, `fix/h6-web-ci-coverage`,
+`fix/m10-get-status-read-only`, `docs/record-m4-h6-m10-release`,
+`docs/blockers-investigation-2026-07-29`, `docs/b1-b3-verified-done`,
+`docs/b4-b7-done-gemini-key-incident`,
+`docs/h2-recovery-verified-domain-confirmed`,
+`docs/assemblyai-credit-decision`, `docs/plan-section6-fully-cleared`.
+Turned out the remote copies were already gone (properly deleted via
+`--delete-branch` at each PR's original merge time) — only local copies
+were stale; `git branch -D` cleared those. Step 6c: hard-reset local `dev`
+to `placemestudy1/main` and pushed — landed as a fast-forward (no force
+actually needed, `dev` was only the one merge commit behind). Confirmed
+byte-for-byte identical after (`git rev-list --left-right --count
+placemestudy1/main...placemestudy1/dev` → `0 0`), and re-confirmed zero
+open PRs remain. **Did not touch** local `main` (still tracks the stale
+`origin`/`Hruday-Kumar` remote — the footgun flagged in the 2026-07-28 W1
+session) or the dozens of pre-repo-move local branches (`feature/w4-*`,
+`w5-*`, `w6-*`, `w7-*`, etc.) — those are leftover artifacts from before
+the repo migrated to `placemestudy1/gd-proto` and were out of scope for
+this release's branch cleanup.
 
 ## Blockers investigation (PLAN.md §6), 2026-07-29
 

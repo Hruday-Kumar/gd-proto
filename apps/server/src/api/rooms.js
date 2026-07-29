@@ -82,11 +82,17 @@ export function createRoomsRouter(requireAuth, deps) {
     const participant = await isParticipant(room.id, req.userId);
     if (!participant) return res.status(403).json({ error: 'Not a participant of this room' });
 
+    // L6 (audit 2026-07-28): used to be minted with name: req.userId -- a
+    // raw UUID in the participant name on any default LiveKit surface.
+    // Falls back to the raw id if no profile/display name exists.
+    const [profile] = await listProfilesFn([req.userId]);
+    const displayName = profile?.display_name || req.userId;
+
     // M1 (audit 2026-07-28): a student's token must never carry
     // canPublishData -- only the transcription agent's own token
     // (agent/roomAgent.js) needs it, to broadcast real captions. A student
     // token that had it could forge caption data over the same channel.
-    const token = await mintTokenFn(req.userId, room.id, { name: req.userId, canPublishData: false });
+    const token = await mintTokenFn(req.userId, room.id, { name: displayName, canPublishData: false });
     res.status(200).json({ token, url: liveKitUrl, identity: req.userId, roomName: room.id });
   });
 

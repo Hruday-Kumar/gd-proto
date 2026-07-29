@@ -10,6 +10,9 @@ export function createAgentWorkerStatus() {
   let dispatchSuccesses = 0;
   let dispatchFailures = 0;
   let lastFailure = null; // { roomId, message, at }
+  // L5 (audit 2026-07-28): used to be discarded, so a success -- unlike a
+  // failure -- couldn't be correlated to which room it was for.
+  let lastSuccess = null; // { roomId, at }
   // Sequence numbers, not timestamps, decide "most recent" -- two calls in
   // the same millisecond must still order correctly.
   let lastFailureSeq = -1;
@@ -20,6 +23,7 @@ export function createAgentWorkerStatus() {
     recordDispatchSuccess(roomId) {
       activeRooms += 1;
       dispatchSuccesses += 1;
+      lastSuccess = { roomId, at: new Date().toISOString() };
       lastSuccessSeq = seq++;
     },
     recordDispatchFailure(roomId, error) {
@@ -35,7 +39,7 @@ export function createAgentWorkerStatus() {
       // an old failure that's since been followed by a working dispatch
       // shouldn't keep paging anyone.
       const healthy = lastFailureSeq === -1 || lastSuccessSeq > lastFailureSeq;
-      return { activeRooms, dispatchSuccesses, dispatchFailures, lastFailure, healthy };
+      return { activeRooms, dispatchSuccesses, dispatchFailures, lastFailure, lastSuccess, healthy };
     },
   };
 }
