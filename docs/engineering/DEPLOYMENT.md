@@ -28,20 +28,59 @@ had never been updated — this is the first record of the real state):
   no-op'ing silently (no error, just a skipped ping) since this was never
   set. Manually triggered once to confirm: pinged real `/health` and
   `/health/agent`, both healthy.
-- **Frontend — Vercel project `gd-proto-web`**, custom domain
-  `placeme.study` registered and wired, `gd-proto-web.vercel.app` also
+- **Frontend — Vercel project `gd-proto-web`**, `gd-proto-web.vercel.app`
   live. `VITE_API_URL`/`VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY` all set
   for Production. **Origin unclear** — this predates this session and
   isn't documented anywhere else; if you set this up, worth adding a note
   here for the next session.
+- **⚠️ `placeme.study` does NOT point at this app.** Found while trying to
+  use it for the B7 human-verification walkthrough: the custom domain is
+  attached to a *different* Vercel project, `waitlist` (last deployed ~20
+  days before this session), not `gd-proto-web`. Visiting it shows the
+  waitlist page, not PlaceMe. **`https://gd-proto-web.vercel.app` is the
+  only working deployed frontend URL right now.** Fixing this needs a
+  decision (move the domain? get a new one?) plus Vercel dashboard access
+  — not attempted here.
 - **✅ CORS fixed and re-verified, 2026-07-29 (same day).** `ALLOWED_ORIGINS`
   is now set on `gd-proto-1` to include both deployed frontend origins —
   a real `OPTIONS` preflight from `https://placeme.study` and
   `https://gd-proto-web.vercel.app` now gets a correct
   `Access-Control-Allow-Origin` header back (previously neither did).
-  The deploy is now genuinely end-to-end reachable.
+  The deploy is now genuinely end-to-end reachable (via the `.vercel.app`
+  URL — see the domain issue just above).
 - **✅ Supabase "Confirm email" turned back ON, 2026-07-29.** Re-verified
   live via `/auth/v1/settings` → `mailer_autoconfirm: false`.
+- **✅ B4 (Render sleep risk) — tested and PASSED, 2026-07-29.** Keepalive
+  workflow deliberately disabled, backend left idle 18+ minutes with zero
+  traffic, then a real room started: transcription agent dispatched
+  successfully (`dispatchSuccesses: 1, dispatchFailures: 0`). Render logs
+  showed the process never actually restarted during the idle window —
+  more reassuring than ADR-0007's assumption that the free tier reliably
+  sleeps after 15 min, though this is one observation, not a guarantee.
+  Keepalive re-enabled immediately after.
+- **✅ B7 (guardrail #1 human gate) — DONE, 2026-07-29.** Real two-person
+  walkthrough on the deployed stack: room created, joined, live
+  conversation, transcription and speaker attribution both confirmed
+  correct. **Caught a real production bug in the process** (see below) —
+  fixed and re-verified with a second live room before calling this done.
+- **🔴 Incident, found and fixed same session: `GEMINI_API_KEY`'s backing
+  Google Cloud service account had been deleted or disabled.** Every
+  feedback generation was failing with `401 UNAUTHENTICATED:
+  "The bound service account is deleted or disabled"` — confirmed in the
+  Render logs (`[feedback] generation failed... for both participants`)
+  and independently reproduced by calling Gemini's API directly with the
+  same key (also 401). This would have hit **every real student
+  session** — feedback is the entire point of W6 — and would have hit
+  Gemini-generated topics too, just not exercised that session. User
+  rotated the key in Google AI Studio; the new key was verified two ways:
+  a direct `200 OK` call to Gemini's API, and a second real room on the
+  deployed app that generated feedback successfully with no error logs.
+  **Updated in both places** — `apps/server/.env` locally and
+  `GEMINI_API_KEY` on the Render service (saving it there triggers an
+  automatic redeploy, confirmed via `render deploys list`). No indication
+  of *why* the service account was disabled — worth keeping an eye on
+  whether it recurs, since nothing in this project controls that from the
+  application side.
 
 ## 1. Backend — Render
 
@@ -125,8 +164,11 @@ Steps below are the from-scratch how-to, kept for reference / redeploy.)**
    | `VITE_SUPABASE_ANON_KEY` | Supabase anon/publishable key (safe to expose client-side — see W2 in `PROGRESS.md`) |
    | `VITE_API_URL` | the Render backend URL from step 1 above (no trailing slash) — currently `https://gd-proto-1.onrender.com` |
 
-4. Deploy. Vercel gives you a `*.vercel.app` URL, plus whatever custom
-   domain is attached (currently `placeme.study`).
+4. Deploy. Vercel gives you a `*.vercel.app` URL — currently
+   `gd-proto-web.vercel.app`, the only working deployed frontend URL as
+   of 2026-07-29. **`placeme.study` is registered under this Vercel team
+   but attached to a different project (`waitlist`)** — see "Status"
+   above. Don't assume it points here until that's fixed.
 
 ## 3. Keep-alive + agent health monitoring
 
@@ -148,23 +190,20 @@ workflow already no-ops safely if that variable isn't set yet.
       re-verified live, 2026-07-29.**
 - [x] **Turn Supabase "Confirm email" back ON.** **Done and re-verified
       live, 2026-07-29** — `mailer_autoconfirm: false`.
-- [ ] **Pre-flight P4 — verify the keep-alive pattern actually works**:
-      let the deployed backend sit quiet for >15 minutes with no traffic
-      (don't trigger the workflow manually), then start a real room and
-      confirm the transcription agent still joins successfully. This is
-      the specific risk ADR-0007's "Revisit if" section names. Not yet
-      done — the keepalive workflow itself is confirmed working
-      (2026-07-29), but that's necessary, not sufficient: it proves the
-      ping succeeds, not that a room survives a real sleep/wake cycle.
+- [x] **Pre-flight P4 — verify the keep-alive pattern actually works.**
+      **Done, PASSED, 2026-07-29** — see B4 in the "Status" section above.
 - [x] Confirm `RENDER_APP_URL` is set (step 1.4 above) and
       `.github/workflows/keepalive.yml` has at least one green run in the
       Actions tab. **Done, 2026-07-29.**
-- [ ] Full end-to-end run on the **deployed** stack (not local dev) with
+- [x] Full end-to-end run on the **deployed** stack (not local dev) with
       real people: signup → consent → create/join a room → live audio →
-      attributed transcription → feedback → history. This is
-      `PHASE1_PLAN.md` §5 W8's actual "done when." Now unblocked — the
-      frontend can reach the API — but not yet attempted (this is B7 in
-      `PLAN.md` §6).
+      attributed transcription → feedback → history. **Done, 2026-07-29**
+      — see B7 in the "Status" section above, including the
+      `GEMINI_API_KEY` incident found and fixed along the way.
+- [ ] **New:** fix `placeme.study`'s domain mapping — currently points at
+      a different Vercel project (`waitlist`), not this app. Not a
+      blocker for a pilot using the `.vercel.app` URL, but should be
+      fixed before advertising `placeme.study` to real students.
 
 ## Notes
 

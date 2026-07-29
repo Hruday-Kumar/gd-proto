@@ -86,6 +86,60 @@ surprises:
   §6. Didn't touch the Vercel project's settings at all, per direct user
   instruction, since its origin is unconfirmed and might be a teammate's
   active work.
+- **Second follow-up, same day: B4 and B7 both run for real, and B7 caught
+  a genuine production incident.**
+  - **B4 (Render sleep risk) — PASS.** Disabled the keepalive GitHub
+    Actions workflow, recorded a baseline `/health/agent` check at 07:14
+    UTC, waited 18 minutes with deliberately zero traffic, then had the
+    user start a real room. Result: `dispatchSuccesses: 1,
+    dispatchFailures: 0` — the transcription agent connected successfully
+    right after the idle window. **Bonus finding from the Render logs:**
+    the process never actually restarted during the idle window at all —
+    continuously up since its last deploy, no cold-start observed. This is
+    more reassuring than ADR-0007's assumption (written expecting a
+    15-minute sleep timer to bite); worth treating as one good data point,
+    not a guarantee the free tier never sleeps. Re-enabled the keepalive
+    workflow immediately after the test — it must not be left disabled.
+  - **B7 (guardrail #1 human gate) — real two-person walkthrough,
+    caught a real bug.** First attempt used `https://placeme.study`, which
+    turned out to show a waitlist page — investigated and found the custom
+    domain is attached to a *different* Vercel project (`waitlist`, last
+    deployed ~20 days before this session), not `gd-proto-web`. Switched
+    to `https://gd-proto-web.vercel.app`, the actual working deployed URL.
+    Two real people, two real devices, a real room, real conversation —
+    **user confirmed transcription and speaker attribution were both
+    correct**, satisfying guardrail #1's specific requirement.
+  - **Then feedback got stuck "Generating…" for 5+ minutes.** Checked the
+    Render logs directly rather than guessing: `[feedback] generation
+    failed for user ... Gemini API error: 401 {"message": "The bound
+    service account is deleted or disabled. The service account bound to
+    the API key must be active."}` — for **both** participants. Reproduced
+    independently by calling Gemini's API directly with the same key
+    (also 401), and confirmed the identical key is used both locally
+    (`apps/server/.env`) and on the deployed Render service — so this
+    wasn't a Render-config mismatch, the actual Google Cloud service
+    account backing the API key had been deleted or disabled. **This
+    would have silently broken feedback for every real student session**
+    (and Gemini-generated topics, though that path wasn't exercised this
+    time) — a genuinely serious, previously-undetected production bug
+    that a real human test caught before real students would have.
+  - **User rotated the key in Google AI Studio.** Verified the fix two
+    independent ways before calling it done: (1) a direct call to
+    Gemini's `generateContent` endpoint with the new key returned `200
+    OK`, and (2) `render deploys list` confirmed a fresh manual deploy
+    at 07:50–07:51 UTC (env var saves trigger an auto-redeploy on
+    Render), consistent with the dashboard update. Then, rather than
+    trust indirect evidence alone for something guardrail #1 cares about,
+    **ran a second real room end-to-end** — feedback generated
+    successfully this time, no error lines in the logs, user confirmed
+    visually. **B4 and B7 are both DONE.**
+  - **Not fixed, flagged as a new follow-up:** `placeme.study`'s Vercel
+    domain mapping. Needs a decision (repoint it at `gd-proto-web`, or
+    it's meant for something else entirely) plus dashboard access — not
+    attempted here since it's not this session's call to make.
+  - `PLAN.md` §6 and `DEPLOYMENT.md` both updated to record all of the
+    above — see their own change history rather than duplicating detail
+    here.
 
 ## Released to `main`, 2026-07-29
 

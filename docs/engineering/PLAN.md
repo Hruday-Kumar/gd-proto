@@ -201,24 +201,29 @@ now fully complete.** Next up per the roadmap: Phase 5 (§5d).
 These cannot be finished by working in the repo. They are the actual
 remaining distance to real students in a live room.
 
-**Updated 2026-07-29 (second pass, same day) — B1 and B3 are now DONE.**
-A session investigating these blockers found a real, live, healthy deploy
-already existed (frontend on Vercel, backend on Render as service
+**Updated 2026-07-29 (third pass, same day) — B1, B3, B4, B7 are all now
+DONE.** A session investigating these blockers found a real, live, healthy
+deploy already existed (frontend on Vercel, backend on Render as service
 `gd-proto-1`) that neither this file nor `PROGRESS.md` had ever recorded —
-origin unclear, possibly a teammate. The two concrete gaps found (CORS not
-allowlisting the deployed frontend; Supabase "Confirm email" still off)
-were fixed by the user in the Render/Supabase dashboards and **re-verified
-live** in this pass: a real CORS preflight from both `placeme.study` and
-`gd-proto-web.vercel.app` now gets a correct `Access-Control-Allow-Origin`
-header back, and `/auth/v1/settings` now reports `mailer_autoconfirm:
-false`. See `DEPLOYMENT.md`'s "Status as of 2026-07-29" section for detail.
+origin unclear, possibly a teammate. B1/B3's gaps (CORS, Confirm email)
+were fixed by the user and re-verified live. B4 was then tested directly
+(idle wait + real room) and passed. B7 was run as a real two-person
+walkthrough on `gd-proto-web.vercel.app` (**not** `placeme.study` — see
+the new follow-up row below, that domain is misconfigured) and **caught a
+real, previously-undetected production bug**: the live `GEMINI_API_KEY`'s
+backing Google Cloud service account was deleted/disabled, so 100% of
+feedback generation was failing with a 401 (and would have silently done
+the same for Gemini-generated topics). User rotated the key; re-verified
+directly against Gemini's API (200 OK) and with a second real room that
+generated feedback successfully. Full detail in `PROGRESS.md`.
 
 | ✅ | ID | Task | Owner | Why it's blocked |
 |---|---|---|---|---|
-| ✅ | **B1** | Deploy: Render + Vercel + `RENDER_APP_URL` | — | **DONE, 2026-07-29.** Backend live at `https://gd-proto-1.onrender.com` (healthy, tracking `main`, auto-deploy on), frontend live at `placeme.study` / `gd-proto-web.vercel.app`, `RENDER_APP_URL` set, `ALLOWED_ORIGINS` now set and verified working live. |
+| ✅ | **B1** | Deploy: Render + Vercel + `RENDER_APP_URL` | — | **DONE, 2026-07-29.** Backend live at `https://gd-proto-1.onrender.com` (healthy, tracking `main`, auto-deploy on), frontend live at `gd-proto-web.vercel.app`, `RENDER_APP_URL` set, `ALLOWED_ORIGINS` set and verified working live. |
 | ✅ | **B3** | Turn Supabase "Confirm email" back ON | — | **DONE, 2026-07-29.** Re-verified live: `mailer_autoconfirm: false`. |
-| ☐ | **B4** | Render free-tier sleep vs. the agent worker | — | **Highest technical risk, now genuinely actionable** since B1's backend is live. Needs the keep-alive workflow to be *not* triggered manually for 15+ min, then a real room started to confirm the agent still joins. Not yet done. |
-| ☐ | **B7** | Guardrail #1 human gate for the UI/live-room/flows work | — | Needs real multiple humans on real devices. Everything so far is solo/headless. Now unblocked by the CORS fix — the deployed stack is actually reachable. |
+| ✅ | **B4** | Render free-tier sleep vs. the agent worker | — | **DONE, 2026-07-29 — PASS.** Keepalive workflow deliberately disabled, backend left with zero traffic for 18+ min, then a real room started: `dispatchSuccesses: 1, dispatchFailures: 0`. Render logs showed no restart/cold-boot during the idle window at all — the process stayed continuously up, more reassuring than ADR-0007's assumption. Keepalive workflow re-enabled immediately after the test. |
+| ✅ | **B7** | Guardrail #1 human gate for the UI/live-room/flows work | — | **DONE, 2026-07-29.** Two real people, two real devices, a real room on the deployed stack (`gd-proto-web.vercel.app`), real conversation. Transcription and speaker attribution both confirmed correct by the user. **Also caught a real bug** — see the Gemini key incident above/in `PROGRESS.md` — fixed and re-verified with a second live room before calling this done. |
+| ☐ | — | **New, found 2026-07-29:** `placeme.study` custom domain is attached to a *different* Vercel project (`waitlist`, last updated 20 days before this session) — the domain currently doesn't route to the actual app at all. `gd-proto-web.vercel.app` is the only working deployed URL right now. | — | Needs Vercel dashboard access to either move the domain to `gd-proto-web` or attach a new domain — a call about what `placeme.study` should point to, not something to silently change. |
 | ☐ | — | Exercise H2's recovery path against a genuinely live room | — | Start a room, restart the server mid-discussion, confirm transcription resumes. The 2026-07-28 live check confirmed shutdown + the boot scan, but there were no live rooms to re-attach. |
 | ☐ | — | Revoke the old `DEEPGRAM_API_KEY` in the Deepgram dashboard | — | Removed from `.env`; the key itself is still live. |
 | ☐ | — | AssemblyAI trial credit will run out | — | Card vs. fresh trial account — deferred product decision (ADR-0002). |
