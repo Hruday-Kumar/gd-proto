@@ -111,11 +111,21 @@ reasoning needs to be explicit:
   track) is unchanged and already proven.
 - Deepgram's $200 free credit becomes unused for production; it's harmless
   to keep the key around as a backup path if AssemblyAI has an outage.
-- **Payment decision explicitly deferred (user decision, 2026-07-25):** run
-  on AssemblyAI's current $50 trial credit as-is for now. When it runs out,
-  the choice between adding a card vs. opening a fresh free-tier account for
-  another trial period is a build-phase decision to make at that time, not
-  now — noted here so it isn't forgotten, not resolved in this ADR.
+- **Payment decision — RESOLVED (user decision, 2026-07-29, superseding the
+  2026-07-25 deferral below):** when the current $50 trial credit runs out,
+  **open a fresh AssemblyAI trial account** rather than adding a card —
+  stays card-free longer, consistent with the project's zero-out-of-pocket
+  bar (`budget-zero-out-of-pocket`). Trade-off accepted explicitly: this
+  adds account-rotation overhead (new API key, update `.env` + Render's
+  `ASSEMBLYAI_API_KEY`) and isn't infinitely repeatable if AssemblyAI
+  tightens trial eligibility — revisit if that becomes a recurring hassle
+  or trials stop being available.
+- ~~**Payment decision explicitly deferred (user decision, 2026-07-25):**
+  run on AssemblyAI's current $50 trial credit as-is for now. When it runs
+  out, the choice between adding a card vs. opening a fresh free-tier
+  account for another trial period is a build-phase decision to make at
+  that time, not now — noted here so it isn't forgotten, not resolved in
+  this ADR.~~ (Resolved above, 2026-07-29.)
 
 ## Revisit if
 - The AssemblyAI smoke test above surfaces an accuracy/latency regression
