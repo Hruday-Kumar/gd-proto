@@ -14,6 +14,7 @@ describe('createAgentWorkerStatus', () => {
       dispatchSuccesses: 0,
       dispatchFailures: 0,
       lastFailure: null,
+      lastSuccess: null,
       healthy: true,
     });
   });
@@ -25,6 +26,15 @@ describe('createAgentWorkerStatus', () => {
     expect(s.activeRooms).toBe(1);
     expect(s.dispatchSuccesses).toBe(1);
     expect(s.healthy).toBe(true);
+  });
+
+  // L5 (audit 2026-07-28): recordDispatchSuccess used to accept and discard
+  // roomId, so a success event -- unlike a failure -- couldn't be
+  // correlated to which room it was for.
+  it('records roomId with a successful dispatch for correlation', () => {
+    const status = createAgentWorkerStatus();
+    status.recordDispatchSuccess('room-1');
+    expect(status.getStatus().lastSuccess).toMatchObject({ roomId: 'room-1' });
   });
 
   it('records a failure and flips healthy to false', () => {

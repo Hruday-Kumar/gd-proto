@@ -20,10 +20,13 @@ export function matchmake(queue, joiner, { minGroupSize, maxGroupSize }) {
     return { type: 'queued', queue: candidates };
   }
 
+  // L4 (audit 2026-07-28): used to also return remainingQueue here, but no
+  // caller ever read it -- rooms.js derives the same set from members via
+  // claimMatchOrQueue, and the actual queue table is the source of truth
+  // for what's left, not this pure function's return value.
   const groupSize = Math.min(candidates.length, maxGroupSize);
   return {
     type: 'matched',
     members: candidates.slice(0, groupSize),
-    remainingQueue: candidates.slice(groupSize),
   };
 }

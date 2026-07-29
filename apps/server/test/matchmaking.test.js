@@ -19,7 +19,6 @@ describe('matchmake', () => {
     expect(result).toEqual({
       type: 'matched',
       members: [{ id: 'a' }, { id: 'b' }, { id: 'c' }],
-      remainingQueue: [],
     });
   });
 
@@ -29,7 +28,6 @@ describe('matchmake', () => {
     expect(result).toEqual({
       type: 'matched',
       members: [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }],
-      remainingQueue: [{ id: 'e' }, { id: 'f' }],
     });
   });
 

@@ -48,6 +48,7 @@ describe('GET /health/agent', () => {
       dispatchSuccesses: 0,
       dispatchFailures: 0,
       lastFailure: null,
+      lastSuccess: null,
       healthy: true,
     });
   });
