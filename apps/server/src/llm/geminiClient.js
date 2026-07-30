@@ -19,10 +19,14 @@ async function callGemini(prompt, { apiKey, model, fetchImpl }) {
   if (!apiKey) {
     throw new Error('Missing GEMINI_API_KEY');
   }
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  // N9 (audit comparison, 2026-07-29): the key used to travel in the URL
+  // query string -- a classic accidental-disclosure vector (proxy logs,
+  // CDN logs, access logs). Google's API accepts the same key via this
+  // header instead.
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
   const response = await fetchImpl(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
     body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
   });
   if (!response.ok) {

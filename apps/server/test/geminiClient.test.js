@@ -25,8 +25,19 @@ describe('generateTopic', () => {
     expect(result).toBe('Should engineering colleges make internships mandatory?');
     const [url, options] = fetchImpl.mock.calls[0];
     expect(url).toContain(DEFAULT_GEMINI_MODEL);
-    expect(url).toContain('key=test-key');
     expect(JSON.parse(options.body).contents[0].parts[0].text).toMatch(/education/i);
+  });
+
+  // N9 (audit comparison, 2026-07-29): the API key used to travel in the
+  // URL query string, where it's a classic accidental-disclosure vector
+  // (proxy logs, CDN logs, browser history if this were ever a client-side
+  // call). Google's API accepts an x-goog-api-key header instead.
+  it('sends the API key as a header, never in the URL', async () => {
+    const fetchImpl = fakeFetchOk('x');
+    await generateTopic({}, { apiKey: 'super-secret-key', fetchImpl });
+    const [url, options] = fetchImpl.mock.calls[0];
+    expect(url).not.toContain('super-secret-key');
+    expect(options.headers['x-goog-api-key']).toBe('super-secret-key');
   });
 
   it('uses an overridden model when GEMINI_MODEL-equivalent option is passed', async () => {

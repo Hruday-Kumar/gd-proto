@@ -47,9 +47,14 @@ export function createTopicsRouter(
       text = await generateTopicFn({ category, difficulty });
     } catch (err) {
       // A Gemini failure must not look like our own bug -- 502 (bad
-      // upstream) rather than a generic 500, and the error is surfaced,
-      // not swallowed.
-      return res.status(502).json({ error: `Gemini topic generation failed: ${err.message}` });
+      // upstream) rather than a generic 500. N9 (audit comparison,
+      // 2026-07-29): the raw upstream message used to be echoed straight
+      // to the client, which can contain Gemini's own response body
+      // (internal service-account detail, etc.) -- errorHandler.js's own
+      // "generic to client, full detail in the log" rule applies here too,
+      // this route's try/catch just predates it.
+      console.error(`[topics] Gemini topic generation failed: ${err.message}`);
+      return res.status(502).json({ error: 'Topic generation failed. Please try again.' });
     }
     const topic = await insertGeneratedTopic({ text, category, difficulty });
     res.status(201).json(topic);
