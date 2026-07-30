@@ -131,6 +131,67 @@ of skipping), and `N4`'s guardrail #1 real-room check (confirm a
 participant's last words, spoken right as the timer ends, land in their
 feedback).
 
+### Sweep complete, same session — all 8 branches merged (PRs #46–#53)
+
+Each branch above shipped as its own PR into `dev`, in the priority order
+listed, each with a `pr-review` pass (findings drafted in chat, explicit
+user go-ahead, then posted as a review comment + squash-merged with
+`--delete-branch`) before merging — no self-approval attempted, same
+established precedent as every prior PR in this repo (GitHub rejects it
+from this identity regardless).
+
+- **#46** — process-level safety net (`processSafetyNet.js`) + the two
+  uncaught `roomAgent.js` dispatches. The RED test for the duration-timer
+  fix reproduced a **genuine** unhandled rejection in the test run itself,
+  not a hypothetical — real evidence, not a guess.
+- **#47** — `POST /api/topics/custom` rate-limited (H4 residual).
+- **#48** — Gemini key moved to the `x-goog-api-key` header; the raw
+  upstream error text `/api/topics/generate` used to echo to students
+  (the same class of leak that made the 2026-07-29 dead-service-account
+  incident visible as an ugly raw string, per this file's own B7 entry)
+  is now generic, full detail still logged server-side.
+- **#49** — Gemini fetch timeout (15s, `AbortController`) + retry for
+  transient 429/5xx via a `shouldRetry`-extended `withRetry`, verified
+  backward-compatible with the existing LiveKit-connect retry (its own
+  test coverage stayed green with zero changes).
+- **#50** — `DEFAULT_DEV_ORIGINS` gated on `NODE_ENV !== 'production'`;
+  `app.set('trust proxy', 1)` added.
+- **#51** — `listParticipants`/`getActiveRoomForUser` bounded (N5); found
+  and fixed the identical gap in `listRoomsByIds` too, which neither
+  audit had named, for genuine consistency rather than stopping at the
+  letter of the finding.
+- **#52** — the caption-identity fix (N13) **deliberately deviates from
+  the audit's literal wording** — see the PR body and this file's
+  earlier entry for why a naive "trust `participant.identity`" swap would
+  have silently broken every caption (the LiveKit sender is always the
+  hidden transcriber relay, never the speaking student). The shipped fix
+  verifies the sender is that trusted relay instead, closing the same gap
+  without the regression.
+- **#53** — `db/*.js` null-safety consistency. **Caught a real bug before
+  it reached `dev`**: a duplicate `const data` in `getActiveRoomForUser`'s
+  two sequential queries — a genuine `SyntaxError` that broke 8 test
+  files, introduced while making this exact fix, found by `oxlint`
+  immediately after writing it, not by a later human review. Also
+  surfaced and corrected a real process gap in the same PR body: an
+  earlier background test-run summary in this session had reported a
+  false "337/337 green" while this syntax error was live — the actual
+  foreground output showed 8 failed files. Worth remembering: a
+  background task's completion notification is not the same guarantee as
+  reading its real output.
+
+**337/337 server tests green on `dev`** after all eight merges (confirmed
+directly, and independently by each PR's own CI run — not just trusted
+from one local pass), `npx oxlint apps/server/src apps/server/test` clean
+(2 pre-existing, unrelated warnings), `apps/web` build clean. `PLAN.md`
+§5e's checklist updated to ✅ to match.
+
+**Still open, unchanged from the list above** — none of this closes M3,
+M5, N8's GitHub secrets, or N4's guardrail #1 check; those all still need
+the user directly. AssemblyAI connect-retry, first `apps/web` tests, and
+the longer-term architectural items (migration automation, splitting the
+API/agent processes, moving `activeRooms` out of memory, consolidating
+the status docs) remain explicitly deferred past this sweep, as planned.
+
 ## N8 fix — CI now lints the server, runs the RLS isolation tests for real, and reports dependency advisories (2026-07-29)
 
 Picked up per `AUDIT_COMPARISON_2026-07-29.md`'s **N8** finding: three CI

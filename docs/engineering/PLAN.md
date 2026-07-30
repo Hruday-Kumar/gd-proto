@@ -252,7 +252,7 @@ human/dashboard follow-up in §6. Full detail in `PROGRESS.md`.
 | ✅ | **M9** | Unbounded reads (no `LIMIT`) | — | **DONE, 2026-07-29.** See §4. |
 | ✅ | **L1–L8** | README placeholder, dead `spike/` + `packages/shared`, dead `remainingQueue`, discarded `roomId`, raw UUID as LiveKit name, nvm friction | — | **DONE, 2026-07-29.** See §4. |
 
-### 5e. Remaining `AUDIT_COMPARISON_2026-07-29.md` findings + new exception-handling gaps (2026-07-30, in progress)
+### 5e. Remaining `AUDIT_COMPARISON_2026-07-29.md` findings + new exception-handling gaps (2026-07-30) — ✅ DONE
 
 Picked up per direct user instruction to make the app pilot-ready and
 check exception handling across services. A fresh read of current source
@@ -263,19 +263,22 @@ original audit never flagged: **no process-level `unhandledRejection`/
 call (`roomAgent.js`'s duration-timer dispatch of
 `stopTranscriptionForRoom`) that could trigger it and crash the *whole*
 process, not just one room. Full writeup in `PROGRESS.md`'s 2026-07-30
-entry. Each row below is its own small branch/PR into `dev`, in priority
-order (reliability/crash-risk first).
+entry. **All 8 rows below shipped as 8 small branches/PRs into `dev`
+(#46–#53), each TDD RED→GREEN where the change was testable core logic,
+each with a `pr-review` pass before merge, in priority order
+(reliability/crash-risk first). 337/337 server tests green on `dev`
+after all eight, `apps/web` build clean.**
 
-| ☐ | ID | Task | Notes |
+| ✅ | ID | Task | Notes |
 |---|---|---|---|
-| ☐ | — | Process-level safety net + dangling-promise fixes | Highest priority. `process.on('unhandledRejection'/'uncaughtException')`, plus `.catch()` on `roomAgent.js`'s two uncaught fire-and-forget calls. |
-| ☐ | **H4 residual** | Rate-limit `POST /api/topics/custom` | PR #44 covered `/api/rooms` and `/api/rooms/join` but never touched `topics.js` — the audit's own H4 finding named this route explicitly and it's still unlimited. |
-| ☐ | **N9** | Gemini key in URL + raw upstream error echoed to students | Move key to `x-goog-api-key` header; generic error message to the client. |
-| ☐ | — | Gemini fetch timeout + retry | No timeout anywhere in `geminiClient.js` (hung request blocks a feedback-worker slot indefinitely); `withRetry` only wired to LiveKit, not Gemini. |
-| ☐ | **N11 + N12** | Dev CORS origins allowed in prod + no `trust proxy` | Gate `DEFAULT_DEV_ORIGINS` on `NODE_ENV`; add `app.set('trust proxy', 1)`. |
-| ☐ | **N5** | `listParticipants` / `getActiveRoomForUser` still unbounded | M9 named the class but missed these two call sites. |
-| ☐ | **N13** | Caption identity trusts payload body, not LiveKit's authenticated sender | `apps/web`, defense-in-depth for M1. |
-| ☐ | — | `db/*.js` null-safety consistency | Some query functions default `data ?? []`, some don't. |
+| ✅ | — | Process-level safety net + dangling-promise fixes | **PR #46.** `process.on('unhandledRejection'/'uncaughtException')` via new `processSafetyNet.js`; `.catch()` added to `roomAgent.js`'s two uncaught fire-and-forget calls. RED test reproduced a genuine unhandled rejection before the fix. |
+| ✅ | **H4 residual** | Rate-limit `POST /api/topics/custom` | **PR #47.** Wired the existing room-action limiter (not the LLM one — this route doesn't call Gemini). |
+| ✅ | **N9** | Gemini key in URL + raw upstream error echoed to students | **PR #48.** Key moved to `x-goog-api-key` header; `/api/topics/generate` now returns a generic message, full detail still logged server-side. |
+| ✅ | — | Gemini fetch timeout + retry | **PR #49.** 15s `AbortController` timeout; `domain/retry.js`'s `withRetry` extended with a `shouldRetry` predicate (backward-compatible default) so only 429/5xx/network failures retry, not a permanent 4xx. |
+| ✅ | **N11 + N12** | Dev CORS origins allowed in prod + no `trust proxy` | **PR #50.** `DEFAULT_DEV_ORIGINS` gated on `NODE_ENV !== 'production'`; `app.set('trust proxy', 1)` added. |
+| ✅ | **N5** | `listParticipants` / `getActiveRoomForUser` still unbounded | **PR #51.** Both bounded (`.limit()`); `listRoomsByIds` found with the identical gap during the sweep and fixed in the same pass. |
+| ✅ | **N13** | Caption identity trusts payload body, not LiveKit's authenticated sender | **PR #52.** Not a literal 1:1 of the audit's wording — see the PR for why (the LiveKit sender is always the transcriber relay bot, never the speaking student, so the fix verifies the sender is the trusted relay rather than swapping identity sources outright). |
+| ✅ | — | `db/*.js` null-safety consistency | **PR #53.** Also caught and fixed a real `SyntaxError` (duplicate `const data` in one scope, introduced mid-fix) before it reached `dev` — 8 test files would have failed to parse. |
 
 **Deliberately not in this sweep:** wiring `withRetry` around AssemblyAI's
 WebSocket connect (currently zero retry, unlike LiveKit) — touches the
