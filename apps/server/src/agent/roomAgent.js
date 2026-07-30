@@ -108,15 +108,33 @@ export async function startTranscriptionForRoom(
         // Live captions (peripheral, PHASE1_PLAN.md §5 W5) -- broadcast
         // regardless of whether attribution matched, since a caption is
         // just a display convenience; only the DB write above is gated on
-        // a resolved user_id.
+        // a resolved user_id. Fire-and-forget by design (must not block
+        // transcript persistence above), but a data-channel failure here
+        // must not go uncaught (2026-07-30 exception-handling pass) --
+        // publishData can both throw synchronously and return a promise
+        // that rejects, so both are guarded.
         const payload = encoder.encode(JSON.stringify({ type: 'transcript', identity, text }));
-        room.localParticipant.publishData(payload, { reliable: true, topic: 'transcript' });
+        try {
+          const published = room.localParticipant.publishData(payload, { reliable: true, topic: 'transcript' });
+          published?.catch?.((e) => console.error(`[agent] failed to broadcast caption for room ${roomId}: ${e.message}`));
+        } catch (e) {
+          console.error(`[agent] failed to broadcast caption for room ${roomId}: ${e.message}`);
+        }
       },
     });
     entry.transcriber = transcriber;
 
     entry.timeout = setTimeout(() => {
-      stopTranscriptionForRoom(roomId);
+      // 2026-07-30 (exception-handling pass): the only other caller of
+      // this function (stopAllTranscriptions, during shutdown) catches
+      // it -- this call site was missed. An uncaught rejection here is an
+      // unhandled rejection with no global handler except the process
+      // safety net (processSafetyNet.js), which logs rather than crashes
+      // -- but catching here, at the source, is the correct place to
+      // isolate one room's failed disconnect from every other live room.
+      stopTranscriptionForRoom(roomId).catch((err) =>
+        console.error(`[agent] error stopping room ${roomId} on timer: ${err.message}`)
+      );
     }, durationSeconds * 1000 + STOP_GRACE_MS);
 
     activeRooms.set(roomId, entry);

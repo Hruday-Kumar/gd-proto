@@ -222,6 +222,94 @@ describe('isTranscriptionActive', () => {
   });
 });
 
+// 2026-07-30 (pilot-readiness + exception-handling pass): the duration
+// timer's dispatch of stopTranscriptionForRoom had no .catch() -- the only
+// other caller (stopAllTranscriptions) does catch it. On Node's modern
+// default, a rejected stop reached this way would be an unhandled
+// rejection that crashes the whole process, not just this one room.
+describe('the duration timer', () => {
+  it('catches and logs, rather than leaves unhandled, a rejected stop when the timer fires', async () => {
+    vi.useFakeTimers();
+    try {
+      const room = fakeRoom({ connect: vi.fn().mockResolvedValue(undefined) });
+      room.disconnect = vi.fn().mockRejectedValue(new Error('disconnect failed'));
+      const roomId = 'timer-disconnect-fails';
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      await startTranscriptionForRoom({ id: roomId, durationSeconds: 60 }, { ...baseOpts, roomFactory: () => room });
+
+      // Well past durationSeconds + the internal STOP_GRACE_MS.
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+
+      expect(consoleError).toHaveBeenCalledWith(expect.stringContaining(roomId));
+      consoleError.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// 2026-07-30: the live-caption broadcast was also fire-and-forget with no
+// error handling -- a data-channel failure here must not crash transcript
+// persistence (which happens in the very same onTranscript callback,
+// just above the broadcast).
+describe('live caption broadcast', () => {
+  async function startWithOnTranscript(room, roomId) {
+    let onTranscript;
+    const attachTranscriberFn = (_room, opts) => {
+      onTranscript = opts.onTranscript;
+      return { closeAll: vi.fn() };
+    };
+    await startTranscriptionForRoom(
+      { id: roomId, durationSeconds: 600 },
+      {
+        ...baseOpts,
+        roomFactory: () => room,
+        attachTranscriberFn,
+        listParticipantsFn: async () => [{ livekit_identity: 'someone', user_id: 'user-1' }],
+      }
+    );
+    return () => onTranscript({ identity: 'someone', text: 'hello', startedAtMs: 1, endedAtMs: 2 });
+  }
+
+  it('catches and logs, rather than throws, when publishData fails synchronously', async () => {
+    const room = fakeRoom({ connect: vi.fn().mockResolvedValue(undefined) });
+    room.localParticipant.publishData = vi.fn(() => {
+      throw new Error('data channel closed');
+    });
+    const roomId = 'caption-broadcast-throws';
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const fire = await startWithOnTranscript(room, roomId);
+
+      expect(fire).not.toThrow();
+      expect(consoleError).toHaveBeenCalledWith(expect.stringContaining(roomId));
+      consoleError.mockRestore();
+    } finally {
+      await stopTranscriptionForRoom(roomId);
+    }
+  });
+
+  it('catches and logs, rather than leaves unhandled, when publishData returns a rejected promise', async () => {
+    const room = fakeRoom({ connect: vi.fn().mockResolvedValue(undefined) });
+    room.localParticipant.publishData = vi.fn().mockRejectedValue(new Error('data channel closed'));
+    const roomId = 'caption-broadcast-rejects';
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const fire = await startWithOnTranscript(room, roomId);
+      fire();
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(consoleError).toHaveBeenCalledWith(expect.stringContaining(roomId));
+      consoleError.mockRestore();
+    } finally {
+      await stopTranscriptionForRoom(roomId);
+    }
+  });
+});
+
 describe('stopAllTranscriptions', () => {
   it('disconnects every active room and empties the registry', async () => {
     const roomA = fakeRoom({ connect: vi.fn().mockResolvedValue(undefined) });
