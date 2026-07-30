@@ -84,6 +84,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm test --workspace=@placeme/web
       - run: npm run lint --workspace=@placeme/web
       - run: npm run build --workspace=@placeme/web
 
