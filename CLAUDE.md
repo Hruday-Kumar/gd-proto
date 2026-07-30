@@ -90,6 +90,22 @@ Use `$placeme-feature` for implementation. Before merge, route verification to
 the corresponding `$placeme-review`, `$placeme-security`, `$placeme-pilot`, and
 `$placeme-release` workflows.
 
+Automatically invoke the matching project skill when a user asks to:
+
+- build, implement, fix, or refactor approved behavior → `$placeme-feature`;
+- review a diff/PR or verify compliance/regressions → `$placeme-review`;
+- audit security, auth, RLS, consent, secrets, APIs, or privacy →
+  `$placeme-security`;
+- assess pilot readiness or a pilot-facing change → `$placeme-pilot`;
+- prepare/verify a release, deployment, migration, smoke test, or rollback →
+  `$placeme-release`;
+- handle an outage, incident, degradation, or root cause →
+  `$placeme-incident`.
+
+Apply multiple matching skills in lifecycle order. Automatic selection never
+grants authority to deploy, migrate, delete, rotate credentials, or contact
+external parties.
+
 ### TDD — mandatory for behavior changes
 
 1. **RED:** write the next focused test and run it. Confirm it fails for the

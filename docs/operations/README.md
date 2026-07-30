@@ -1,5 +1,9 @@
 # Operations
 
+Apply the repository-wide
+[Definition of Done](definition-of-done.md) before merging any production
+change.
+
 Operational ownership for the PlaceMe pilot:
 
 | Surface | Primary signal | Operator response |
@@ -27,4 +31,3 @@ transcripts in an incident record or shared screenshot.
 
 Use `templates/incident-report.md`, `templates/post-mortem.md`, and
 `$placeme-incident` for incidents.
-

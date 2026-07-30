@@ -16,6 +16,19 @@ Do not implement significant behavior without an approved specification. Keep
 the issue, specification, implementation, tests, verification evidence, rollout,
 and rollback traceable through the specification path and pull request.
 
-Use the focused repository skills under `.github/skills/placeme-*` when their
-workflow applies. Existing generic skills are not project policy.
+Automatically select the focused repository skill whose description matches the
+request:
 
+| Request intent | Skill |
+|---|---|
+| build, implement, fix, or refactor approved behavior | `$placeme-feature` |
+| review a diff/PR or verify spec/regression/concurrency | `$placeme-review` |
+| audit auth, authorization, RLS, consent, secrets, API, or privacy | `$placeme-security` |
+| assess real-student or operational pilot readiness | `$placeme-pilot` |
+| prepare/verify release, deployment, migration, smoke, or rollback | `$placeme-release` |
+| respond to outage, incident, degradation, or root-cause analysis | `$placeme-incident` |
+
+For a compound request, apply the relevant skills in lifecycle order. Skill
+selection does not authorize deployment, migration, destructive changes, or
+external communication. Existing generic skills are optional tools, not project
+policy.

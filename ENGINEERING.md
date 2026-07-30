@@ -198,7 +198,9 @@ Use `templates/release-checklist.md`, the runbooks in `docs/runbooks/`, and
 
 ## Definition of Done
 
-A feature is complete only when:
+A feature is complete only when the repository-wide checklist in
+[`docs/operations/definition-of-done.md`](docs/operations/definition-of-done.md)
+is satisfied:
 
 - [ ] specification approved;
 - [ ] design review complete;
@@ -216,4 +218,3 @@ A feature is complete only when:
 
 Unmet items remain explicit blockers or documented, approved follow-ups. “Tests
 pass” alone is never the Definition of Done.
-

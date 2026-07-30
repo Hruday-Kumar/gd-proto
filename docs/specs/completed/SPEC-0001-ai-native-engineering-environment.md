@@ -1,6 +1,6 @@
 # SPEC-0001 — AI-native engineering environment
 
-**Status:** Approved  
+**Status:** Completed  
 **Owner:** Engineering  
 **Approvers:** Repository owner  
 **Issue:** User-provided repository transformation brief  
@@ -37,6 +37,8 @@ project-focused selection policy.
 - Create nine specification/decision templates and seven verification templates.
 - Create ten operational runbooks.
 - Create and validate six focused PlaceMe skills.
+- Make the six skills automatically discoverable and implicitly invocable in
+  Codex, Claude Code, and GitHub Copilot/VS Code from repository-local paths.
 - Create seven agent definitions with responsibilities, inputs, outputs,
   invocation criteria, and prohibitions.
 - Create a professional pull request template and six issue templates.
@@ -71,24 +73,39 @@ Existing documents remain in place and are indexed from the new structure.
 
 ## Implementation Tasks
 
-- [ ] Establish handbook, AI contexts, and spec lifecycle.
-- [ ] Add templates, checklists, ADR entry point, and GitHub forms.
-- [ ] Add runbooks, operations, and pilot documentation.
-- [ ] Add focused agents and skills.
-- [ ] Complete the existing-skills audit.
-- [ ] Validate links, structure, skills, tests, lint, and build.
-- [ ] Move this specification to `completed/` with evidence.
+- [x] Establish handbook, AI contexts, and spec lifecycle.
+- [x] Add templates, checklists, ADR entry point, and GitHub forms.
+- [x] Add runbooks, operations, and pilot documentation.
+- [x] Add focused agents and skills.
+- [x] Add automatic cross-host skill discovery and trigger routing.
+- [x] Complete the existing-skills audit.
+- [x] Validate links, structure, skills, tests, lint, and build.
+- [x] Move this specification to `completed/` with evidence.
 
 ## Testing
 
-- Run the six-skill validator.
-- Run a repository link/path validation script without changing application code.
-- Run `npm test`, `npm run lint`, and `npm run build`.
+- Six-skill validator: passed at canonical `.github/skills`, Codex
+  `.agents/skills`, and Claude `.claude/skills` discovery paths.
+- Repository link/path validation: 61 new/updated Markdown files passed.
+- Node 22 tests with live Supabase variables intentionally blanked: 311 passed,
+  8 live-RLS tests skipped by their designed no-credentials path.
+- Node 22 lint: zero errors; one pre-existing React Fast Refresh warning.
+- Node 22 production build: passed.
 
 ## Verification
 
 Map every deliverable in the source brief to an existing file and verify required
 headings. Review `git diff` to ensure useful tracked documentation was preserved.
+
+Completed:
+
+- all nine specification/decision templates contain the required lifecycle
+  headings;
+- all issue, agent, instruction, and OpenAI metadata YAML parses successfully;
+- the skills audit contains exactly 252 removal recommendations and no deletion;
+- all automatic-discovery links resolve to the six validated canonical skills;
+- local Markdown links resolve; application test/lint/build gates pass as
+  recorded above.
 
 ## Monitoring
 
@@ -106,4 +123,3 @@ work.
 
 Revert the workflow PR. Preserve any specifications or incident records created
 after adoption by moving them to an archive before reverting structure.
-
