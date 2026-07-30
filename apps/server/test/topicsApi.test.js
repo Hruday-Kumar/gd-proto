@@ -6,17 +6,25 @@ import { describe, it, expect, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { createTopicsRouter } from '../src/api/topics.js';
-import { createLlmRateLimiter } from '../src/api/rateLimit.js';
+import { createLlmRateLimiter, createRoomActionRateLimiter } from '../src/api/rateLimit.js';
 
 function stubAuth(req, _res, next) {
   req.userId = 'user-123';
   next();
 }
 
-function buildApp({ insertCustomTopic, insertGeneratedTopic, generateTopicFn, llmRateLimiter }) {
+function buildApp({ insertCustomTopic, insertGeneratedTopic, generateTopicFn, llmRateLimiter, roomActionRateLimiter }) {
   const app = express();
   app.use(express.json());
-  app.use(createTopicsRouter(stubAuth, { insertCustomTopic, insertGeneratedTopic, generateTopicFn, llmRateLimiter }));
+  app.use(
+    createTopicsRouter(stubAuth, {
+      insertCustomTopic,
+      insertGeneratedTopic,
+      generateTopicFn,
+      llmRateLimiter,
+      roomActionRateLimiter,
+    })
+  );
   return app;
 }
 
@@ -47,6 +55,24 @@ describe('POST /api/topics/custom', () => {
     expect(res.status).toBe(201);
     expect(res.body).toEqual({ id: 't1', text: 'AI in education', source: 'custom' });
     expect(insertCustomTopic).toHaveBeenCalledWith('user-123', { text: 'AI in education', category: 'tech', difficulty: undefined });
+  });
+
+  // H4 residual (audit comparison 2026-07-29, N3's recommended fix): this
+  // route writes an unbounded row count to `topics` on every request and
+  // had no rate limiting at all -- PR #44 extended the room-action limiter
+  // to /api/rooms and /api/rooms/join but never touched this route, even
+  // though the original H4 finding named it. Uses the room-action limiter,
+  // not the LLM one -- this route never calls Gemini itself.
+  it('is rate-limited per user', async () => {
+    const app = buildApp({
+      insertCustomTopic: vi.fn().mockResolvedValue({ id: 't', text: 'x', source: 'custom' }),
+      insertGeneratedTopic: vi.fn(),
+      roomActionRateLimiter: createRoomActionRateLimiter({ windowMs: 60_000, max: 2 }),
+    });
+    await request(app).post('/api/topics/custom').send({ text: 'first' });
+    await request(app).post('/api/topics/custom').send({ text: 'second' });
+    const res = await request(app).post('/api/topics/custom').send({ text: 'third' });
+    expect(res.status).toBe(429);
   });
 });
 
