@@ -61,5 +61,5 @@ export async function listFeedbackForUserAndRooms(userId, roomIds, { supabase = 
   if (!roomIds.length) return [];
   const { data, error } = await supabase.from('feedback').select('room_id, body').eq('user_id', userId).in('room_id', roomIds);
   if (error) throw error;
-  return data;
+  return data ?? [];
 }

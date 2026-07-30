@@ -65,7 +65,7 @@ export async function listRoomsByIds(ids, { supabase = getSupabase() } = {}) {
     .order('created_at', { ascending: false })
     .limit(MAX_HISTORY_ROOMS);
   if (error) throw error;
-  return data;
+  return data ?? [];
 }
 
 // Every room the database still considers in progress. Read once at boot

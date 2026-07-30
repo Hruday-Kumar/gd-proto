@@ -75,7 +75,7 @@ export async function listRoomIdsForUser(userId, { supabase = getSupabase() } = 
     .order('joined_at', { ascending: false })
     .limit(MAX_HISTORY_ROOMS);
   if (error) throw error;
-  return data.map((row) => row.room_id);
+  return (data ?? []).map((row) => row.room_id);
 }
 
 // The student's most recent non-ended room, if any -- lets a queued
@@ -88,13 +88,14 @@ export async function getActiveRoomForUser(userId, { supabase = getSupabase() } 
   // 4s throughout queueing -- an ever-growing IN-list for a heavy user.
   // Reuses listRoomIdsForUser's own MAX_HISTORY_ROOMS ceiling just above;
   // only the most recent rooms matter for finding an *active* one anyway.
-  const { data: participantRows, error: participantError } = await supabase
+  const { data: rawParticipantRows, error: participantError } = await supabase
     .from('room_participants')
     .select('room_id')
     .eq('user_id', userId)
     .order('joined_at', { ascending: false })
     .limit(MAX_HISTORY_ROOMS);
   if (participantError) throw participantError;
+  const participantRows = rawParticipantRows ?? [];
   if (!participantRows.length) return null;
 
   const { data, error } = await supabase
