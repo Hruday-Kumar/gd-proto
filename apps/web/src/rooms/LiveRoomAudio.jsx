@@ -8,6 +8,18 @@ import { track } from '../lib/analytics.js';
 const decoder = new TextDecoder();
 const MAX_CAPTIONS = 20;
 
+// N13 (audit comparison, 2026-07-29): must match the identity
+// agent/roomAgent.js mints its own LiveKit token with (`mintTokenFn`
+// call, W5). Only that hidden agent participant's token ever carries
+// canPublishData (M1, audit 2026-07-28) -- a per-speaker identity isn't
+// meaningful here since every caption is relayed through this one bot,
+// not published by the speaking student directly. Checking the sender is
+// still real defense in depth: if a student token ever regressed to
+// carrying canPublishData again, a forged data message wouldn't pass this
+// check even though it could still fake the identity field inside its
+// own payload.
+const TRANSCRIBER_IDENTITY = 'transcriber';
+
 // Joins the room's live LiveKit audio session (W5). Guardrail #3 is
 // enforced server-side: the token mint route (api/rooms.js) sits behind
 // the W3 consent gate, so this component never even receives a token,
@@ -81,7 +93,15 @@ export function LiveRoomAudio({ roomId }) {
       setActiveSpeakerIds(new Set(speakers.map((s) => s.identity)));
     });
 
-    room.on(RoomEvent.DataReceived, (payload) => {
+    room.on(RoomEvent.DataReceived, (payload, participant) => {
+      // N13 (audit comparison, 2026-07-29): only trust a caption message
+      // whose LiveKit sender is genuinely the transcriber agent -- the
+      // authenticated `participant` argument LiveKit provides, not
+      // anything the payload itself claims. The per-speaker identity
+      // inside the payload is still what's displayed (this bot relays
+      // every speaker's captions, so the sender is never the speaker
+      // directly), but a message from anyone else is dropped outright.
+      if (participant?.identity !== TRANSCRIBER_IDENTITY) return;
       try {
         const msg = JSON.parse(decoder.decode(payload));
         if (msg.type !== 'transcript') return;
