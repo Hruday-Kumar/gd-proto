@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext.jsx';
+import { useRoomSessionGuard } from '../rooms/RoomSessionGuardContext.jsx';
 
 const NAV_LINKS = [
   { to: '/', label: 'Home', icon: 'space_dashboard', end: true },
@@ -8,6 +9,14 @@ const NAV_LINKS = [
   { to: '/rooms/match', label: 'Random Match', icon: 'shuffle' },
   { to: '/history', label: 'History', icon: 'history' },
 ];
+
+// A live/pending-feedback room session (see rooms/sessionGuard.js) has no
+// safe "leave" via the always-visible nav -- doing so drops this student's
+// mic from a session other real people are relying on. Confirm first,
+// exactly once, regardless of which exit (a nav link or log out) was used.
+function confirmLeaveIfSessionInProgress(guard) {
+  return !guard.active || window.confirm(`${guard.message} Leave anyway?`);
+}
 
 function navLinkClasses({ isActive }) {
   return [
@@ -20,6 +29,18 @@ function navLinkClasses({ isActive }) {
 
 export function AppShell({ children, title, subtitle }) {
   const { user, signOut } = useAuth();
+  const guard = useRoomSessionGuard();
+
+  // Guard inactive: returns true instantly, NavLink navigates natively as
+  // before -- zero added behavior. Guard active: asks once; declining
+  // prevents the default navigation/log-out, confirming lets it proceed.
+  function handleNavClick(event) {
+    if (!confirmLeaveIfSessionInProgress(guard)) event.preventDefault();
+  }
+
+  function handleSignOut() {
+    if (confirmLeaveIfSessionInProgress(guard)) signOut();
+  }
 
   return (
     <div className="min-h-screen bg-background text-on-surface md:flex">
@@ -36,7 +57,7 @@ export function AppShell({ children, title, subtitle }) {
 
         <nav className="flex-1 space-y-1">
           {NAV_LINKS.map((link) => (
-            <NavLink key={link.to} to={link.to} end={link.end} className={navLinkClasses}>
+            <NavLink key={link.to} to={link.to} end={link.end} className={navLinkClasses} onClick={handleNavClick}>
               <span className="material-symbols-outlined">{link.icon}</span>
               <span>{link.label}</span>
             </NavLink>
@@ -49,7 +70,7 @@ export function AppShell({ children, title, subtitle }) {
           </p>
           <button
             type="button"
-            onClick={() => signOut()}
+            onClick={handleSignOut}
             className="flex w-full items-center justify-center gap-3 rounded-lg border border-border-base px-6 py-2 text-label-md text-on-surface transition-colors hover:bg-surface-container-high"
           >
             <span className="material-symbols-outlined text-base">logout</span>
@@ -66,7 +87,7 @@ export function AppShell({ children, title, subtitle }) {
           </div>
           <button
             type="button"
-            onClick={() => signOut()}
+            onClick={handleSignOut}
             className="flex items-center gap-1 text-label-sm text-on-surface-variant"
           >
             <span className="material-symbols-outlined text-base">logout</span>
@@ -93,6 +114,7 @@ export function AppShell({ children, title, subtitle }) {
               className={({ isActive }) =>
                 `flex flex-col items-center gap-0.5 px-2 py-1 ${isActive ? 'text-primary' : 'text-on-surface-variant'}`
               }
+              onClick={handleNavClick}
             >
               <span className="material-symbols-outlined text-xl">{link.icon}</span>
               <span className="text-[10px] font-semibold">{link.label}</span>

@@ -5,6 +5,11 @@ import { getRoomStatus, startRoom, getMyFeedback, getRoomTranscript } from '../r
 import { AppShell } from '../components/AppShell.jsx';
 import { TranscriptList } from '../components/TranscriptList.jsx';
 import { FeedbackRating } from '../components/FeedbackRating.jsx';
+import { isSessionInProgress } from '../rooms/sessionGuard.js';
+import { useSetRoomSessionGuard } from '../rooms/RoomSessionGuardContext.jsx';
+
+const NAV_GUARD_MESSAGE =
+  'Leaving now will disconnect your microphone from the live session. Other participants may be affected.';
 
 // livekit-client is by far the largest dependency in the app and is only
 // ever needed once a room actually goes live -- loading it lazily keeps it
@@ -148,8 +153,14 @@ export function LobbyPage() {
   // mechanism for that. Window: from the moment the session goes live
   // until this student's feedback has actually loaded (or definitively
   // failed) -- not during the waiting room, which is safe to leave.
+  const sessionInProgress = isSessionInProgress(status, feedback, feedbackFailed);
+
+  // Guards in-app navigation (AppShell's nav links and log-out) for the same
+  // window as the beforeunload guard below -- both read isSessionInProgress
+  // so they can never drift apart.
+  useSetRoomSessionGuard(sessionInProgress, NAV_GUARD_MESSAGE);
+
   useEffect(() => {
-    const sessionInProgress = status === 'live' || (status === 'ended' && !feedback && !feedbackFailed);
     if (!sessionInProgress) return undefined;
     function handleBeforeUnload(e) {
       e.preventDefault();
@@ -157,7 +168,7 @@ export function LobbyPage() {
     }
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [status, feedback, feedbackFailed]);
+  }, [sessionInProgress]);
 
   async function handleStart() {
     setStarting(true);

@@ -2,17 +2,87 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-07-30 (doc-sync + pilot-readiness/exception-handling
-pass — see the entry directly below. It corrects the 2026-07-29 entry
-that used to be here: `fix/n3-n4-capacity-ratelimit-flush-race` (N8, N6,
-N3, N4) **is merged** — PR #44, confirmed via `git log`/`gh pr list`, not
-left uncommitted as previously recorded. The reference to
-`docs/engineering/CODEX_HANDOVER_2026-07-29.md` below was also stale —
-that file was never created and does not exist in this repo. Treat this
-file and `PLAN.md` as the source of truth. Older context — the N1 fix
-session, Phase 5 release-to-both-remotes, close-out session,
-blockers-investigation, and M4/H6/M10 notes — is preserved further down,
-unchanged.)
+**Last updated:** 2026-07-30 (BUG-SPEC-0001, lobby nav guard — see the entry
+directly below. Older entries, including the same-day doc-sync +
+pilot-readiness pass, are preserved further down, unchanged.)
+
+## BUG-SPEC-0001 — lobby nav guard for live sessions (2026-07-30)
+
+Ran `/impeccable critique` end-to-end over the whole web app UI (all ten
+routes, `App.jsx` → `apps/web/src/pages/*`), the first full-journey design
+critique this repo has had — snapshot at
+`.impeccable/critique/2026-07-30T17-08-16Z__apps-web-src.md` (score 24/40,
+1 P0, 2 P1, 2 P2). User approved tackling all 5 findings, P0 first,
+production-ready. This session did the P0 only; branch
+`fix/lobby-nav-guard-live-session` off `dev`, spec at
+`docs/specs/active/BUG-SPEC-0001-lobby-nav-guard-live-session.md`.
+
+**Bug:** `AppShell.jsx`'s sidebar/bottom nav links and both "Log out"
+buttons stayed fully clickable while `LobbyPage.jsx` was in `live` status
+(or awaiting feedback). The existing `beforeunload` guard only catches tab
+close/refresh, not React Router client-side navigation, so one click on
+"Home" mid-session silently unmounted `LiveRoomAudio` and dropped that
+student's mic from a session other real students were relying on — no
+confirmation at all.
+
+**Fix:** extracted the existing "session in progress" condition (live, or
+ended-but-feedback-not-yet-resolved/failed) into a shared pure function,
+`apps/web/src/rooms/sessionGuard.js` (`isSessionInProgress`), now used by
+both the pre-existing `beforeunload` guard and a new in-app guard.  A small
+context, `apps/web/src/rooms/RoomSessionGuardContext.jsx`, lets `LobbyPage`
+(write side, `useSetRoomSessionGuard`) tell `AppShell` (read side,
+`useRoomSessionGuard`) that a session is in progress; `AppShell`'s nav-link
+clicks and log-out buttons now call `window.confirm(...)` first and only
+proceed if the user confirms. `RoomSessionGuardProvider` wraps the routed
+tree once in `App.jsx`. **Not covered:** the browser back/forward buttons —
+this app uses `<BrowserRouter>`, not a data router, so `useBlocker` isn't
+available without a bigger router migration; called out as an explicit
+non-goal in the spec, not silently dropped.
+
+**Frontend testing did not exist in this repo before this session** —
+`apps/web` had no test script and zero test files (`apps/server` had 337
+tests, `apps/web` had 0). Added the minimum infra to satisfy this repo's
+TDD mandate for this fix: `vitest` + `jsdom` + `@testing-library/react` +
+`@testing-library/user-event` as devDependencies, `apps/web/vitest.config.js`
+(note `test.globals: true` — required for RTL's automatic per-test
+`cleanup()`, which otherwise silently leaves stale DOM mounted across
+tests and produces flaky-looking failures; hit this directly while writing
+the AppShell test and fixed it), `apps/web/vitest.setup.js`, and
+`npm test` now wired up for `@placeme/web`. This is a one-time cost that
+every future `apps/web` change can build on, not scope creep specific to
+this bug.
+
+**Tests:** `apps/web/src/rooms/sessionGuard.test.js` (5 cases, pure
+function, no DOM) + `apps/web/src/components/AppShell.test.jsx` (5 cases:
+unguarded nav/log-out proceed with no `confirm()` call; guarded nav/log-out
+block on cancel and proceed on confirm). All 10 pass. Ran fresh from repo
+root under Node 22 (`.nvmrc`): `npm test` → 337/337 server + 10/10 web
+green; `npm run lint` → clean (2 pre-existing-pattern `only-export-
+components` warnings, same shape as the already-accepted
+`auth/AuthContext.jsx`, not new failures); `npm run build` → green.
+
+**Residual/open — guardrail #1 applies:** this is room/audio-adjacent
+behavior, so it is **not** to be called fully done on tests alone. Still
+needed: a real human (ideally two, in an actual live multi-participant
+room) clicking a nav link mid-session, confirming the prompt appears,
+blocks on cancel, and proceeds on confirm. Not attempted this session — no
+real room and no second participant were available here. Tracked as an
+open item below.
+
+**Not done this session (4/5 remaining from the same critique, by design —
+user approved doing P0 first):** no cancel/exit affordance in `MatchPage`'s
+queue or `LobbyPage`'s waiting state (P1); under-designed post-session
+feedback-wait screen (P1); button/busy-state vocabulary drift across pages
+(P2); missing skeleton loading states (P2). Next session should pick these
+up in that order.
+
+Also surfaced, not fixed (pre-existing, out of scope for this bug): `npm
+audit` on `apps/web` reports one high-severity advisory in `react-router`
+(GHSA-qwww-vcr4-c8h2, RSC-mode CSRF bypass) via `react-router-dom@7.18.1`.
+This app doesn't use RSC mode, so exposure is unclear, but it's worth its
+own look — `npm audit fix --force` would downgrade `react-router-dom` to
+7.11.0, a breaking change needing its own review, not something to do
+inside a nav-guard bug fix.
 
 ## Pilot-readiness + exception-handling pass (2026-07-30)
 
@@ -2250,6 +2320,8 @@ settle:**
 - ~~**PR #54 (S1, feedback rating) is open, not merged — `supabase/migrations/0007_feedback_rating.sql` must run first.**~~ **CLOSED 2026-07-28** — probed the live project directly: `feedback.rating` and `feedback.rating_reason` both exist, so the migration ran and the S1 code shipped. Migration status for every file now lives in `PLAN.md` §3.
 - **DEEPGRAM_API_KEY still needs revoking in the Deepgram dashboard** — removed from this environment's `.env` (PR #51, S2) since nothing references it, but the key itself is a user action in Deepgram's console, not something this session could do.
 - **B1/B3/B4/B7 from `PILOT_READINESS.md` are still open** — deploy (Render + Cloudflare Pages + `RENDER_APP_URL`), the Supabase "Confirm email" toggle, the post-deploy Render-sleep-vs-agent-worker test, and guardrail #1's human-verification gate for the UI-redesign/live-room-UX/flows-fix body of work. All need dashboard access or real humans, not attempted this session — see "What's next" above.
+- **BUG-SPEC-0001's guardrail #1 human-verification gate is open** — the lobby nav guard (branch `fix/lobby-nav-guard-live-session`) needs a real human clicking a nav link mid-live-session to confirm the prompt actually appears and blocks/allows correctly; not attempted this session (no real room/second participant available). Don't mark this fix fully "done" until that happens.
+- **4 of 5 issues from the 2026-07-30 end-to-end UI critique are still open** — `MatchPage`/`LobbyPage` waiting-state exit affordance (P1), the under-designed post-session feedback-wait screen (P1), button/busy-state vocabulary drift (P2), missing skeleton loading states (P2). See the BUG-SPEC-0001 entry above; user approved all 5, this session did only the P0.
 
 ## Deferred (not v1, tracked so they aren't forgotten)
 GD AI Voice Practice · JAM · Aptitude/Technical · 1-on-1 Roleplay · Drive Simulator · payments · notifications/SMS/push · analytics · advanced observability.
