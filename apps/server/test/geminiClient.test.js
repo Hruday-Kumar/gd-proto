@@ -49,7 +49,61 @@ describe('generateTopic', () => {
 
   it('throws a descriptive error when the API responds with a non-OK status', async () => {
     const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 429, text: async () => 'rate limited' });
-    await expect(generateTopic({}, { apiKey: 'test-key', fetchImpl })).rejects.toThrow(/429/);
+    await expect(generateTopic({}, { apiKey: 'test-key', fetchImpl, retryAttempts: 1 })).rejects.toThrow(/429/);
+  });
+
+  // 2026-07-30 (pilot-readiness + exception-handling pass): no timeout
+  // existed anywhere in this file -- a hung Gemini request blocked
+  // indefinitely, tying up an HTTP request or a feedback-worker
+  // concurrency slot forever.
+  it('times out a hung request rather than blocking indefinitely', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn(
+        (_url, options) =>
+          new Promise((_resolve, reject) => {
+            options.signal.addEventListener('abort', () => {
+              const err = new Error('This operation was aborted');
+              err.name = 'AbortError';
+              reject(err);
+            });
+          })
+      );
+
+      const promise = generateTopic({}, { apiKey: 'test-key', fetchImpl, timeoutMs: 15_000, retryAttempts: 1 });
+      const assertion = expect(promise).rejects.toThrow(/timed out/i);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // withRetry (domain/retry.js) used to be wired only to the LiveKit
+  // connect call -- a transient Gemini 5xx/429 got zero retry.
+  it('retries a transient 500 and succeeds on the next attempt', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 500, text: async () => 'server error' })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ candidates: [{ content: { parts: [{ text: 'Should X be mandatory?' }] } }] }),
+      });
+
+    const result = await generateTopic({}, { apiKey: 'test-key', fetchImpl, retryDelayMs: 0 });
+
+    expect(result).toBe('Should X be mandatory?');
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  // A 400/401/etc is permanent -- retrying three times only delays
+  // surfacing a real problem (a bad/expired key, a malformed request).
+  it('does not retry a permanent 4xx failure', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 401, text: async () => 'invalid key' });
+
+    await expect(generateTopic({}, { apiKey: 'test-key', fetchImpl, retryDelayMs: 0 })).rejects.toThrow(/401/);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
 
