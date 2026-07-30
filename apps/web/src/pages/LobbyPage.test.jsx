@@ -66,3 +66,32 @@ describe('LobbyPage leave-room affordance', () => {
     expect(screen.queryByRole('link', { name: /leave room/i })).not.toBeInTheDocument();
   });
 });
+
+describe('LobbyPage feedback-wait screen', () => {
+  beforeEach(() => {
+    roomsApi.getRoomTranscript.mockResolvedValue({ lines: [] });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('shows a spinner and reassurance copy while feedback is still generating', async () => {
+    roomsApi.getRoomStatus.mockResolvedValue({ status: 'ended', isCreator: false, code: 'ABCDEF' });
+    roomsApi.getMyFeedback.mockResolvedValue({ feedback: null });
+    renderRoom({ isCreator: false, code: 'ABCDEF', status: 'ended' });
+
+    expect(await screen.findByText(/generating your feedback/i)).toBeInTheDocument();
+    expect(screen.getByText(/gemini is reviewing the discussion now/i)).toBeInTheDocument();
+    expect(screen.getByText(/progress_activity/i)).toBeInTheDocument();
+  });
+
+  it('replaces the spinner with the resolved feedback once it arrives', async () => {
+    roomsApi.getRoomStatus.mockResolvedValue({ status: 'ended', isCreator: false, code: 'ABCDEF' });
+    roomsApi.getMyFeedback.mockResolvedValue({ feedback: 'Great job structuring your points.' });
+    renderRoom({ isCreator: false, code: 'ABCDEF', status: 'ended' });
+
+    expect(await screen.findByText('Great job structuring your points.')).toBeInTheDocument();
+    expect(screen.queryByText(/generating your feedback/i)).not.toBeInTheDocument();
+  });
+});
