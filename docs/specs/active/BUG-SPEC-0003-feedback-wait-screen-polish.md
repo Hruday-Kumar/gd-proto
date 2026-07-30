@@ -110,7 +110,7 @@ than introducing a new visual language:
 
 ```jsx
 <div aria-live="polite">
-  {feedback ? (
+  {feedback != null ? (
     <p className="mt-1 text-body-md text-on-surface">{feedback}</p>
   ) : feedbackFailed ? (
     <p className="mt-1 text-body-md text-on-surface">
@@ -133,6 +133,11 @@ than introducing a new visual language:
   )}
 </div>
 ```
+
+The `feedback != null` check (rather than a plain truthy `feedback`) preserves
+the original code's `??` semantics exactly — only `null`/`undefined` falls
+through to the next branch, not any falsy value (e.g. an empty string) —
+caught in `pr-review` and fixed before merge.
 
 The icon/animation reuses the same `material-symbols-outlined animate-spin`
 pattern already used one screen-state up in this same file (the

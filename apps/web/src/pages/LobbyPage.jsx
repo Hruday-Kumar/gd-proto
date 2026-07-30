@@ -289,7 +289,7 @@ export function LobbyPage() {
           <div className="mt-6 rounded-lg bg-surface-container-low p-6">
             <p className="text-label-sm font-semibold text-on-surface-variant">Your feedback</p>
             <div aria-live="polite">
-              {feedback ? (
+              {feedback != null ? (
                 <p className="mt-1 text-body-md text-on-surface">{feedback}</p>
               ) : feedbackFailed ? (
                 <p className="mt-1 text-body-md text-on-surface">
