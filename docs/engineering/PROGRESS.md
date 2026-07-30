@@ -2,24 +2,134 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-07-29 (reconciled from two parallel work sessions
-that both branched off the same N1-fix state: this session's **N8, N6,
-N3, N4** — CI hardening (server lint, RLS-isolation tests wired into a
-real job, `npm audit` reporting), `render.yaml`/`DEPLOYMENT.md` sync, a
-room participant cap + rate limiting, and the feedback-vs-transcription-
-flush race — are all coded and tested (see each section below) but were
-left **uncommitted** in the working tree, discovered and reconciled in
-this pass, and moved onto their own branch,
-`fix/n3-n4-capacity-ratelimit-flush-race`, off a freshly-synced `dev`.
-They still need review + PR + merge per `BRANCHING.md` before they're
-real — none of these four are reflected in `dev`'s history yet. In
-parallel, a separate session did **N2** and **N7** below, and those *are*
-already merged into `dev` (PR #42) with their migrations applied live.
-All six findings are from `AUDIT_COMPARISON_2026-07-29.md`. See
-`docs/engineering/CODEX_HANDOVER_2026-07-29.md` for exactly what's still
-open and what to build next. Older context — the N1 fix session, Phase 5
-release-to-both-remotes, close-out session, blockers-investigation, and
-M4/H6/M10 notes — is preserved further down.)
+**Last updated:** 2026-07-30 (doc-sync + pilot-readiness/exception-handling
+pass — see the entry directly below. It corrects the 2026-07-29 entry
+that used to be here: `fix/n3-n4-capacity-ratelimit-flush-race` (N8, N6,
+N3, N4) **is merged** — PR #44, confirmed via `git log`/`gh pr list`, not
+left uncommitted as previously recorded. The reference to
+`docs/engineering/CODEX_HANDOVER_2026-07-29.md` below was also stale —
+that file was never created and does not exist in this repo. Treat this
+file and `PLAN.md` as the source of truth. Older context — the N1 fix
+session, Phase 5 release-to-both-remotes, close-out session,
+blockers-investigation, and M4/H6/M10 notes — is preserved further down,
+unchanged.)
+
+## Pilot-readiness + exception-handling pass (2026-07-30)
+
+Picked up per direct user instruction: make the app pilot-ready, check
+whether exception handling across services holds up, and lay out the next
+plan of action. Started by verifying the repo's own state directly
+(`git log`, `gh pr list --repo placemestudy1/gd-proto`) rather than
+trusting `PLAN.md`/this file, since guardrail-relevant history here has
+gone stale before (H1, N7). Found two things worth fixing before writing
+new code:
+
+1. **`PLAN.md`/this file both described PR #44 (N3, N4, N6, N8) as coded
+   but not yet merged.** It merged into `dev` on 2026-07-29 (`e98aabd`).
+   `dev` is 6 commits ahead of `main` with zero open PRs. Combined with N2
+   (PR #42) and N1 (PR #40), **every finding N1–N8 from
+   `AUDIT_COMPARISON_2026-07-29.md` is done and on `dev`** — not "4 of 8
+   still pending" as the previous header here claimed. Both docs'
+   `AUDIT_COMPARISON_2026-07-29.md`-adjacent tables and this file's header
+   are corrected in this pass.
+2. **`docs/engineering/CODEX_HANDOVER_2026-07-29.md`, referenced by name
+   in the old header as the place to find "what's still open," was never
+   actually created.** Whoever wrote that pointer intended to hand off
+   there but the file itself never landed — this repo has no such file.
+   Removed the dangling reference rather than leaving the next session to
+   discover it the hard way.
+
+**Re-verified every remaining open finding from
+`AUDIT_COMPARISON_2026-07-29.md` against current source** (not the audit
+doc's own line numbers, which have drifted since PR #44) via a dedicated
+Explore pass:
+
+- **N5** (unbounded reads M9 missed) — still open, confirmed:
+  `db/roomParticipants.js`'s `listParticipants` and the first query inside
+  `getActiveRoomForUser` both still lack `.limit()`.
+- **N9** (Gemini key in URL, raw upstream error echoed to students) —
+  still open, confirmed: `llm/geminiClient.js:22` builds the URL with
+  `?key=${apiKey}`; `api/topics.js:41` still returns
+  `` `Gemini topic generation failed: ${err.message}` `` verbatim to the
+  client.
+- **N11** (dev CORS origins allowed in prod) — still open, confirmed:
+  `index.js`'s `DEFAULT_DEV_ORIGINS` are unconditionally prepended, no
+  `NODE_ENV` gate anywhere in the file.
+- **N12** (`trust proxy` never set) — still open, confirmed: no occurrence
+  anywhere in `index.js`.
+- **N13** (caption identity trusts the payload body, not LiveKit's
+  authenticated sender) — still open, confirmed:
+  `LiveRoomAudio.jsx`'s `RoomEvent.DataReceived` handler destructures only
+  `payload`, never touches the `participant` argument LiveKit also passes.
+- **N14** (no late-join, no leave-room path) — still open, confirmed: no
+  `/leave` route exists; `POST /api/rooms/join` 409s once
+  `room.status !== 'waiting'` with no exception. **Put to the user
+  directly** (this is a product question, not a bug) — decision: **leave
+  as-is for the pilot**, since `PILOT_READINESS.md` already assumes a
+  founder is watching every early session and can work around a stuck
+  seat manually; not worth the added build/test surface at pilot scale.
+  Documented, not built.
+- **H4's residual gap** — still open, confirmed: `POST /api/topics/custom`
+  has no rate-limit middleware at all (`api/topics.js:15`); PR #44 only
+  extended the room-action limiter to `/api/rooms` and `/api/rooms/join`,
+  never touched `topics.js`. The original H4 finding named this route
+  explicitly.
+
+**New finding, not in either prior audit: no process-level exception
+safety net.** A dedicated exception-handling read of every `api/*.js`
+route, every `agent/*.js` background module, `db/*.js`, `llm/geminiClient.js`,
+`index.js`, and `shutdown.js` found the codebase is, almost everywhere,
+carefully defensive — `roomSweeper.js` isolates every per-room dispatch
+behind its own `.catch()`, `feedbackWorker.js` isolates each participant's
+Gemini call, `transcriber.js`'s per-track audio loop is a self-contained
+try/catch IIFE, `shutdown.js` bounds and catches its own teardown. But:
+
+- **No `process.on('unhandledRejection', ...)` or
+  `process.on('uncaughtException', ...)` exists anywhere in
+  `apps/server/src`.** Node's modern default on an unhandled rejection is
+  to crash the process.
+- **`agent/roomAgent.js:118-120`** — the room's duration timer dispatches
+  `stopTranscriptionForRoom(roomId)` from inside a bare `setTimeout`, with
+  no `await` and no `.catch()`. The *only other* caller of the same
+  function (`stopAllTranscriptions`, used during shutdown) does wrap it in
+  `.catch()` — this call site was missed. If the awaited
+  `entry.room.disconnect()` inside `stopTranscriptionForRoom` ever
+  rejects, this becomes a genuine unhandled rejection with nothing to
+  catch it — crashing the *entire* process (every other live room, the
+  whole API) over one room's failed disconnect, not just that one room.
+- **`agent/roomAgent.js:112-113`** — the live-caption broadcast
+  (`room.localParticipant.publishData(...)`) is also fire-and-forget with
+  no `.catch()`.
+- Smaller, related gaps: `llm/geminiClient.js` has no fetch timeout at all
+  (a hung Gemini request blocks indefinitely, tying up one of the feedback
+  worker's two concurrency slots); `domain/retry.js`'s `withRetry` is
+  wired only to the LiveKit connect call, not to Gemini's fetch or
+  AssemblyAI's WebSocket open; and `data ?? []` defaulting is inconsistent
+  across otherwise-identical `db/*.js` query functions (some default on a
+  null Supabase response, some don't).
+
+**Plan of action, agreed with the user (AskUserQuestion): fix every
+code-fixable item above as its own small branch/PR into `dev`**, in
+priority order (crash-risk first), following the usual TDD + `BRANCHING.md`
+discipline. Full plan recorded at
+`C:\Users\pagad\.claude\plans\i-want-to-make-swift-cray.md` and mirrored
+in `PLAN.md` §5e. Order: (0) this doc-sync branch, (1) process safety net
++ dangling-promise fixes, (2) `/api/topics/custom` rate limit, (3) Gemini
+key-to-header + error-leak fix, (4) Gemini fetch timeout + retry, (5) CORS
+dev-origin gating + `trust proxy`, (6) N5's remaining unbounded reads, (7)
+N13's caption-identity fix, (8) db null-safety consistency cleanup.
+Deliberately **not** in this sweep: retry-wiring AssemblyAI's WebSocket
+connect — touches the live transcription pipeline directly and deserves
+its own real-room verification pass rather than being folded into a
+reliability sweep.
+
+**Also not part of this sweep, needs the user directly, unchanged from
+before this session:** `M3` (set `HEALTH_CHECK_TOKEN` on Render + as a GH
+secret), `M5` (independent uptime watchdog), `N8`'s three GitHub Actions
+secrets (so the already-wired `rls-security` CI job actually runs instead
+of skipping), and `N4`'s guardrail #1 real-room check (confirm a
+participant's last words, spoken right as the timer ends, land in their
+feedback).
 
 ## N8 fix — CI now lints the server, runs the RLS isolation tests for real, and reports dependency advisories (2026-07-29)
 
