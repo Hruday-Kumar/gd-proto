@@ -2,10 +2,66 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-07-30 (BUG-SPEC-0002, waiting-state exit affordance —
-see the entry directly below. Older entries, including BUG-SPEC-0001 and the
-same-day doc-sync + pilot-readiness pass, are preserved further down,
-unchanged.)
+**Last updated:** 2026-07-30 (BUG-SPEC-0003, feedback-wait screen polish —
+see the entry directly below. Older entries, including BUG-SPEC-0002,
+BUG-SPEC-0001, and the same-day doc-sync + pilot-readiness pass, are
+preserved further down, unchanged.)
+
+## BUG-SPEC-0003 — post-session feedback-wait screen polish (2026-07-30)
+
+Picked up per direct user instruction ("next P1") to continue the
+`/impeccable critique` remediation in the order `PROGRESS.md` recorded as
+next: second and last of the two P1 findings, "the post-session feedback
+wait is under-designed relative to its emotional stakes." Branch
+`fix/feedback-wait-screen-polish` off `dev`, spec at
+`docs/specs/active/BUG-SPEC-0003-feedback-wait-screen-polish.md`.
+
+**Fix:** `LobbyPage.jsx`'s `ended`-status feedback block replaced its bare
+`Generating your feedback…` text (up to 2 minutes with zero visual
+weight) with a spinner (`animate-spin`, reusing the pattern already used
+one screen-state up for the `LiveRoomAudio` Suspense fallback) plus a
+two-line reassurance copy block, matching the tone/format `MatchPage`
+already uses for its own (lower-stakes) searching wait. The whole status
+region also got `aria-live="polite"` so the transition to resolved
+feedback or to the failed-message branch is announced to screen readers —
+directly serving the same "Visibility of System Status" heuristic the
+critique explicitly docked this exact spot for. The already-considered
+`feedbackFailed` copy and the resolved-`feedback` display are otherwise
+unchanged.
+
+**Explicitly not touched:** feedback generation, polling cadence/timeout,
+or Gemini prompt/content — presentation-only, around content already
+fetched or in flight the same way as before. Also not touched: the
+remaining 2/5 issues from the same critique (button/busy-state vocabulary
+drift, P2; missing skeleton loading states, P2) and any wider `aria-live`
+pass elsewhere (MatchPage's status checklist, Lobby's countdown timer) —
+both out of scope for this specific P1's stated fix.
+
+**Tests:** `apps/web/src/pages/LobbyPage.test.jsx` (2 new cases in a new
+`describe` block: spinner + reassurance copy render while
+`status === 'ended'` and feedback hasn't resolved; spinner is replaced by
+the resolved feedback text once `getMyFeedback` returns it). All pass. Ran
+fresh from repo root under Node 22: `npm test` → 329/329 server unit tests
++ 17/17 web tests green (3 server RLS-isolation test files fail identically
+on unmodified `dev` — confirmed via `git stash` — because they need live
+Supabase credentials not present in this sandbox; pre-existing, unrelated
+to this change); `npm run lint` → clean (same 3 pre-existing
+`only-export-components` warnings, no new ones); `npm run build
+--workspace=apps/web` → clean.
+
+**Residual:** guardrail #1 does not strictly apply (no feedback
+generation/attribution/content behavior changed, only the loading/wait
+presentation around it). A manual click-through against a real completed
+session (confirm the spinner appears right after a session ends and is
+replaced by real feedback) was not done this session — no live Supabase
+session was available here — but risk is low given unit coverage of the
+new branch and zero change to the underlying data flow.
+
+**Not done this session (2/5 remaining from the critique, by design, in
+the order previously recorded):** button/busy-state vocabulary drift (P2);
+missing skeleton loading states (P2). Both are P2s now that both P1s are
+done; next session should pick these up in that order absent other
+direction.
 
 ## BUG-SPEC-0002 — waiting-state exit affordance (2026-07-30)
 

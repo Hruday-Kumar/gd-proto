@@ -288,12 +288,32 @@ export function LobbyPage() {
           </div>
           <div className="mt-6 rounded-lg bg-surface-container-low p-6">
             <p className="text-label-sm font-semibold text-on-surface-variant">Your feedback</p>
-            <p className="mt-1 text-body-md text-on-surface">
-              {feedback ??
-                (feedbackFailed
-                  ? "Your feedback is taking longer than expected. It'll appear under History once it's ready."
-                  : 'Generating your feedback…')}
-            </p>
+            <div aria-live="polite">
+              {feedback != null ? (
+                <p className="mt-1 text-body-md text-on-surface">{feedback}</p>
+              ) : feedbackFailed ? (
+                <p className="mt-1 text-body-md text-on-surface">
+                  Your feedback is taking longer than expected. It&apos;ll appear under History once it&apos;s
+                  ready.
+                </p>
+              ) : (
+                <div className="mt-2 flex items-start gap-3">
+                  <span
+                    className="material-symbols-outlined animate-spin text-2xl text-primary"
+                    aria-hidden="true"
+                  >
+                    progress_activity
+                  </span>
+                  <div>
+                    <p className="text-body-md font-semibold text-on-surface">Generating your feedback…</p>
+                    <p className="mt-1 text-body-sm text-text-secondary">
+                      Gemini is reviewing the discussion now — this usually takes under a minute, occasionally
+                      up to two for longer sessions. It&apos;ll appear here the moment it&apos;s ready.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
             {feedback && (
               <FeedbackRating
                 session={session}
