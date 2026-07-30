@@ -20,11 +20,24 @@ export async function removeParticipant(roomId, userId, { supabase = getSupabase
   if (error) throw error;
 }
 
+// N5 (audit comparison, 2026-07-29): M9 named the unbounded-read class but
+// missed this call site. Room size is capped going forward at
+// DEFAULT_MAX_ROOM_PARTICIPANTS (domain/roomCapacity.js), but that's a
+// best-effort application-level guard, not a schema constraint -- this
+// ceiling is generous headroom above it, not a duplicate of it, so a rare
+// concurrent-join overage or a historical pre-cap room still returns
+// every real participant. Earliest-joined-first: if a room somehow has
+// more than the ceiling, keeping the first (legitimately seated) joiners
+// is more correct than an arbitrary cutoff.
+const MAX_ROOM_PARTICIPANTS_QUERY = 50;
+
 export async function listParticipants(roomId, { supabase = getSupabase() } = {}) {
   const { data, error } = await supabase
     .from('room_participants')
     .select('user_id, livekit_identity, joined_at')
-    .eq('room_id', roomId);
+    .eq('room_id', roomId)
+    .order('joined_at', { ascending: true })
+    .limit(MAX_ROOM_PARTICIPANTS_QUERY);
   if (error) throw error;
   return data;
 }
@@ -71,10 +84,16 @@ export async function listRoomIdsForUser(userId, { supabase = getSupabase() } = 
 // than a single joined one: simpler to read and correct at the pilot
 // scale where a student is in very few rooms at once.
 export async function getActiveRoomForUser(userId, { supabase = getSupabase() } = {}) {
+  // N5 (audit comparison, 2026-07-29): unbounded, and this is polled every
+  // 4s throughout queueing -- an ever-growing IN-list for a heavy user.
+  // Reuses listRoomIdsForUser's own MAX_HISTORY_ROOMS ceiling just above;
+  // only the most recent rooms matter for finding an *active* one anyway.
   const { data: participantRows, error: participantError } = await supabase
     .from('room_participants')
     .select('room_id')
-    .eq('user_id', userId);
+    .eq('user_id', userId)
+    .order('joined_at', { ascending: false })
+    .limit(MAX_HISTORY_ROOMS);
   if (participantError) throw participantError;
   if (!participantRows.length) return null;
 
