@@ -27,6 +27,11 @@ import { createProcessSafetyNet } from './processSafetyNet.js';
 
 // M6 (audit 2026-07-28): local Vite dev server default -- kept even once
 // ALLOWED_ORIGINS is set in production, so local dev never breaks.
+// N11 (audit comparison, 2026-07-29): only outside production, though --
+// this used to be prepended unconditionally. Low real impact (this API
+// authenticates with a Bearer token, not a cookie, so a page on a
+// developer's localhost can't read another origin's token) but there's no
+// reason to hand back part of M6's own allowlist for no benefit.
 const DEFAULT_DEV_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173'];
 
 export function createApp({
@@ -38,10 +43,18 @@ export function createApp({
   agentStatus,
   allowedOrigins,
   healthCheckToken,
+  nodeEnv = process.env.NODE_ENV,
 } = {}) {
-  const origins = allowedOrigins ?? [...DEFAULT_DEV_ORIGINS, ...parseAllowedOrigins(process.env.ALLOWED_ORIGINS)];
+  const devOrigins = nodeEnv === 'production' ? [] : DEFAULT_DEV_ORIGINS;
+  const origins = allowedOrigins ?? [...devOrigins, ...parseAllowedOrigins(process.env.ALLOWED_ORIGINS)];
 
   const app = express();
+  // N12 (audit comparison, 2026-07-29): Render sits behind one proxy hop --
+  // without this, req.ip is the proxy's address and req.protocol is always
+  // "http". Nothing currently reads either (the rate limiter deliberately
+  // keys on req.userId, never IP), but it becomes silently wrong the
+  // moment anything IP-based is added, so set it now rather than later.
+  app.set('trust proxy', 1);
   // M7 (audit 2026-07-28): standard hardening headers (nosniff, no
   // X-Powered-By, etc.). One default needs overriding: helmet's
   // Cross-Origin-Resource-Policy defaults to "same-origin", which the
