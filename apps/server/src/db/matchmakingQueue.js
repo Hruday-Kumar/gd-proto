@@ -18,7 +18,7 @@ export async function listQueue({ supabase = getSupabase() } = {}) {
     .order('joined_at', { ascending: true })
     .limit(MAX_QUEUE_ROWS);
   if (error) throw error;
-  return data.map((row) => ({ id: row.user_id }));
+  return (data ?? []).map((row) => ({ id: row.user_id }));
 }
 
 export async function addToQueue(userId, { supabase = getSupabase() } = {}) {
@@ -42,5 +42,5 @@ export async function claimFromQueue(userIds, { supabase = getSupabase() } = {})
   if (userIds.length === 0) return [];
   const { data, error } = await supabase.from('matchmaking_queue').delete().in('user_id', userIds).select('user_id');
   if (error) throw error;
-  return data.map((row) => row.user_id);
+  return (data ?? []).map((row) => row.user_id);
 }

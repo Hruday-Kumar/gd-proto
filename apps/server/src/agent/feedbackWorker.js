@@ -1,7 +1,8 @@
 // Feedback generation worker (W6, peripheral -- same in-process,
 // fire-and-forget dispatch pattern as agent/roomAgent.js's transcription
-// start). Called by the rooms API right after a room's status flips to
-// 'ended' (GET /api/rooms/:id/status). Fetches everything
+// start). Called by agent/roomSweeper.js once a room's status flips to
+// 'ended', and again on retry (N1, audit comparison 2026-07-29) if a
+// previous attempt left the room incomplete. Fetches everything
 // generateFeedbackForRoom (domain/feedbackGeneration.js, core, tested)
 // needs, then persists each successful result -- one student's insert
 // failure is logged, not thrown, so it can't block another student's
@@ -13,8 +14,15 @@ import { getTopicById } from '../db/topics.js';
 import { listParticipants } from '../db/roomParticipants.js';
 import { listProfiles } from '../db/profiles.js';
 import { listTranscriptLinesForRoom } from '../db/transcriptLines.js';
-import { insertFeedback } from '../db/feedback.js';
+import { insertFeedback, listFeedbackUserIdsForRoom } from '../db/feedback.js';
 
+// N1 (audit comparison, 2026-07-29): returns { complete }, not void --
+// agent/roomSweeper.js needs to know whether every participant now has
+// persisted feedback so it can mark the room done (and stop retrying it)
+// or leave it for another attempt. `complete` is derived from actual
+// persisted state, not "did this call throw", so a retry after a partial
+// success (some students already got feedback, others didn't) correctly
+// only has to finish the rest.
 export async function generateAndPersistFeedbackForRoom(
   roomId,
   {
@@ -23,6 +31,7 @@ export async function generateAndPersistFeedbackForRoom(
     listParticipantsFn = listParticipants,
     listProfilesFn = listProfiles,
     listTranscriptLinesForRoomFn = listTranscriptLinesForRoom,
+    listFeedbackUserIdsForRoomFn = listFeedbackUserIdsForRoom,
     insertFeedbackFn = insertFeedback,
     generateFn = generateFeedback,
     model = process.env.GEMINI_MODEL || 'gemini-3.6-flash',
@@ -39,25 +48,37 @@ export async function generateAndPersistFeedbackForRoom(
     displayName: nameById.get(p.user_id) || p.user_id,
   }));
 
+  // Skip anyone who already has a persisted row -- makes a retry cheap
+  // (no repeat Gemini spend for students who already succeeded) and safe
+  // (feedback has a unique(room_id, user_id) constraint; re-inserting for
+  // them would just fail and log noise).
+  const alreadyDone = new Set(await listFeedbackUserIdsForRoomFn(roomId));
+  const pending = participants.filter((p) => !alreadyDone.has(p.userId));
+  if (pending.length === 0) return { complete: true };
+
   const lines = await listTranscriptLinesForRoomFn(roomId);
   const transcriptLines = lines.map((line) => ({ userId: line.user_id, text: line.text }));
 
   const results = await generateFeedbackForRoom(
-    { topic: topic?.text, transcriptLines, participants },
+    { topic: topic?.text, transcriptLines, participants: pending },
     { generate: (prompt) => generateFn(prompt) }
   );
 
-  await Promise.all(
+  const outcomes = await Promise.all(
     results.map(async (result) => {
       if (result.status !== 'ok') {
         console.error(`[feedback] generation failed for user ${result.userId} in room ${roomId}: ${result.error}`);
-        return;
+        return false;
       }
       try {
         await insertFeedbackFn({ roomId, userId: result.userId, body: result.body, model });
+        return true;
       } catch (err) {
         console.error(`[feedback] failed to persist feedback for user ${result.userId} in room ${roomId}: ${err.message}`);
+        return false;
       }
     })
   );
+
+  return { complete: outcomes.every(Boolean) };
 }

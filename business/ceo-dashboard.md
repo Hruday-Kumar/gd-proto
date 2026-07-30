@@ -3,8 +3,9 @@
 **Author:** CEO · **Date:** 2026-07-27 · **Status:** v1
 **Review cadence:** 30 minutes, every Monday. One page. No exceptions.
 
-**Stage context:** pre-launch, not deployed, zero instrumentation, 6-month runway
-(ends ~Jan 2027), 90-day goal = **one campus pilot + a case study**.
+**Stage context, updated 2026-07-29:** deployed and instrumented, still pre-revenue and
+pre-external-user, ~6-month runway (ends ~Jan 2027), 90-day goal = **one campus pilot +
+a case study**.
 
 ---
 
@@ -17,8 +18,24 @@ At your stage there is exactly **one** question worth measuring:
 Every metric below either answers that, or tells you whether you'll still be alive to
 act on the answer. Anything that does neither is off the page.
 
-You currently cannot answer this question — or any question — because there is **no
-analytics and no deployment**. That is the first thing to fix, and §4 is a two-hour job.
+**Updated 2026-07-29:** the app is now deployed (Render + Vercel, both healthy), and all
+three tiers of §4's instrumentation plan are now built — the Tier 1 SQL queries exist
+and are runnable today, the Tier 2 PostHog events are wired (code-complete, but
+`VITE_POSTHOG_KEY` is unset so they're currently inert), and the Tier 3 thumbs-rating
+feature shipped. **What's still missing is not instrumentation, it's students** — every
+number below will read zero, near-zero, or *misleadingly test-shaped* until real
+students (not founders/testers) start using the deployed app. See `context-summary.md`
+§2/§4/§6 for the full deploy status.
+
+**The queries were actually run against production today, not just written — here's
+what they say and why you shouldn't trust the numbers yet:** room fill rate computes to
+**0%** and broken-session rate to **79%** on the current data. Neither is a real signal.
+Every one of the 30 rooms in the database maxes out at **2 participants** — it's all
+founder/tester testing volume from the build (dev/regression/security-hardening
+sessions), and the fill-rate/broken-rate queries were written assuming real 3+-person
+GD rooms, which have never once happened yet. **Recommendation: clear or filter out
+this pre-pilot test data before Week 1**, so the first real Monday-morning run of this
+dashboard reads clean instead of alarming everyone with a fake 79% broken-session rate.
 
 ---
 
@@ -113,13 +130,16 @@ the window closes for good.
 
 ---
 
-## 4. Instrumentation — the 2-hour job that unblocks everything
+## 4. Instrumentation — DONE as of 2026-07-29, here's how to actually use it
 
-**Key insight: you already have the data for 5 of the 6 metrics.** `rooms`,
-`room_participants`, `transcript_lines`, and `feedback` are all in Postgres. You don't
-need a fancy analytics stack — **you need six SQL queries.**
+**All three tiers below are now built.** This section originally described a 2-hour job
+still to do; it's now a "how to run what already exists" guide.
 
-### Tier 1 — SQL on Supabase (free, ~2 hours, covers metrics 1–4 + WAD)
+### Tier 1 — SQL on Supabase (free, ~2 hours, covers metrics 1–4 + WAD) — ✅ BUILT
+
+`supabase/queries/ceo-dashboard-metrics.sql` packages exactly the four queries below as
+paste-and-run — every referenced column verified against the live schema. **Run it
+Monday morning, per §5.** No PostHog dependency for any of these.
 
 ```sql
 -- 🌟 WAD: unique students who completed a full GD this week
@@ -182,9 +202,14 @@ where r.status = 'ended'
 
 Save these as a Supabase SQL snippet. Run them Monday morning. **That's your dashboard.**
 
-### Tier 2 — PostHog free tier (~1 hour)
+### Tier 2 — PostHog free tier (~1 hour) — ✅ BUILT, currently switched OFF
 
-Only needed for what the database genuinely cannot see: **pre-signup behaviour.**
+`apps/web/src/lib/analytics.js` wires all five events below, no-op safe when unset
+(confirmed dead-code-eliminated from the production bundle in that state — zero cost,
+zero risk to ship inert). Consent copy (v2) already discloses analytics processing, so
+this is DPDP-clean to flip on. **To activate: set `VITE_POSTHOG_KEY` in Vercel's
+production env vars.** Nothing else needed — do this when you're ready to start reading
+pre-signup funnel data, not before (no reason to collect data you won't look at yet).
 
 | Event | Why |
 |---|---|
@@ -194,14 +219,15 @@ Only needed for what the database genuinely cannot see: **pre-signup behaviour.*
 | `session_registered` | Registered vs joined = **show-up rate**. Needs scheduling shipped first |
 | `session_join_failed` (+ error type) | Feeds metric 4 |
 
-### Tier 3 — one small feature worth building (~1 hour)
+### Tier 3 — the 👍/👎 feedback rating — ✅ BUILT, ⚪ zero uses so far
 
-**A 👍/👎 on the feedback paragraph, plus an optional one-line "why."**
-
-This is the highest-value-per-hour thing you can build all quarter. Your entire product
-promise is *"feedback that's actually useful."* Right now the only evidence for that is
-one founder saying *"the feedback is excellent."* Twenty student thumbs-ups are a
-case-study asset, a product signal, and a sales quote generator all at once.
+`GET /feedback/mine` + `PATCH /feedback/mine/rating` + a `FeedbackRating.jsx` component
+on the web client — a thumb saves immediately, an optional one-line reason saves on
+blur/Enter. This is live in production now. **Checked live, 2026-07-29: 0 of the 28
+existing `feedback` rows have a rating** — not even from testers during the human-
+verification walkthroughs. The mechanism works and is reachable; it's simply never been
+clicked. Go get the twenty thumbs-ups once the pilot starts — the mechanism is ready,
+but "ready" and "used" are still two different things here.
 
 ---
 
@@ -226,8 +252,11 @@ signups are booming and fill rate is 45%, **you have a fill-rate problem.**
 ### You cannot hire. You have ₹0 and 6 months. So the real question is where the 2.0 FTE points.
 
 **Your gap is not engineering.** You built a live multi-human WebRTC room with per-speaker
-STT and LLM feedback, with 133 tests, in three days. Engineering velocity is anomalously
-high. **Distribution velocity is zero.** Nobody on this team owns getting students into rooms.
+STT and LLM feedback, with 133 tests, in three days — and, since then, an entire
+security/reliability audit-remediation pass (247 tests now, verified 2026-07-29) plus a
+full production deploy. Engineering velocity is anomalously high, sustained, not a
+one-time burst. **Distribution velocity is zero.** Nobody on this team owns getting
+students into rooms.
 
 ### The three moves available at ₹0
 

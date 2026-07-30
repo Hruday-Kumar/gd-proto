@@ -6,17 +6,25 @@ import { describe, it, expect, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { createTopicsRouter } from '../src/api/topics.js';
-import { createLlmRateLimiter } from '../src/api/rateLimit.js';
+import { createLlmRateLimiter, createRoomActionRateLimiter } from '../src/api/rateLimit.js';
 
 function stubAuth(req, _res, next) {
   req.userId = 'user-123';
   next();
 }
 
-function buildApp({ insertCustomTopic, insertGeneratedTopic, generateTopicFn, llmRateLimiter }) {
+function buildApp({ insertCustomTopic, insertGeneratedTopic, generateTopicFn, llmRateLimiter, roomActionRateLimiter }) {
   const app = express();
   app.use(express.json());
-  app.use(createTopicsRouter(stubAuth, { insertCustomTopic, insertGeneratedTopic, generateTopicFn, llmRateLimiter }));
+  app.use(
+    createTopicsRouter(stubAuth, {
+      insertCustomTopic,
+      insertGeneratedTopic,
+      generateTopicFn,
+      llmRateLimiter,
+      roomActionRateLimiter,
+    })
+  );
   return app;
 }
 
@@ -48,6 +56,24 @@ describe('POST /api/topics/custom', () => {
     expect(res.body).toEqual({ id: 't1', text: 'AI in education', source: 'custom' });
     expect(insertCustomTopic).toHaveBeenCalledWith('user-123', { text: 'AI in education', category: 'tech', difficulty: undefined });
   });
+
+  // H4 residual (audit comparison 2026-07-29, N3's recommended fix): this
+  // route writes an unbounded row count to `topics` on every request and
+  // had no rate limiting at all -- PR #44 extended the room-action limiter
+  // to /api/rooms and /api/rooms/join but never touched this route, even
+  // though the original H4 finding named it. Uses the room-action limiter,
+  // not the LLM one -- this route never calls Gemini itself.
+  it('is rate-limited per user', async () => {
+    const app = buildApp({
+      insertCustomTopic: vi.fn().mockResolvedValue({ id: 't', text: 'x', source: 'custom' }),
+      insertGeneratedTopic: vi.fn(),
+      roomActionRateLimiter: createRoomActionRateLimiter({ windowMs: 60_000, max: 2 }),
+    });
+    await request(app).post('/api/topics/custom').send({ text: 'first' });
+    await request(app).post('/api/topics/custom').send({ text: 'second' });
+    const res = await request(app).post('/api/topics/custom').send({ text: 'third' });
+    expect(res.status).toBe(429);
+  });
 });
 
 describe('POST /api/topics/generate', () => {
@@ -66,12 +92,36 @@ describe('POST /api/topics/generate', () => {
     });
   });
 
-  it('propagates a Gemini failure as a 502 without silently losing it', async () => {
+  it('propagates a Gemini failure as a 502 with a non-empty error message', async () => {
     const generateTopicFn = vi.fn().mockRejectedValue(new Error('Gemini API error: 429 rate limited'));
     const app = buildApp({ insertCustomTopic: vi.fn(), insertGeneratedTopic: vi.fn(), generateTopicFn });
     const res = await request(app).post('/api/topics/generate').send({});
     expect(res.status).toBe(502);
-    expect(res.body.error).toMatch(/gemini/i);
+    expect(res.body.error).toEqual(expect.any(String));
+    expect(res.body.error.length).toBeGreaterThan(0);
+  });
+
+  // N9 (audit comparison, 2026-07-29): the raw upstream error message (which
+  // can contain Gemini's own response body, e.g. internal service-account
+  // detail) used to be echoed straight to the client -- the exact pattern
+  // errorHandler.js's generic-to-client/full-detail-in-the-log rule exists
+  // to prevent, just bypassed here since this route's own try/catch
+  // predates it. Full detail must still reach the server log, just not the
+  // student.
+  it('does not leak the raw upstream error message to the client, but still logs it', async () => {
+    const generateTopicFn = vi
+      .fn()
+      .mockRejectedValue(new Error('Gemini API error: 401 {"message":"service account disabled"}'));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const app = buildApp({ insertCustomTopic: vi.fn(), insertGeneratedTopic: vi.fn(), generateTopicFn });
+
+    const res = await request(app).post('/api/topics/generate').send({});
+
+    expect(res.status).toBe(502);
+    expect(res.body.error).not.toMatch(/service account disabled|401/);
+    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('service account disabled'));
+
+    consoleError.mockRestore();
   });
 
   // H4 (audit 2026-07-28): confirms the limiter is actually attached to

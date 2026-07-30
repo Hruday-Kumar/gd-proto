@@ -133,7 +133,11 @@ had never been updated — this is the first record of the real state):
 Same values already sitting in `apps/server/.env` locally — this is
 copying them into Render's dashboard, not generating new ones.
 `NODE_ENV` and `GEMINI_MODEL` are already set as plain (non-secret)
-values directly in `render.yaml`.
+values directly in `render.yaml`. **`ALLOWED_ORIGINS` and
+`HEALTH_CHECK_TOKEN` are now also declared as `sync: false` entries in
+`render.yaml`** (N6 fix, 2026-07-29) — a fresh Blueprint deploy will
+prompt for both instead of silently omitting them, which previously
+would have recreated the exact CORS breakage described above.
 
 ## 2. Frontend — Vercel
 

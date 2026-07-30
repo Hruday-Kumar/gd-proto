@@ -3,6 +3,7 @@
 // cheap to test in isolation from the actual network call).
 import { describe, it, expect } from 'vitest';
 import { buildTopicPrompt, parseTopicResponse } from '../src/domain/topicPrompt.js';
+import { MAX_CUSTOM_TOPIC_LENGTH } from '../src/domain/topicText.js';
 
 describe('buildTopicPrompt', () => {
   it('produces a base prompt asking for a single GD topic when no filters given', () => {
@@ -44,5 +45,20 @@ describe('parseTopicResponse', () => {
   it('throws when the candidate text is blank', () => {
     const body = { candidates: [{ content: { parts: [{ text: '   ' }] } }] };
     expect(() => parseTopicResponse(body)).toThrow(/topic text/i);
+  });
+
+  // N2 (AUDIT_COMPARISON_2026-07-29.md): the topics table's new
+  // topics_text_length check constraint (200 chars, matching H5's custom-topic
+  // cap) applies to every insert, including the server's own service-role
+  // writes for LLM-generated topics. Reject an oversized response here so a
+  // verbose Gemini reply can never hit that constraint at insert time.
+  it(`throws when the candidate text exceeds ${MAX_CUSTOM_TOPIC_LENGTH} characters`, () => {
+    const body = { candidates: [{ content: { parts: [{ text: 'a'.repeat(MAX_CUSTOM_TOPIC_LENGTH + 1) }] } }] };
+    expect(() => parseTopicResponse(body)).toThrow(new RegExp(`${MAX_CUSTOM_TOPIC_LENGTH} characters`, 'i'));
+  });
+
+  it(`accepts candidate text of exactly ${MAX_CUSTOM_TOPIC_LENGTH} characters`, () => {
+    const body = { candidates: [{ content: { parts: [{ text: 'a'.repeat(MAX_CUSTOM_TOPIC_LENGTH) }] } }] };
+    expect(parseTopicResponse(body)).toBe('a'.repeat(MAX_CUSTOM_TOPIC_LENGTH));
   });
 });

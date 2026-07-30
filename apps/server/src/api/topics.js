@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { generateTopic } from '../llm/geminiClient.js';
-import { createLlmRateLimiter } from './rateLimit.js';
+import { createLlmRateLimiter, createRoomActionRateLimiter } from './rateLimit.js';
 import { isValidCustomTopicText, MAX_CUSTOM_TOPIC_LENGTH } from '../domain/topicText.js';
 
 // W4: custom topic entry + Gemini-generated topics. Custom topics are
@@ -8,11 +8,22 @@ import { isValidCustomTopicText, MAX_CUSTOM_TOPIC_LENGTH } from '../domain/topic
 // creator (source: 'llm', created_by null -- see the 0003 migration).
 export function createTopicsRouter(
   requireAuth,
-  { insertCustomTopic, insertGeneratedTopic, generateTopicFn = generateTopic, llmRateLimiter = createLlmRateLimiter() }
+  {
+    insertCustomTopic,
+    insertGeneratedTopic,
+    generateTopicFn = generateTopic,
+    llmRateLimiter = createLlmRateLimiter(),
+    roomActionRateLimiter = createRoomActionRateLimiter(),
+  }
 ) {
   const router = Router();
 
-  router.post('/api/topics/custom', requireAuth, async (req, res) => {
+  // H4 residual (audit comparison 2026-07-29, N3's recommended fix): this
+  // route writes an unbounded row count to `topics` on every request --
+  // it doesn't call Gemini itself, so it uses the room-action limiter
+  // (api/rateLimit.js), not the LLM one, same reasoning already recorded
+  // there for why the two limiters are kept separate.
+  router.post('/api/topics/custom', requireAuth, roomActionRateLimiter, async (req, res) => {
     const { text, category, difficulty } = req.body || {};
     if (!text || !text.trim()) {
       return res.status(400).json({ error: 'text is required' });
@@ -36,9 +47,14 @@ export function createTopicsRouter(
       text = await generateTopicFn({ category, difficulty });
     } catch (err) {
       // A Gemini failure must not look like our own bug -- 502 (bad
-      // upstream) rather than a generic 500, and the error is surfaced,
-      // not swallowed.
-      return res.status(502).json({ error: `Gemini topic generation failed: ${err.message}` });
+      // upstream) rather than a generic 500. N9 (audit comparison,
+      // 2026-07-29): the raw upstream message used to be echoed straight
+      // to the client, which can contain Gemini's own response body
+      // (internal service-account detail, etc.) -- errorHandler.js's own
+      // "generic to client, full detail in the log" rule applies here too,
+      // this route's try/catch just predates it.
+      console.error(`[topics] Gemini topic generation failed: ${err.message}`);
+      return res.status(502).json({ error: 'Topic generation failed. Please try again.' });
     }
     const topic = await insertGeneratedTopic({ text, category, difficulty });
     res.status(201).json(topic);

@@ -52,6 +52,17 @@ Thursday 8pm."*
 **Cost of being wrong:** ~1 day. **Cost of not deciding:** every early user's first
 experience is an empty queue.
 
+**Implementation status, 2026-07-29: the soft-landing half is shipped, the "scheduled
+sessions" half is not literally built.** What's live: random matching now times out
+after 90s with an honest "nobody's free right now" message instead of an infinite
+queue, and `HomePage` demotes it to a secondary link under the two paths that always
+work (create-a-room-and-share-the-code, join-by-code). What's **not** built: an actual
+calendar/time-slot scheduling UI ("Thursday 8pm" as a real feature). The practical
+substitute for now is the same manual coordination a WhatsApp group would use — a
+founder creates a room, shares the code at an agreed time. Worth a conscious call
+before Week 1: is manual coordination good enough at n=10, or does the real scheduling
+UI need building first?
+
 ---
 
 ### D2 · 2026-07-27 · One goal for the next 90 days: a campus pilot + case study

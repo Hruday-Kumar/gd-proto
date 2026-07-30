@@ -19,6 +19,20 @@ export function createAgentWorkerStatus() {
   let lastSuccessSeq = -1;
   let seq = 0;
 
+  // N1 (audit comparison, 2026-07-29): feedback generation's own dispatch
+  // health, tracked in parallel to the transcription counters above but
+  // kept separate -- feedback has no "active" concept (it's a one-shot
+  // generation, not a held-open connection), and its failure/health
+  // recording only fires once retries are actually exhausted (see
+  // agent/roomSweeper.js), not on every transient attempt -- a room that
+  // fails once and succeeds on retry a minute later shouldn't page anyone.
+  let feedbackSuccesses = 0;
+  let feedbackFailures = 0;
+  let lastFeedbackFailure = null; // { roomId, message, at }
+  let lastFeedbackSuccess = null; // { roomId, at }
+  let lastFeedbackFailureSeq = -1;
+  let lastFeedbackSuccessSeq = -1;
+
   return {
     recordDispatchSuccess(roomId) {
       activeRooms += 1;
@@ -34,12 +48,35 @@ export function createAgentWorkerStatus() {
     recordRoomStopped() {
       activeRooms = Math.max(0, activeRooms - 1);
     },
+    recordFeedbackSuccess(roomId) {
+      feedbackSuccesses += 1;
+      lastFeedbackSuccess = { roomId, at: new Date().toISOString() };
+      lastFeedbackSuccessSeq = seq++;
+    },
+    recordFeedbackFailure(roomId, error) {
+      feedbackFailures += 1;
+      lastFeedbackFailure = { roomId, message: error.message, at: new Date().toISOString() };
+      lastFeedbackFailureSeq = seq++;
+    },
     getStatus() {
       // "Healthy" means the most recent dispatch outcome was a success --
       // an old failure that's since been followed by a working dispatch
       // shouldn't keep paging anyone.
       const healthy = lastFailureSeq === -1 || lastSuccessSeq > lastFailureSeq;
-      return { activeRooms, dispatchSuccesses, dispatchFailures, lastFailure, lastSuccess, healthy };
+      const feedbackHealthy = lastFeedbackFailureSeq === -1 || lastFeedbackSuccessSeq > lastFeedbackFailureSeq;
+      return {
+        activeRooms,
+        dispatchSuccesses,
+        dispatchFailures,
+        lastFailure,
+        lastSuccess,
+        healthy,
+        feedbackSuccesses,
+        feedbackFailures,
+        lastFeedbackFailure,
+        lastFeedbackSuccess,
+        feedbackHealthy,
+      };
     },
   };
 }

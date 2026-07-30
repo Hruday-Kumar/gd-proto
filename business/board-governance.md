@@ -82,8 +82,8 @@ institution signs.**
 | **Gemini free tier trains on student transcripts** | ⚠️ Disclosed to students in consent copy | ❌ **A college will not accept this.** Expect to move feedback generation to a paid tier. Budget it (`revenue-model.md` §7) |
 | **Data Processing Agreement** | ❌ Doesn't exist | Standard ask in any institutional contract |
 | **Named grievance officer** (DPDP) | ❌ Doesn't exist | Required of a data fiduciary |
-| **Documented retention & deletion policy** | ⚠️ Implemented in product, not written down | Will be asked for |
-| **Account deletion path** | ⚠️ `[VERIFY]` — is there a user-facing delete? | DPDP gives a right to erasure |
+| **Documented retention & deletion policy** | ⚠️ Implemented in product, not written down as an external policy | Will be asked for |
+| **Account deletion path** | ✅ **Built and live-tested, 2026-07-29** — `scripts/delete-account.js` (dry-run by default, `--confirm` to execute) + `ACCOUNT_DELETION.md` runbook. Schema cascades correctly (own tables `on delete cascade`, others `on delete set null` so groupmates' history isn't damaged). Verified against a real test account on the live Supabase project | Still founder-run via a script, not self-serve for a student — fine for DPDP's "right to erasure" today, but a college contract may eventually want a self-serve delete button |
 
 **None of this blocks the pilot.** All of it blocks contract #1. Handle it in
 November–December, not in April when a TPO is waiting on you.
@@ -131,15 +131,24 @@ governance. You got it, and I think it was worth the two hours.
 
 **It is also, right now, the highest-quality form of procrastination available to you.**
 
-You have five well-written documents and **zero deployed software**. Not one student can
-use PlaceMe today. Your juniors' drives start in three to six weeks. Every document in
-this folder is worth exactly ₹0 until Week 0 ships.
+You have five well-written documents and, as of this writing, **zero deployed software**.
+Not one student can use PlaceMe today. Your juniors' drives start in three to six weeks.
+Every document in this folder is worth exactly ₹0 until Week 0 ships.
 
 > **A board's job is to say this plainly: stop planning. Deploy. Come back to these
 > documents on 15 September with real numbers in them.**
 
 If the next thing you do is ask me to build a pitch deck, a competitor teardown, or a
 financial model with more scenarios — **that's the tell.** Push back on yourselves.
+
+**Update, 2026-07-29: this gate is cleared.** The app deployed (Render + Vercel), the
+deploy was human-verified end to end (two real people, real devices, real room, correct
+attribution), and a real production bug was caught and fixed in the process. **The
+"stop planning, deploy" instruction has been followed.** What replaces it as the live
+concern: zero students who aren't founders/testers have touched it yet, and none of the
+distribution work (CRs, the classroom demo, the TPO meeting) is confirmed started from
+what's in this repo. The next version of this pushback section should be about
+*distribution*, not deployment.
 
 ---
 

@@ -50,6 +50,13 @@ describe('GET /health/agent', () => {
       lastFailure: null,
       lastSuccess: null,
       healthy: true,
+      // N1 (audit comparison, 2026-07-29): feedback generation's own
+      // dispatch-health counters, parallel to the transcription ones above.
+      feedbackSuccesses: 0,
+      feedbackFailures: 0,
+      lastFeedbackFailure: null,
+      lastFeedbackSuccess: null,
+      feedbackHealthy: true,
     });
   });
 

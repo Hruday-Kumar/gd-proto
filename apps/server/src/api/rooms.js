@@ -8,10 +8,11 @@ import { createConsentGate } from './consentGate.js';
 import { mintToken } from '../livekit/token.js';
 import { startTranscriptionForRoom } from '../agent/roomAgent.js';
 import { getFeedbackForRoomAndUser, rateFeedback } from '../db/feedback.js';
-import { listParticipants } from '../db/roomParticipants.js';
+import { listParticipants, removeParticipant } from '../db/roomParticipants.js';
 import { listProfiles } from '../db/profiles.js';
 import { listTranscriptLinesForRoom } from '../db/transcriptLines.js';
-import { createLlmRateLimiter } from './rateLimit.js';
+import { createLlmRateLimiter, createRoomActionRateLimiter } from './rateLimit.js';
+import { isRoomFull, DEFAULT_MAX_ROOM_PARTICIPANTS } from '../domain/roomCapacity.js';
 
 // Interim group-size default for random matching (PHASE1_PLAN.md §8,
 // decided 2026-07-26: anchored to the AI Voice Practice mode's stated
@@ -42,6 +43,8 @@ export function createRoomsRouter(requireAuth, deps) {
     getRoomById,
     updateRoomStatus,
     addParticipant,
+    removeParticipant: removeParticipantFn = removeParticipant,
+    maxParticipants = DEFAULT_MAX_ROOM_PARTICIPANTS,
     listQueue,
     addToQueue,
     removeFromQueue,
@@ -63,6 +66,7 @@ export function createRoomsRouter(requireAuth, deps) {
     listProfilesFn = listProfiles,
     listTranscriptLinesForRoomFn = listTranscriptLinesForRoom,
     llmRateLimiter = createLlmRateLimiter(),
+    roomActionRateLimiter = createRoomActionRateLimiter(),
   } = deps;
 
   const router = Router();
@@ -106,7 +110,11 @@ export function createRoomsRouter(requireAuth, deps) {
     res.status(200).json({ room: room ? { id: room.id, code: room.code, status: room.status } : null });
   });
 
-  router.post('/api/rooms', requireAuth, async (req, res) => {
+  // N3 (audit comparison, 2026-07-29): create/join had no rate limiting at
+  // all -- a single account could spam-create rooms or spam-join a leaked
+  // code with no throttle. Separate limiter from llmRateLimiter (H4) since
+  // neither route calls Gemini itself.
+  router.post('/api/rooms', requireAuth, roomActionRateLimiter, async (req, res) => {
     const { topicId, durationSeconds } = req.body || {};
     if (!topicId || !durationSeconds) {
       return res.status(400).json({ error: 'topicId and durationSeconds are required' });
@@ -129,7 +137,7 @@ export function createRoomsRouter(requireAuth, deps) {
     });
   });
 
-  router.post('/api/rooms/join', requireAuth, async (req, res) => {
+  router.post('/api/rooms/join', requireAuth, roomActionRateLimiter, async (req, res) => {
     const { code } = req.body || {};
     if (!code) return res.status(400).json({ error: 'code is required' });
 
@@ -139,9 +147,39 @@ export function createRoomsRouter(requireAuth, deps) {
       return res.status(409).json({ error: `Room is already ${room.status}` });
     }
 
+    // N3 (audit comparison, 2026-07-29): a leaked room code otherwise let
+    // an unbounded number of participants join -- each extra seat costs a
+    // live LiveKit connection, a per-speaker AssemblyAI stream once the
+    // room starts, and a Gemini feedback call once it ends. A rejoin by
+    // someone already seated is never blocked -- they're one of the
+    // counted seats already, not an additional one.
+    const alreadySeated = await isParticipant(room.id, req.userId);
+    if (!alreadySeated) {
+      const before = await listParticipantsFn(room.id);
+      if (isRoomFull(before.length, maxParticipants)) {
+        return res.status(409).json({ error: 'Room is full' });
+      }
+    }
+
     // addParticipant is expected to be idempotent on a duplicate join
     // (see db/roomParticipants.js) -- rejoining doesn't error.
     await addParticipant(room.id, req.userId, req.userId);
+
+    if (!alreadySeated) {
+      // Concurrent joins can both pass the check above against the same
+      // stale count before either insert lands. Re-verifying afterward and
+      // backing our own seat back out if we lost that race bounds the cap
+      // tightly without needing a schema-level atomic count -- the
+      // existing unique(room_id, user_id) constraint already makes the
+      // insert itself race-safe against duplicates; this only guards
+      // against exceeding the participant count.
+      const after = await listParticipantsFn(room.id);
+      if (after.length > maxParticipants) {
+        await removeParticipantFn(room.id, req.userId);
+        return res.status(409).json({ error: 'Room is full' });
+      }
+    }
+
     res.status(200).json({ id: room.id, code: room.code, status: room.status });
   });
 

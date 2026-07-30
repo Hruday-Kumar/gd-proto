@@ -34,8 +34,15 @@ export function attachTranscriber(room, { apiKey, onTranscript, sampleRate = 160
       }
     })();
 
+    // N4 (audit comparison, 2026-07-29): stop() now returns aai.close()'s
+    // own promise -- closeAll() below awaits every one, so a caller (agent/
+    // roomAgent.js's stopTranscriptionForRoom) can know once every speaker's
+    // socket has genuinely finished flushing, not just been told to.
     const key = publication.sid ?? identity;
-    active.set(key, () => { stopped = true; aai.close(); });
+    active.set(key, () => {
+      stopped = true;
+      return aai.close();
+    });
   });
 
   room.on(RoomEvent.TrackUnsubscribed, (_track, publication) => {
@@ -44,5 +51,11 @@ export function attachTranscriber(room, { apiKey, onTranscript, sampleRate = 160
     if (stop) { stop(); active.delete(key); }
   });
 
-  return { closeAll: () => { for (const stop of active.values()) stop(); active.clear(); } };
+  return {
+    closeAll: () => {
+      const stops = [...active.values()].map((stop) => stop());
+      active.clear();
+      return Promise.allSettled(stops);
+    },
+  };
 }

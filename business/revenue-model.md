@@ -8,6 +8,9 @@
 - **Runway: 6 months maximum** → **expires ~end of January 2027.**
 - Team: 3 people, 2.0 FTE.
 - Beachhead batch size: **1,000 final-year students** (2027 batch, home campus).
+  **Audit note, 2026-07-29: `gtm-strategy.md`'s funnel model (§6) uses 600 for the same
+  number, flagged there as `[ASSUMPTION]`, not reconciled with this one.** Confirm the
+  real figure before either document's numbers go in front of anyone external.
 - Payments: **not built.** No Razorpay/Stripe anywhere in the codebase.
 
 > `[ASSUMPTION]` = my estimate, editable. `[VERIFY]` = go check the vendor's current
@@ -263,10 +266,14 @@ Ranked by what actually kills you.
    fatal. The 6-month clock makes this a live risk, not a theoretical one.
    → Have the conversation *now*, at month 0, not at month 5.
 5. **🟠 Free-tier dependency.** Gemini free-tier terms permit training on submitted data
-   (your students' transcripts — already flagged in ADR-0008), AssemblyAI trial credits
-   expire, Render free tier sleeps. **A paying college will require a DPA.** DPDP
-   compliance for a B2B contract will likely force a paid Gemini tier.
-   → Budget ~₹5–10k/mo `[ASSUMPTION]` from your first contract. Don't let it surprise you.
+   (your students' transcripts — already flagged in ADR-0008), Render free tier sleeps
+   (tested live 2026-07-29, holds up so far — see `context-summary.md`). **A paying
+   college will require a DPA.** DPDP compliance for a B2B contract will likely force a
+   paid Gemini tier. → Budget ~₹5–10k/mo `[ASSUMPTION]` from your first contract. Don't
+   let it surprise you. **AssemblyAI's trial-credit question is no longer open** —
+   decided 2026-07-29: open a fresh trial account when the current ~$50 credit runs out,
+   rather than add a card. Stays card-free longer, at the cost of periodic
+   account-rotation overhead; revisit if that overhead becomes real work.
 6. **🟡 Revenue seasonality.** Procurement Apr–Jun, usage Aug–Dec, MBA Jan–Apr. Lumpy,
    with two dead quarters. → Plan cash across the year, not month to month.
 7. **🟡 Unbounded COGS tail** from power users under flat pricing (§1).

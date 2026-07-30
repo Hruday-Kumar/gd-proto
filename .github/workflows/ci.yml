@@ -18,6 +18,63 @@ jobs:
       - run: npm ci
       - run: npm test --workspace=@placeme/server
 
+  server-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx oxlint apps/server/src apps/server/test
+
+  # N8 (audit 2026-07-29): the two RLS isolation tests
+  # (historyRlsIsolation.test.js, roomParticipantsRlsIsolation.test.js)
+  # prove guardrail #4's "own history only" and H8's seating-lockdown are
+  # enforced by Postgres RLS itself, not an app-level filter -- but they
+  # need real Supabase Auth users signed in against a live project, so
+  # they self-skip (describe.skipIf) whenever SUPABASE_URL/
+  # SUPABASE_ANON_KEY/SUPABASE_SERVICE_ROLE_KEY aren't set. The `test` job
+  # above never sets them, so these two files have been silently skipping
+  # in CI since they were written -- this job is what actually executes
+  # them, once the three secrets below exist on the repo (Settings ->
+  # Secrets and variables -> Actions -- same values already in
+  # apps/server/.env, see DEPLOYMENT.md's secrets checklist).
+  #
+  # No job-level `if:` gate here deliberately -- GitHub Actions doesn't
+  # expose the `secrets` context to a job's `if:` condition at all (only
+  # to `env:`/steps), so there's no supported way to skip the job itself
+  # based on whether a secret is set. Instead this relies on the test
+  # files' own describe.skipIf: with the secrets unset (a fork PR, or
+  # this repo before someone adds them), the env vars below resolve to
+  # empty strings, hasLiveCreds is false, and both files report "skipped"
+  # with exit code 0 -- confirmed locally by running this exact command
+  # with no Supabase env vars present. This satisfies the "never require
+  # production credentials" / deterministic design goal without an
+  # unsupported conditional: the job always runs, but only ever *asserts*
+  # anything once real credentials exist.
+  rls-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Run RLS isolation tests
+        working-directory: apps/server
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ]; then
+            echo "::warning::SUPABASE_URL/SUPABASE_ANON_KEY/SUPABASE_SERVICE_ROLE_KEY are not set as repo secrets -- the RLS isolation tests (guardrail #4's own-history-only guarantee, and the H8 regression test) will SKIP, not actually run. This is expected until those secrets are added (Settings -> Secrets and variables -> Actions; see DEPLOYMENT.md's secrets checklist and PLAN.md section 6), but it means this job is not currently providing real security coverage."
+          fi
+          npx vitest run test/historyRlsIsolation.test.js test/roomParticipantsRlsIsolation.test.js
+
   web:
     runs-on: ubuntu-latest
     steps:
@@ -35,3 +92,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t placeme-server .
+
+  # N8 (audit 2026-07-29), third gap: no dependency-advisory visibility in
+  # CI at all -- the tree already carries 2 known high-severity advisories
+  # (react-router, a web-only dependency; see N10 in
+  # AUDIT_COMPARISON_2026-07-29.md, which tracks fixing them separately).
+  # `continue-on-error: true` per the audit's own recommendation
+  # ("non-blocking reporting step") -- this job's purpose is visibility on
+  # every PR (so a *new* advisory doesn't land unnoticed), not to gate
+  # merges on a dependency tree this project doesn't fully control.
+  dependency-audit:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=high

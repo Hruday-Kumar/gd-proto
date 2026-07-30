@@ -277,6 +277,14 @@ a queue has a first-run experience of **failure** — and first-run failure at n
 > This is a GTM decision more than a product one, and it costs you roughly a day of work.
 > The code stays; the entry point goes.
 
+**Implemented, 2026-07-29 — partially.** Random matching now soft-lands (90s timeout,
+honest messaging, demoted below the two paths that always work) instead of hanging in
+an infinite queue — the failure mode this question was raised about is fixed. **A real
+scheduled-sessions feature (pick a fixed time slot) was not built** — the substitute is
+manual coordination via create-room + share-code, same shape as a WhatsApp-organized
+session. Good enough for n=10 launched by founders; revisit if the TPO relationship
+(§6, Path A) wants something more structured to point students at.
+
 **Q3. You said you're optimizing for "users + college contracts + revenue." Pick one.**
 
 With 2.0 FTE and ₹0, three goals is zero goals. And per §5, **college contracts for this

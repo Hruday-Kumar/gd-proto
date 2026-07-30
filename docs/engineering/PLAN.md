@@ -1,8 +1,45 @@
 # PLAN — audit remediation & road to pilot
 
-**Last updated:** 2026-07-29 (Phase 5 close-out — M3, M5, M8, M9, and the
-L-series all done; §4/§5d/§6 updated. This is the last open work from the
-2026-07-28 audit. See `PROGRESS.md` for the session record.)
+**Last updated:** 2026-07-30 (doc-sync pass — corrects the 2026-07-29
+entry below, which had gone stale). **`fix/n3-n4-capacity-ratelimit-flush-
+race` (N8, N6, N3, N4) merged into `dev` via PR #44 on 2026-07-29** —
+confirmed directly via `git log`/`gh pr list`, not just recorded here on
+trust. Combined with N2/N7 (PR #42) and N1 (PR #40), **every finding N1–N8
+from `AUDIT_COMPARISON_2026-07-29.md` is now done and on `dev`**. `dev` is
+6 commits ahead of `main` with zero open PRs. The reference below to
+`docs/engineering/CODEX_HANDOVER_2026-07-29.md` was also stale — **that
+file was never created**; it doesn't exist in this repo. Whoever wrote
+that sentence intended to hand off there but the file itself never
+landed. Treat this file and `PROGRESS.md` as the source of truth instead.
+
+A fresh pass on 2026-07-30 re-verified every remaining open finding
+(N5, N9, N11–N14, H4's residual gap) directly against current source —
+see §4/§5 below for what's still open — and found one new reliability gap
+the original audit never flagged: **no process-level `unhandledRejection`/
+`uncaughtException` handler anywhere in `apps/server/src`**, plus one
+fire-and-forget call (`roomAgent.js`'s duration-timer dispatch of
+`stopTranscriptionForRoom`) with no `.catch()` that could trigger it and
+crash the whole process, not just one room. See `PROGRESS.md`'s
+2026-07-30 entry for the full writeup and the remediation plan (8 small
+branches, in priority order, currently in progress).
+
+<details><summary>Original 2026-07-29 entry (superseded, kept for history)</summary>
+
+**Last updated:** 2026-07-29 (reconciled — two parallel work sessions off
+the same N1 base are now combined on one branch,
+`fix/n3-n4-capacity-ratelimit-flush-race`: **N8, N6, N3, N4** (this
+branch — CI hardening, render.yaml/DEPLOYMENT.md sync, room participant
+cap + rate limiting, and the feedback-vs-transcription-flush race, all
+coded and tested but not yet on `dev`) plus **N2, N7** (already merged
+into `dev` via PR #42 and recorded there). All six findings are from
+`AUDIT_COMPARISON_2026-07-29.md`, not the 2026-07-28 `AUDIT.md` this file
+otherwise tracks. Before all of these: N1 fixed — feedback generation now
+retries with backoff instead of failing permanently and silently. See
+`PROGRESS.md` for all session records, and
+`docs/engineering/CODEX_HANDOVER_2026-07-29.md` for what's still open and
+queued up next.)
+
+</details>
 
 This is the **shared checklist and ownership board** for two people working
 this repo at the same time. It answers: what is done, what is next, who has
@@ -47,7 +84,7 @@ how it was verified*. Don't duplicate one into the other.
 **Test commands** (from repo root, on Node 22):
 
 ```
-npx vitest run --root apps/server    # 247 tests, all must pass
+npx vitest run --root apps/server    # 311 tests, all must pass (3 live-RLS test files skip offline/on Node <22 — expected)
 npx oxlint apps/server/src           # 1 known pre-existing warning (L5)
 npm run build --workspace=apps/web   # must build clean
 ```
@@ -104,6 +141,9 @@ C2) — this only concerns the static frontend build.
 | `0008_rooms_created_by_on_delete_set_null.sql` | ✅ **Confirmed applied — live-tested 2026-07-28** | Re-verified after the user ran it: deleting a scratch user who'd created a room now succeeds (was `23503` FK violation before), and the room survives with `created_by` set to `NULL`. Account deletion (DPDP, guardrail #4) is fixed for real. |
 | `0009_rooms_duration_seconds_bounds.sql` | ✅ **Confirmed applied — live-tested 2026-07-28** | |
 | `0010_tighten_rooms_duration_seconds_bounds.sql` | ✅ **Confirmed applied — live-tested 2026-07-28** | Re-verified after the user ran both: a scratch room now rejects `duration_seconds` updates at both 5000 and 2000 (proving 0010's tighter 1500 ceiling is live, not just 0009's original 3600), and accepts a valid 900. Check constraint `rooms_duration_seconds_bounds` confirmed enforcing 60–1500 in the live DB. |
+| `0011_drop_room_participants_client_insert.sql` | ✅ **Confirmed applied — live-verified 2026-07-29 (N7)** | Re-ran the existing `test/roomParticipantsRlsIsolation.test.js` (H8) against the live Supabase project with real credentials, on Node 22: `userB` (never seated in `roomA`) attempting a direct client-side insert into `room_participants` for `roomA` was rejected, and a service-role re-query confirmed no row was written. The pre-0011 policy (`auth.uid() = user_id` only, no room-membership check) would have let this exact insert succeed, so a blocked insert is proof the policy is gone. 1/1 test passed. Closes N7 from `AUDIT_COMPARISON_2026-07-29.md`. |
+| `0012_rooms_feedback_retry_tracking.sql` | ✅ **Confirmed run — user applied it 2026-07-29** | N1 fix (`AUDIT_COMPARISON_2026-07-29.md`): adds `rooms.feedback_generated_at`/`feedback_attempts`/`feedback_last_attempted_at`. Not yet independently re-verified against the live schema from this session (no live DB access here) — taken on the user's word, same as every other migration in this table. **Guardrail #1's real-room check for N1 is still outstanding** — planned for tonight (2026-07-29), per the user; PR #40's own test-plan checkbox for this is unchecked until then. |
+| `0013_drop_topics_client_insert_add_length_constraint.sql` | ✅ **Confirmed applied — live-verified 2026-07-29** | N2 fix (`AUDIT_COMPARISON_2026-07-29.md`): drops `topics_insert_own_custom` (the client-facing INSERT policy that let any authenticated student bypass H5's 200-char API cap via a direct PostgREST insert) and adds a `topics_text_length` CHECK constraint (≤200 chars) that binds every insert including the server's own service-role writes. **Re-ran `apps/server/test/topicsRlsIsolation.test.js` against the live project on Node 22 after the user applied the migration: all 3 assertions now pass** — a direct client insert is rejected, an oversized service-role insert is rejected by the new constraint, and an in-bounds service-role insert still succeeds (no regression to the real `/api/topics/custom`/`/api/topics/generate` paths). Before the migration, the same test reproduced the vulnerability live (both the client-bypass and the oversized insert succeeded) — see `PROGRESS.md`'s N2 session entry for that before/after evidence. |
 
 ---
 
@@ -114,6 +154,13 @@ Audit findings closed, newest first. Evidence and root causes are in
 
 | ID | What | Where |
 |---|---|---|
+| **N8** (`AUDIT_COMPARISON_2026-07-29.md`) — **merged, PR #44, confirmed via `git log`/`gh pr list` 2026-07-30** | Three CI gaps left the security-critical layers unguarded: `apps/server` was never linted in CI (a required gate per §1, unenforced); the two RLS isolation tests (guardrail #4's own-history-only proof, and the H8/`0011` seating-lockdown regression test) `skipIf`d without live Supabase creds and no CI job ever set them, so they silently reported "skipped" forever; no `npm audit` step existed despite 2 known high advisories in the tree. Fixed: new `server-lint` job (`oxlint`), new `rls-security` job (feeds `SUPABASE_URL`/`SUPABASE_ANON_KEY`/`SUPABASE_SERVICE_ROLE_KEY` from GH Actions secrets to the two RLS test files directly, with a `::warning::` annotation if the secrets aren't set yet — no job-level `if:` gate exists because Actions doesn't expose `secrets` to job conditions), new `dependency-audit` job (`npm audit --audit-level=high`, `continue-on-error: true`, reporting-only). **The GH Actions secrets themselves still need adding on the dashboard** before `rls-security` provides real coverage — see §6. No application code changed. | `.github/workflows/ci.yml` |
+| **N6** (`AUDIT_COMPARISON_2026-07-29.md`) — **merged, PR #44** | `render.yaml` had drifted from the actual production deployment config: the M6 CORS-allowlist fix and the M3 `/health/agent` token gate both added new env vars the app reads in production (`ALLOWED_ORIGINS`, `HEALTH_CHECK_TOKEN`), but neither was ever added to the Blueprint spec. A fresh Blueprint deploy would silently omit both — recreating the exact CORS breakage that was found and fixed live against `gd-proto-1` on 2026-07-29 (see `DEPLOYMENT.md`'s "Status" section). Fixed: both added as `sync: false` entries in `render.yaml`, in the same order `DEPLOYMENT.md`'s secrets checklist already lists them, so a fresh deploy now prompts for both. **Infra-config-only change** — the live `gd-proto-1` service's actual env vars are untouched (it wasn't created from this Blueprint in the first place), no application code changed, no migration. The `placeme-server` vs. `gd-proto-1` service-name mismatch was reviewed and left as-is — already documented in `DEPLOYMENT.md` as an intentional consequence of the live service being a manual "New Web Service" import rather than a Blueprint deploy, not a bug. | `render.yaml`, `DEPLOYMENT.md` |
+| **N3** (`AUDIT_COMPARISON_2026-07-29.md`) — **merged, PR #44** — ⚠️ *residual gap found 2026-07-30: `POST /api/topics/custom` was never added to either rate limiter — see the 2026-07-30 entry below* | "No effective participant cap or abuse protection on room creation/join" — `POST /api/rooms/join` (the code/link path) had no participant-count check at all, so a leaked room code let an unbounded number of accounts join a single `waiting` room, each costing a live LiveKit connection, a per-speaker AssemblyAI stream once the room started, and a Gemini feedback call once it ended. Neither `POST /api/rooms` (create) nor `POST /api/rooms/join` had any rate limiting either (unlike the two Gemini-backed routes H4 already covered). Fixed: a new `domain/roomCapacity.js`'s `isRoomFull()` (core, tested) is checked before inserting a new joiner and re-verified after inserting, backing the seat back out (`db/roomParticipants.js`'s new `removeParticipant`) if a concurrent joiner won the race for the room's last spot — bounds the cap tightly without a schema-level atomic count, no migration needed. A rejoin by an already-seated participant is never blocked (reuses the existing `isParticipant` check and `addParticipant`'s existing unique-constraint idempotency — duplicate joins were already handled). A new `createRoomActionRateLimiter` (`api/rateLimit.js`, same per-user keying as H4's `createLlmRateLimiter`, kept separate since neither route is Gemini-backed) now gates both routes. Default cap (6) anchored to the same product-stated range already used for matchmaking's group size (guardrail #10) — no new number invented. No schema change, no API shape change. | `api/rooms.js`, `api/rateLimit.js`, `domain/roomCapacity.js`, `db/roomParticipants.js` |
+| **N4** (`AUDIT_COMPARISON_2026-07-29.md`) — **merged, PR #44** | Feedback generation could start before the transcription agent had actually finished flushing a room's last few seconds of speech: the sweeper's `ends_at`-based expiry check and the agent's own stop timer (`durationSeconds + STOP_GRACE_MS`, 4s grace) were two fully independent clocks, and `stopTranscriptionForRoom` never awaited its own `closeAll()`/in-flight DB writes either — a fire-and-forget teardown even by the time it did run. A second, lower-level race in `assemblyai.js`: `close()` sent AssemblyAI's `Terminate` message and called `ws.close()` with zero wait, racing the server's own response containing the last speaker's final turn. Fixed: `roomAgent.js` tracks every `persistAttributedLine` write per room and now exposes `isTranscriptionActive(roomId)` — true until the agent has disconnected *and* every one of its writes has landed; `assemblyai.js`'s `close()` now waits for the socket's own `close` event (bounded by a 2s safety net only for a socket that never closes on its own) instead of racing it; `roomSweeper.js` checks `isTranscriptionActive` before dispatching feedback and, if still active, takes no claim and defers to the next sweep tick — bounded by a new `FEEDBACK_FLUSH_MAX_WAIT_MS` (15s, `domain/roomSweep.js`) so a stuck/crashed agent can't block feedback forever. No schema change, no API change; room-ending still happens exactly on schedule, only feedback generation is deferred. **Guardrail #1's real-room check is outstanding** — this needs a real session where a participant is still speaking right as the timer ends, confirmed by a human that their last words appear in the feedback. | `agent/roomSweeper.js`, `agent/roomAgent.js`, `agent/transcriber.js`, `agent/assemblyai.js`, `domain/roomSweep.js` |
+| **N2** (`AUDIT_COMPARISON_2026-07-29.md`) | H5's 200-char custom-topic cap and prompt delimiting are enforced in `api/topics.js`, but `topics_insert_own_custom` (from `0003`) still let any authenticated student bypass that route with a direct PostgREST insert into `topics` — its check (`source = 'custom' and auth.uid() = created_by`) only proves self-identity, the same vulnerability class as H8/`room_participants`, just never cross-checked against this table. Migration `0013` drops that policy (confirmed safe: no `apps/web` code inserts into `topics` directly — only `db/topics.js`'s service-role writes do) and adds a `topics_text_length` CHECK constraint (≤200 chars) — a table constraint, not just an RLS check, so it also binds the server's own service-role writes for LLM-generated topics. Because that constraint applies to *every* insert, `domain/topicPrompt.js`'s `parseTopicResponse` was also updated to reject an oversized Gemini response before it ever reaches the insert — otherwise a verbose model reply could 500 the legitimate `/api/topics/generate` and `/api/rooms/match` paths. `test/topicsRlsIsolation.test.js` proved the vulnerability live before the fix (both the direct client insert and an oversized service-role insert succeeded) and proved it closed after the user applied `0013` (all 3 assertions pass: client insert rejected, oversized insert rejected, in-bounds service-role insert still works). 282/282 server tests green. | migration `0013` (applied), `domain/topicPrompt.js`, `test/topicPrompt.test.js`, `test/topicsRlsIsolation.test.js` |
+| **N7** (`AUDIT_COMPARISON_2026-07-29.md`) | Migration `0011` (H8's fix — drops the client-facing `room_participants` insert policy that let any student seat themselves into any room via direct PostgREST) had no recorded live-application status anywhere in the repo — `PLAN.md` §3 stopped at `0010`, so nobody could say whether H8 was actually closed in production. Verified by re-running the existing `test/roomParticipantsRlsIsolation.test.js` against the live Supabase project (real credentials, Node 22, not CI — that test `skipIf`s without live creds): a second real user, never seated in the test room, had a direct client-side insert into `room_participants` rejected, and a service-role re-query confirmed no row was written. The pre-0011 policy would have allowed this exact insert (it only checked `auth.uid() = user_id`, not room membership), so the rejection is direct live proof the policy is gone and `0011` is applied. §3 updated with the row. **No code changed — this was a verification-and-recording task only**, per its own recommended fix. | `docs/engineering/PLAN.md` §3, `apps/server/test/roomParticipantsRlsIsolation.test.js` (unmodified, re-run only) |
+| **N1** (`AUDIT_COMPARISON_2026-07-29.md`) | Feedback generation had no retry and no persisted record of completion — a crash mid-call or a Gemini outage (this happened for real: a dead service account 401'd every participant of a real session, see `PROGRESS.md`'s 2026-07-29 B7 entry) meant that room's feedback was gone forever, since `ended` rooms are dropped from the live-room sweep and nothing ever revisited them. Fixed: the sweeper now also retries any `ended` room still missing feedback, bounded by attempt count (5), backoff (60s), and age (24h) — `domain/roomSweep.js`'s `findRoomsReadyForFeedbackRetry`. Each attempt is claimed atomically (same conditional-update pattern as C3/H7) so overlapping sweep ticks can't double-dispatch. `generateAndPersistFeedbackForRoom` now skips participants who already have persisted feedback and returns `{ complete }` instead of void, so the sweeper knows when to stop retrying a room. A room whose retries are exhausted surfaces on `/health/agent` as `feedbackHealthy: false`, alongside the existing transcription `healthy` flag — `keepalive.yml` now checks both. Migration `0012` run against the live project 2026-07-29 (see §3). **Guardrail #1's real-room check is still outstanding** — user plans to run one tonight (2026-07-29); until then this isn't fully closed out per guardrail #1's letter. | `agent/roomSweeper.js`, `agent/feedbackWorker.js`, `domain/roomSweep.js`, `domain/agentWorkerStatus.js`, `db/rooms.js`, `db/feedback.js`, migration `0012`, `.github/workflows/keepalive.yml` |
 | **M2** | Global Express error-handling middleware, registered last — an uncaught route error now returns the same JSON `{error}` shape every other endpoint uses (was Express's default HTML error page) with a structured JSON log line, instead of vanishing with nothing logged anywhere the team would see it during a live pilot session | `api/errorHandler.js`, `index.js` |
 | **H1** | `PROGRESS.md`'s transcription-outage write-up corrected to name the real cause (`node:22-slim` missing `ca-certificates`, so `@livekit/rtc-node`'s native Rust engine's HTTPS calls failed deterministically on every attempt) instead of the original "transient region-fetch blip" misdiagnosis; the retry logic stays, reframed as protection against genuine transient failures, not credited with fixing this one | `PROGRESS.md`'s "⚠️ Correction" note, `LESSONS.md`'s Docker entry, `Dockerfile` |
 | **M4** | Production image no longer installs the frontend toolchain (Vite, Tailwind, oxlint, Vitest, Supertest, `@types`) — `apps/web` excluded via `.dockerignore`, `npm ci --omit=dev` instead of a bare `npm ci`. Verified with a real `docker build`/`run`: 929MB → 454MB, 244 → 122 packages, `npm audit` 2 high → 0, `/health` still responds correctly | `Dockerfile`, `.dockerignore` |
@@ -205,6 +252,44 @@ human/dashboard follow-up in §6. Full detail in `PROGRESS.md`.
 | ✅ | **M9** | Unbounded reads (no `LIMIT`) | — | **DONE, 2026-07-29.** See §4. |
 | ✅ | **L1–L8** | README placeholder, dead `spike/` + `packages/shared`, dead `remainingQueue`, discarded `roomId`, raw UUID as LiveKit name, nvm friction | — | **DONE, 2026-07-29.** See §4. |
 
+### 5e. Remaining `AUDIT_COMPARISON_2026-07-29.md` findings + new exception-handling gaps (2026-07-30) — ✅ DONE
+
+Picked up per direct user instruction to make the app pilot-ready and
+check exception handling across services. A fresh read of current source
+(not the docs) confirmed which of the audit comparison's remaining open
+findings are still open, and turned up one new reliability gap the
+original audit never flagged: **no process-level `unhandledRejection`/
+`uncaughtException` handler anywhere**, plus one uncaught fire-and-forget
+call (`roomAgent.js`'s duration-timer dispatch of
+`stopTranscriptionForRoom`) that could trigger it and crash the *whole*
+process, not just one room. Full writeup in `PROGRESS.md`'s 2026-07-30
+entry. **All 8 rows below shipped as 8 small branches/PRs into `dev`
+(#46–#53), each TDD RED→GREEN where the change was testable core logic,
+each with a `pr-review` pass before merge, in priority order
+(reliability/crash-risk first). 337/337 server tests green on `dev`
+after all eight, `apps/web` build clean.**
+
+| ✅ | ID | Task | Notes |
+|---|---|---|---|
+| ✅ | — | Process-level safety net + dangling-promise fixes | **PR #46.** `process.on('unhandledRejection'/'uncaughtException')` via new `processSafetyNet.js`; `.catch()` added to `roomAgent.js`'s two uncaught fire-and-forget calls. RED test reproduced a genuine unhandled rejection before the fix. |
+| ✅ | **H4 residual** | Rate-limit `POST /api/topics/custom` | **PR #47.** Wired the existing room-action limiter (not the LLM one — this route doesn't call Gemini). |
+| ✅ | **N9** | Gemini key in URL + raw upstream error echoed to students | **PR #48.** Key moved to `x-goog-api-key` header; `/api/topics/generate` now returns a generic message, full detail still logged server-side. |
+| ✅ | — | Gemini fetch timeout + retry | **PR #49.** 15s `AbortController` timeout; `domain/retry.js`'s `withRetry` extended with a `shouldRetry` predicate (backward-compatible default) so only 429/5xx/network failures retry, not a permanent 4xx. |
+| ✅ | **N11 + N12** | Dev CORS origins allowed in prod + no `trust proxy` | **PR #50.** `DEFAULT_DEV_ORIGINS` gated on `NODE_ENV !== 'production'`; `app.set('trust proxy', 1)` added. |
+| ✅ | **N5** | `listParticipants` / `getActiveRoomForUser` still unbounded | **PR #51.** Both bounded (`.limit()`); `listRoomsByIds` found with the identical gap during the sweep and fixed in the same pass. |
+| ✅ | **N13** | Caption identity trusts payload body, not LiveKit's authenticated sender | **PR #52.** Not a literal 1:1 of the audit's wording — see the PR for why (the LiveKit sender is always the transcriber relay bot, never the speaking student, so the fix verifies the sender is the trusted relay rather than swapping identity sources outright). |
+| ✅ | — | `db/*.js` null-safety consistency | **PR #53.** Also caught and fixed a real `SyntaxError` (duplicate `const data` in one scope, introduced mid-fix) before it reached `dev` — 8 test files would have failed to parse. |
+
+**Deliberately not in this sweep:** wiring `withRetry` around AssemblyAI's
+WebSocket connect (currently zero retry, unlike LiveKit) — touches the
+live transcription pipeline directly, needs its own real-room
+verification pass rather than being folded into a reliability sweep.
+**N14** (no late-join, no leave-room path): user decision, 2026-07-30 —
+**leave as-is for the pilot**. `PILOT_READINESS.md` already expects a
+founder watching every early session who can work around it manually;
+not worth the build/test surface before a pilot this size. Documented
+here, not built.
+
 ---
 
 ## 6. Blocked on a human — not code
@@ -246,6 +331,7 @@ detail in `PROGRESS.md`.
 | ✅ | — | AssemblyAI trial credit will run out | — | **DECIDED, 2026-07-29** — open a fresh trial account rather than add a card, per direct user instruction. See ADR-0002's "Payment decision — RESOLVED" section. Nothing to action until the current $50 credit is actually spent. |
 | ☐ | **M3** | Set `HEALTH_CHECK_TOKEN` on the live Render service **and** as a GitHub Actions repo secret | — | Optional — `/health/agent` stays open (previous behavior) until this is set. Needs Render + GitHub dashboard access. See `DEPLOYMENT.md`'s secrets checklist and §3. |
 | ☐ | **M5** | Sign up for a free UptimeRobot/cron-job.org monitor pinging `GET /health`, independent of GitHub Actions | — | Not a blocker (the GH Actions cron already works, per B4's real test) — but the single-point-of-failure gap named in the audit stays open until this exists. Needs a dashboard account. See `DEPLOYMENT.md`. |
+| ☐ | **N8** | Add `SUPABASE_URL`/`SUPABASE_ANON_KEY`/`SUPABASE_SERVICE_ROLE_KEY` as GitHub Actions repo secrets (Settings → Secrets and variables → Actions) | — | Code is done (`fix/n3-n4-capacity-ratelimit-flush-race`'s `rls-security` CI job) but without these secrets the two RLS isolation tests still just report "skipped" in CI, same as before — the job runs, but provides no real coverage yet. Same values already in `apps/server/.env`. |
 
 ---
 

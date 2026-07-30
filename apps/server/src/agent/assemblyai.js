@@ -80,16 +80,48 @@ export function openAssemblyAI({ sampleRate, apiKey, onFinal, onError, chunkMs =
         pending = pending.slice(samplesPerChunk);
       }
     },
+    // N4 (audit comparison, 2026-07-29): used to send "Terminate" and call
+    // ws.close() immediately after, with zero wait -- racing AssemblyAI's
+    // own response, which can still contain the final Turn for whatever
+    // audio was just flushed (exactly the last few seconds of a
+    // discussion feedback generation needs). Now waits for the socket's
+    // own 'close' event -- the 'message' handler above stays registered
+    // and keeps processing any final Turn that arrives in the meantime --
+    // with a bounded safety close only for a socket that never closes on
+    // its own.
     close() {
       const minSamples = Math.round((sampleRate * 50) / 1000);
       if (pending.length >= minSamples) {
         flush(Buffer.from(pending.buffer, pending.byteOffset, pending.byteLength));
       }
       pending = new Int16Array(0);
-      try {
-        if (open) ws.send(JSON.stringify({ type: 'Terminate' }));
-      } catch { /* noop */ }
-      try { ws.close(); } catch { /* noop */ }
+
+      if (!open) {
+        try { ws.close(); } catch { /* noop */ }
+        return Promise.resolve();
+      }
+
+      return new Promise((resolve) => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(safetyTimer);
+          resolve();
+        };
+
+        ws.once('close', finish);
+        const safetyTimer = setTimeout(() => {
+          try { ws.close(); } catch { /* noop */ }
+          finish();
+        }, 2000);
+
+        try {
+          ws.send(JSON.stringify({ type: 'Terminate' }));
+        } catch {
+          finish();
+        }
+      });
     },
   };
 }

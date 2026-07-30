@@ -12,31 +12,82 @@
 // vendor lineup change is a config edit, not a code change.
 import { buildTopicPrompt, parseTopicResponse } from '../domain/topicPrompt.js';
 import { parseFeedbackResponse } from '../domain/feedbackPrompt.js';
+import { withRetry } from '../domain/retry.js';
 
 export const DEFAULT_GEMINI_MODEL = 'gemini-3.6-flash';
 
-async function callGemini(prompt, { apiKey, model, fetchImpl }) {
+// 2026-07-30 (pilot-readiness + exception-handling pass): no timeout
+// existed anywhere in this file -- a hung request blocked indefinitely,
+// tying up an HTTP request or one of the feedback worker's fixed
+// concurrency slots forever. 15s is generous for a single-prompt
+// generateContent call while still bounding the worst case.
+export const DEFAULT_GEMINI_TIMEOUT_MS = 15_000;
+export const DEFAULT_GEMINI_RETRY_ATTEMPTS = 3;
+export const DEFAULT_GEMINI_RETRY_DELAY_MS = 500;
+
+// A 429/5xx is the class of failure withRetry exists for -- a transient
+// blip on Google's side, not a mistake on ours. A 4xx like an
+// invalid/expired key is permanent: retrying it three times only delays
+// surfacing a real problem.
+function isRetryableGeminiError(err) {
+  if (err.status === 429) return true;
+  if (err.status >= 500 && err.status < 600) return true;
+  // A network failure or our own timeout never got a status at all.
+  return err.status === undefined;
+}
+
+async function callGemini(prompt, { apiKey, model, fetchImpl, timeoutMs }) {
   if (!apiKey) {
     throw new Error('Missing GEMINI_API_KEY');
   }
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-  const response = await fetchImpl(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
-  });
+  // N9 (audit comparison, 2026-07-29): the key used to travel in the URL
+  // query string -- a classic accidental-disclosure vector (proxy logs,
+  // CDN logs, access logs). Google's API accepts the same key via this
+  // header instead.
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let response;
+  try {
+    response = await fetchImpl(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new Error(`Gemini request timed out after ${timeoutMs}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!response.ok) {
-    throw new Error(`Gemini API error: ${response.status} ${await response.text()}`);
+    const err = new Error(`Gemini API error: ${response.status} ${await response.text()}`);
+    err.status = response.status;
+    throw err;
   }
   return response.json();
 }
 
 export async function generateTopic(
   { category, difficulty } = {},
-  { apiKey = process.env.GEMINI_API_KEY, model = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL, fetchImpl = fetch } = {}
+  {
+    apiKey = process.env.GEMINI_API_KEY,
+    model = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL,
+    fetchImpl = fetch,
+    timeoutMs = DEFAULT_GEMINI_TIMEOUT_MS,
+    retryAttempts = DEFAULT_GEMINI_RETRY_ATTEMPTS,
+    retryDelayMs = DEFAULT_GEMINI_RETRY_DELAY_MS,
+  } = {}
 ) {
   const prompt = buildTopicPrompt({ category, difficulty });
-  const body = await callGemini(prompt, { apiKey, model, fetchImpl });
+  const body = await withRetry(() => callGemini(prompt, { apiKey, model, fetchImpl, timeoutMs }), {
+    attempts: retryAttempts,
+    delayMs: retryDelayMs,
+    shouldRetry: isRetryableGeminiError,
+  });
   return parseTopicResponse(body);
 }
 
@@ -48,8 +99,19 @@ export async function generateTopic(
 // partial application that wires the two together).
 export async function generateFeedback(
   prompt,
-  { apiKey = process.env.GEMINI_API_KEY, model = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL, fetchImpl = fetch } = {}
+  {
+    apiKey = process.env.GEMINI_API_KEY,
+    model = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL,
+    fetchImpl = fetch,
+    timeoutMs = DEFAULT_GEMINI_TIMEOUT_MS,
+    retryAttempts = DEFAULT_GEMINI_RETRY_ATTEMPTS,
+    retryDelayMs = DEFAULT_GEMINI_RETRY_DELAY_MS,
+  } = {}
 ) {
-  const body = await callGemini(prompt, { apiKey, model, fetchImpl });
+  const body = await withRetry(() => callGemini(prompt, { apiKey, model, fetchImpl, timeoutMs }), {
+    attempts: retryAttempts,
+    delayMs: retryDelayMs,
+    shouldRetry: isRetryableGeminiError,
+  });
   return parseFeedbackResponse(body);
 }
