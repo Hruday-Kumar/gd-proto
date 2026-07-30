@@ -72,6 +72,12 @@ export function MatchPage() {
     }, MAX_QUEUE_WAIT_MS);
   }
 
+  async function handleCancelMatch() {
+    stopWaiting();
+    setQueued(false);
+    await leaveMatchQueue(session).catch(() => {});
+  }
+
   async function handleMatch() {
     setBusy(true);
     setError(null);
@@ -208,6 +214,16 @@ export function MatchPage() {
           >
             {busy ? 'Looking for a match…' : queued ? "You're queued" : 'Find me a group'}
           </button>
+
+          {queued && (
+            <button
+              type="button"
+              onClick={handleCancelMatch}
+              className="w-full rounded-xl border border-border-base py-3 text-label-md font-semibold text-on-surface-variant transition-colors hover:bg-surface-container-high"
+            >
+              Cancel matching
+            </button>
+          )}
 
           {error && (
             <p role="alert" className="rounded-lg bg-danger-container px-6 py-2 text-body-sm text-danger">

@@ -2,9 +2,54 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-07-30 (BUG-SPEC-0001, lobby nav guard — see the entry
-directly below. Older entries, including the same-day doc-sync +
-pilot-readiness pass, are preserved further down, unchanged.)
+**Last updated:** 2026-07-30 (BUG-SPEC-0002, waiting-state exit affordance —
+see the entry directly below. Older entries, including BUG-SPEC-0001 and the
+same-day doc-sync + pilot-readiness pass, are preserved further down,
+unchanged.)
+
+## BUG-SPEC-0002 — waiting-state exit affordance (2026-07-30)
+
+Picked up per direct user instruction ("let's start P1") to continue the
+`/impeccable critique` remediation in the order BUG-SPEC-0001 recorded as
+next: first of the two P1 findings, "no cancel/exit affordance in any
+waiting state." Branch `fix/waiting-state-exit-affordance` off `dev`, spec
+at `docs/specs/active/BUG-SPEC-0002-waiting-state-exit-affordance.md`.
+
+**Fix:** `MatchPage.jsx` gets a "Cancel matching" button, visible only while
+`queued`, that calls the same `leaveMatchQueue` request already used by the
+existing unmount/give-up paths, stops the poll/timeout timers, and resets to
+the pre-queue state — no new API. `LobbyPage.jsx` gets a "Leave room" link
+in both the creator's and non-creator's `status === 'waiting'` views,
+navigating to `/`; this is a plain client-side `<Link>`, not a new API call,
+because leaving during `waiting` was already safe and unguarded (`
+isSessionInProgress` returns `false` for that status) — the gap was
+discoverability, not safety.
+
+**Explicitly not touched:** any server-side "leave a room" path (freeing a
+`room_participants` seat, notifying other participants). That's **N14** from
+`PLAN.md` §5e, which the user already decided 2026-07-30 to leave as-is for
+the pilot; this fix only adds a client-side affordance for states that were
+already safe to leave, and does not reopen that decision.
+
+**Tests:** `apps/web/src/pages/MatchPage.test.jsx` (2 cases: button absent
+before queuing; appears once queued, cancels back to the pre-queue state and
+calls `leaveMatchQueue`) + `apps/web/src/pages/LobbyPage.test.jsx` (3 cases:
+"Leave room" present for creator and non-creator waiting views, absent once
+`live`). All 5 pass. Ran fresh from repo root under Node 22: `npm test` →
+337/337 server + 15/15 web green; `npm run lint` → clean (same 3
+pre-existing `only-export-components` warnings, no new ones); `npm run
+build --workspace=apps/web` → clean.
+
+**Residual:** guardrail #1 does not apply (no room/audio/transcription/
+attribution/feedback behavior changed). A manual click-through against a
+real signed-in session (queue → cancel; join a room → leave while waiting)
+was not done this session — no live Supabase session was available here —
+but risk is low given both new paths are covered by unit tests.
+
+**Not done this session (3/5 remaining from the critique, by design, in the
+order BUG-SPEC-0001 recorded):** the under-designed post-session
+feedback-wait screen (P1, next up); button/busy-state vocabulary drift
+(P2); missing skeleton loading states (P2).
 
 ## BUG-SPEC-0001 — lobby nav guard for live sessions (2026-07-30)
 

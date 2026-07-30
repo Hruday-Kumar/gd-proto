@@ -1,5 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
-import { useLocation, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { getRoomStatus, startRoom, getMyFeedback, getRoomTranscript } from '../rooms/roomsApi.js';
 import { AppShell } from '../components/AppShell.jsx';
@@ -229,21 +229,31 @@ export function LobbyPage() {
           <p className="mb-3 text-body-sm text-text-secondary">
             Share the room code above with classmates, then start the session once everyone's in.
           </p>
-          <button
-            type="button"
-            onClick={handleStart}
-            disabled={starting}
-            className="rounded-lg bg-primary px-8 py-3 text-label-md font-semibold text-on-primary shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {starting ? 'Starting…' : 'Start session'}
-          </button>
+          <div className="flex items-center gap-6">
+            <button
+              type="button"
+              onClick={handleStart}
+              disabled={starting}
+              className="rounded-lg bg-primary px-8 py-3 text-label-md font-semibold text-on-primary shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {starting ? 'Starting…' : 'Start session'}
+            </button>
+            <Link to="/" className="text-label-md font-semibold text-on-surface-variant hover:underline">
+              Leave room
+            </Link>
+          </div>
         </div>
       )}
 
       {status === 'waiting' && !isCreator && (
-        <div className="flex items-center gap-3 rounded-xl border border-border-base bg-surface-container-lowest p-6 text-body-md text-text-secondary shadow-sm">
-          <span className="material-symbols-outlined animate-pulse text-primary">hourglass_empty</span>
-          Waiting for the room creator to start the session.
+        <div className="flex flex-col items-start gap-3 rounded-xl border border-border-base bg-surface-container-lowest p-6 text-body-md text-text-secondary shadow-sm">
+          <div className="flex items-center gap-3">
+            <span className="material-symbols-outlined animate-pulse text-primary">hourglass_empty</span>
+            Waiting for the room creator to start the session.
+          </div>
+          <Link to="/" className="text-label-md font-semibold text-on-surface-variant hover:underline">
+            Leave room
+          </Link>
         </div>
       )}
 
