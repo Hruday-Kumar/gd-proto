@@ -2,11 +2,78 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-07-31 (BUG-SPEC-0005, skeleton loading states — see
-the entry directly below. **This closes all 5/5 findings from the
-2026-07-30 end-to-end UI critique** (`.impeccable/critique/2026-07-30T17-08-16Z__apps-web-src.md`).
-Older entries, including BUG-SPEC-0004/3/2/1 and the 2026-07-30 doc-sync +
+**Last updated:** 2026-07-31 (BUG-SPEC-0006, transcription-outage incident —
+see the entry directly below. Live captions were silently broken by PR #52;
+transcript persistence and feedback generation were never affected. Older
+entries, including BUG-SPEC-0005/4/3/2/1 and the 2026-07-30 doc-sync +
 pilot-readiness pass, are preserved further down, unchanged.)
+
+## BUG-SPEC-0006 — transcription-outage incident: transcriber's `hidden: true` LiveKit token silently broke live captions (2026-07-31)
+
+Picked up as an autonomous `/loop` incident per direct user report
+("transcription is not working in either preview or production"). Treated
+as an incident per `.claude/rules/guardrails.md`, spec at
+`docs/specs/active/BUG-SPEC-0006-transcriber-hidden-participant-blocks-captions.md`.
+
+**Investigation, not guesswork:** before touching any code, checked the
+premise directly against live systems (branch `fix/transcriber-hidden-
+participant-blocks-captions` off `dev`):
+- AssemblyAI: opened a real streaming WebSocket with the live server key —
+  connected successfully (key/quota not the cause).
+- Production `/health/agent` (`gd-proto-1.onrender.com`): `dispatchSuccesses`
+  incrementing, `healthy: true`, most recent success 2026-07-31 10:22 UTC.
+- Queried that room's actual `transcript_lines`/`feedback` rows directly
+  against the live Supabase project: 10/10 lines correctly attributed to the
+  one real participant, and a coherent Gemini feedback response referencing
+  the participant by name and the actual content of what they said.
+- Asked the user directly (`AskUserQuestion`) whether the outage still
+  reproduced given that evidence, and what the actual symptom was, rather
+  than assuming — confirmed: **still broken, specifically "no live captions
+  appear during the session."** History/feedback were never the problem.
+
+**Root cause:** PR #52 (N13, 2026-07-30) changed `LiveRoomAudio.jsx`'s
+`RoomEvent.DataReceived` handler to require
+`participant?.identity === 'transcriber'` before accepting a caption — a
+real security improvement in isolation. But the transcriber's LiveKit token
+(`agent/roomAgent.js`) has always been minted `hidden: true`. Per LiveKit's
+own protocol doc (`ParticipantInfo.hidden`: "indicates that it's hidden to
+others") and confirmed directly in the installed `livekit-client@2.21.0`
+bundle, a hidden participant is never surfaced to *other* clients at all —
+`RoomEvent.DataReceived`'s `participant` argument is resolved via a
+`remoteParticipants` map lookup that a hidden participant's identity is
+never added to elsewhere. So `participant` was always `undefined` for every
+message the transcriber ever sent, the identity check always failed, and
+every caption was silently dropped — invisible before PR #52 because the
+old handler never read `participant` at all. Confirmed **not** the cause:
+PR #46 (process safety net), #50 (CORS/trust proxy), #56 (nav guard) — none
+touch the caption data-channel path.
+
+**Fix:** one boolean, `hidden: true` → `hidden: false` on the transcriber's
+`mintTokenFn` call (`agent/roomAgent.js`). Confirmed safe: the app's own
+participant list (`GET /api/rooms/:id/participants`) is DB-backed, not
+LiveKit-derived, so un-hiding the bot doesn't add it to any visible list;
+`ActiveSpeakersChanged` only reflects publishing participants, and the
+transcriber's `canPublish` stays `false`. Stale "hidden" comments in both
+`roomAgent.js` and `LiveRoomAudio.jsx` corrected to match.
+
+**Tests:** RED — `apps/server/test/roomAgent.test.js` gained an assertion
+that `mintTokenFn` is called with `hidden: false`; confirmed failing against
+unmodified code (received `hidden: true`) before the fix. GREEN after.
+330/330 server tests green (was 329 pre-existing + 1 new; the 8 skipped are
+the usual live-RLS files, offline-expected), 35/35 `apps/web` tests green.
+`npx oxlint apps/server/src apps/server/test apps/web/src` clean (same 5
+pre-existing warnings, no new ones). `npm run build --workspace=apps/web`
+clean. Note: this sandbox's `apps/web` `node_modules` was missing `jsdom`
+at session start (a local install gap, not a repo defect — confirmed by
+`git stash` reproducing the same failure on unmodified `dev`); ran
+`npm install --workspace=@placeme/web` to restore it before testing.
+
+**Residual/verification — guardrail #1 applies, outstanding:** this is a
+live-caption/transcription-adjacent behavior change and is **not** done on
+tests alone. A real human still needs to join an actual live session and
+confirm captions now render on screen while speaking (not just afterward,
+via history — that path was never broken). Flagged in the BUG-SPEC and here
+rather than assumed passing.
 
 ## BUG-SPEC-0005 — skeleton loading states (2026-07-31)
 

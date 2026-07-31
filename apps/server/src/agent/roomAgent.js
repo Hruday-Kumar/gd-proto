@@ -5,8 +5,10 @@
 //
 // The rooms API calls startTranscriptionForRoom() right after flipping a
 // room to 'live' (POST /api/rooms/:id/start). The agent joins as a
-// hidden, subscribe-only participant, transcribes every other track, and
-// disconnects itself once the room's own duration has elapsed -- the
+// non-publishing, subscribe-only participant (BUG-SPEC-0006, 2026-07-31:
+// not hidden -- see the mintTokenFn call below for why), transcribes every
+// other track, and disconnects itself once the room's own duration has
+// elapsed -- the
 // server-authoritative timer (domain/sessionStateMachine.js) is the only
 // clock that matters; the agent never waits for a client to tell it to
 // stop.
@@ -77,7 +79,17 @@ export async function startTranscriptionForRoom(
       canPublish: false,
       canSubscribe: true,
       canPublishData: true, // broadcasts live captions below -- must stay true
-      hidden: true,
+      // BUG-SPEC-0006 (2026-07-31): must stay false. A hidden LiveKit
+      // participant is never surfaced to other clients (LiveKit's own
+      // ParticipantInfo.hidden doc: "indicates that it's hidden to
+      // others"), so RoomEvent.DataReceived's `participant` argument on
+      // every other client would never resolve for this bot's own
+      // messages -- silently breaking the N13 sender-identity check in
+      // LiveRoomAudio.jsx, which requires that argument to authenticate
+      // the caption. Nothing in this app's UI depends on the transcriber
+      // being invisible: the participant list is DB-backed
+      // (GET /api/rooms/:id/participants), not LiveKit-derived.
+      hidden: false,
     });
 
     const room = roomFactory();

@@ -86,6 +86,30 @@ describe('startTranscriptionForRoom', () => {
     expect(connect).toHaveBeenCalledTimes(3);
     expect(getAgentWorkerStatus().getStatus().lastFailure).toMatchObject({ roomId, message: 'still down' });
   });
+
+  // BUG-SPEC-0006 (2026-07-31): a hidden LiveKit participant is never
+  // surfaced to *other* clients (confirmed via @livekit/protocol's own
+  // ParticipantInfo.hidden doc comment: "indicates that it's hidden to
+  // others"), so LiveRoomAudio.jsx's RoomEvent.DataReceived handler could
+  // never resolve a `participant` object for the transcriber's own
+  // messages once N13 (2026-07-30) started requiring one -- silently
+  // dropping every live caption while transcript persistence and feedback
+  // (both server-side, unaffected by this flag) kept working. Minting the
+  // transcriber's token non-hidden is the fix; this locks in the grant.
+  it('mints the transcriber token as non-hidden, so other clients can resolve it as the DataReceived sender', async () => {
+    const connect = vi.fn().mockResolvedValue(undefined);
+    const room = fakeRoom({ connect });
+    const roomId = 'room-transcriber-visible';
+    const mintTokenFn = vi.fn().mockResolvedValue('fake-token');
+
+    await startTranscriptionForRoom(
+      { id: roomId, durationSeconds: 0 },
+      { ...baseOpts, mintTokenFn, roomFactory: () => room }
+    );
+
+    expect(mintTokenFn).toHaveBeenCalledWith('transcriber', roomId, expect.objectContaining({ hidden: false }));
+    await stopTranscriptionForRoom(roomId);
+  });
 });
 
 // H2 (audit 2026-07-28): the two halves of surviving a process restart --
