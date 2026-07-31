@@ -8,17 +8,25 @@ export async function roomCodeExists(code, { supabase = getSupabase() } = {}) {
   return Boolean(data);
 }
 
-export async function insertRoom({ code, topicId, durationSeconds, joinMode, createdBy }, { supabase = getSupabase() } = {}) {
+// maxParticipants (BE-2, SPEC-0002) is always provided by the caller
+// (api/routes/rooms.js defaults it to DEFAULT_MAX_ROOM_PARTICIPANTS when
+// the request omits it) -- this function itself has no opinion on what a
+// missing value should mean, same as durationSeconds.
+export async function insertRoom(
+  { code, topicId, durationSeconds, maxParticipants, joinMode, createdBy },
+  { supabase = getSupabase() } = {}
+) {
   const { data, error } = await supabase
     .from('rooms')
     .insert({
       code,
       topic_id: topicId,
       duration_seconds: durationSeconds,
+      max_participants: maxParticipants,
       join_mode: joinMode,
       created_by: createdBy,
     })
-    .select('id, code, status, topic_id, duration_seconds, started_at, ends_at, ended_at, created_by')
+    .select('id, code, status, topic_id, duration_seconds, max_participants, started_at, ends_at, ended_at, created_by')
     .single();
   if (error) throw error;
   return data;
@@ -27,7 +35,7 @@ export async function insertRoom({ code, topicId, durationSeconds, joinMode, cre
 export async function getRoomByCode(code, { supabase = getSupabase() } = {}) {
   const { data, error } = await supabase
     .from('rooms')
-    .select('id, code, status, topic_id, duration_seconds, started_at, ends_at, ended_at, created_by')
+    .select('id, code, status, topic_id, duration_seconds, max_participants, started_at, ends_at, ended_at, created_by')
     .eq('code', code)
     .maybeSingle();
   if (error) throw error;

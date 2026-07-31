@@ -8,7 +8,13 @@
 // has, is there room for one more. Kept pure (no DB) for the same reason
 // domain/roomDuration.js and domain/matchmaking.js are.
 import { describe, it, expect } from 'vitest';
-import { isRoomFull, DEFAULT_MAX_ROOM_PARTICIPANTS } from '../src/domain/roomCapacity.js';
+import {
+  isRoomFull,
+  isValidMaxParticipants,
+  DEFAULT_MAX_ROOM_PARTICIPANTS,
+  MIN_ROOM_PARTICIPANTS,
+  MAX_ROOM_PARTICIPANTS,
+} from '../src/domain/roomCapacity.js';
 
 describe('isRoomFull', () => {
   it('is not full below the cap', () => {
@@ -30,5 +36,34 @@ describe('isRoomFull', () => {
   it('respects an overridden cap', () => {
     expect(isRoomFull(2, 3)).toBe(false);
     expect(isRoomFull(3, 3)).toBe(true);
+  });
+});
+
+// BE-2 (place-me-UI/docs/BACKEND_REQUIREMENTS.md, SPEC-0002): the room
+// creator's chosen seat cap needs the same bounds-checking treatment
+// domain/roomDuration.js's isValidDurationSeconds already gives
+// durationSeconds -- an attacker-controlled request body, not just the UI
+// picker, is the real boundary.
+describe('isValidMaxParticipants', () => {
+  it('accepts the bounds themselves', () => {
+    expect(isValidMaxParticipants(MIN_ROOM_PARTICIPANTS)).toBe(true);
+    expect(isValidMaxParticipants(MAX_ROOM_PARTICIPANTS)).toBe(true);
+  });
+
+  it('accepts a value between the bounds', () => {
+    expect(isValidMaxParticipants(6)).toBe(true);
+  });
+
+  it.each([
+    ['below the minimum', MIN_ROOM_PARTICIPANTS - 1],
+    ['above the maximum', MAX_ROOM_PARTICIPANTS + 1],
+    ['zero', 0],
+    ['negative', -1],
+    ['fractional', 4.5],
+    ['a numeric string', '6'],
+    ['NaN', NaN],
+    ['Infinity', Infinity],
+  ])('rejects %s', (_label, value) => {
+    expect(isValidMaxParticipants(value)).toBe(false);
   });
 });

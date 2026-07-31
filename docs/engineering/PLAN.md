@@ -144,6 +144,7 @@ C2) — this only concerns the static frontend build.
 | `0011_drop_room_participants_client_insert.sql` | ✅ **Confirmed applied — live-verified 2026-07-29 (N7)** | Re-ran the existing `test/roomParticipantsRlsIsolation.test.js` (H8) against the live Supabase project with real credentials, on Node 22: `userB` (never seated in `roomA`) attempting a direct client-side insert into `room_participants` for `roomA` was rejected, and a service-role re-query confirmed no row was written. The pre-0011 policy (`auth.uid() = user_id` only, no room-membership check) would have let this exact insert succeed, so a blocked insert is proof the policy is gone. 1/1 test passed. Closes N7 from `AUDIT_COMPARISON_2026-07-29.md`. |
 | `0012_rooms_feedback_retry_tracking.sql` | ✅ **Confirmed run — user applied it 2026-07-29** | N1 fix (`AUDIT_COMPARISON_2026-07-29.md`): adds `rooms.feedback_generated_at`/`feedback_attempts`/`feedback_last_attempted_at`. Not yet independently re-verified against the live schema from this session (no live DB access here) — taken on the user's word, same as every other migration in this table. **Guardrail #1's real-room check for N1 is still outstanding** — planned for tonight (2026-07-29), per the user; PR #40's own test-plan checkbox for this is unchecked until then. |
 | `0013_drop_topics_client_insert_add_length_constraint.sql` | ✅ **Confirmed applied — live-verified 2026-07-29** | N2 fix (`AUDIT_COMPARISON_2026-07-29.md`): drops `topics_insert_own_custom` (the client-facing INSERT policy that let any authenticated student bypass H5's 200-char API cap via a direct PostgREST insert) and adds a `topics_text_length` CHECK constraint (≤200 chars) that binds every insert including the server's own service-role writes. **Re-ran `apps/server/test/topicsRlsIsolation.test.js` against the live project on Node 22 after the user applied the migration: all 3 assertions now pass** — a direct client insert is rejected, an oversized service-role insert is rejected by the new constraint, and an in-bounds service-role insert still succeeds (no regression to the real `/api/topics/custom`/`/api/topics/generate` paths). Before the migration, the same test reproduced the vulnerability live (both the client-bypass and the oversized insert succeeded) — see `PROGRESS.md`'s N2 session entry for that before/after evidence. |
+| `0014_rooms_max_participants.sql` | ❌ **Not yet applied** — code on unmerged branch `feat/be-2-room-capacity` | BE-2 (`place-me-UI/docs/BACKEND_REQUIREMENTS.md`, `SPEC-0002`): adds `rooms.max_participants integer not null default 6` + a `CHECK(3-12)` constraint. **Do not merge this branch to `main` before applying this migration to the live project** — `POST /api/rooms` would 500 on the missing column otherwise. |
 
 ---
 
@@ -289,6 +290,26 @@ verification pass rather than being folded into a reliability sweep.
 founder watching every early session who can work around it manually;
 not worth the build/test surface before a pilot this size. Documented
 here, not built.
+
+---
+
+### 5f. `place-me-UI` backend requirements (BE items, 2026-08-01–)
+
+New work stream: `place-me-UI` is a second frontend (TanStack Start,
+replacing `apps/web` as the designed product surface) that already renders
+UI for backend capability this server doesn't have yet. Every gap is
+tracked in `place-me-UI/docs/BACKEND_REQUIREMENTS.md` as `BE-1`…`BE-20`,
+prioritized P0/P1/P2. Each item gets its own spec under
+`docs/specs/active/SPEC-NNNN-be-N-*.md` before implementation, same
+process as everything else in this file. Order agreed with the user:
+BE-2 → BE-3 → BE-1 (the P0 dependency chain — BE-1's room listing needs
+BE-3's `visibility` column to exist first).
+
+| Status | ID | Task | Branch | Notes |
+|---|---|---|---|---|
+| 🔶 | **BE-2** | Configurable room capacity | `feat/be-2-room-capacity` | Code complete (`SPEC-0002`), migration `0014` **not yet applied live** — see §3. Not yet merged/PR'd. |
+| ☐ | **BE-3** | Room visibility (public/private) | — | Next up. |
+| ☐ | **BE-1** | Room discovery (`GET /api/rooms/open`) | — | Depends on BE-3. |
 
 ---
 

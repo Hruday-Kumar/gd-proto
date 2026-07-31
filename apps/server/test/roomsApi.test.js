@@ -123,6 +123,60 @@ describe('POST /api/rooms (create by code)', () => {
     const res = await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds: 300 });
     expect(res.status).toBe(429);
   });
+
+  // BE-2 (place-me-UI/docs/BACKEND_REQUIREMENTS.md, SPEC-0002): the room
+  // creator's chosen seat cap, stored per room instead of always getting
+  // the global DEFAULT_MAX_ROOM_PARTICIPANTS constant.
+  describe('configurable capacity (BE-2)', () => {
+    it('passes an explicit maxParticipants through to insertRoom and echoes it in the response', async () => {
+      const deps = baseDeps({
+        insertRoom: vi.fn().mockResolvedValue({
+          id: 'r1',
+          code: 'ABCXYZ',
+          status: 'waiting',
+          topic_id: 't1',
+          duration_seconds: 300,
+          max_participants: 4,
+        }),
+      });
+      const app = buildApp(deps);
+      const res = await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds: 300, maxParticipants: 4 });
+      expect(res.status).toBe(201);
+      expect(res.body.maxParticipants).toBe(4);
+      expect(deps.insertRoom).toHaveBeenCalledWith(expect.objectContaining({ maxParticipants: 4 }));
+    });
+
+    it('defaults to DEFAULT_MAX_ROOM_PARTICIPANTS when maxParticipants is omitted', async () => {
+      const deps = baseDeps({
+        insertRoom: vi.fn().mockResolvedValue({
+          id: 'r1',
+          code: 'ABCXYZ',
+          status: 'waiting',
+          topic_id: 't1',
+          duration_seconds: 300,
+          max_participants: DEFAULT_MAX_ROOM_PARTICIPANTS,
+        }),
+      });
+      const app = buildApp(deps);
+      const res = await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds: 300 });
+      expect(res.status).toBe(201);
+      expect(res.body.maxParticipants).toBe(DEFAULT_MAX_ROOM_PARTICIPANTS);
+      expect(deps.insertRoom).toHaveBeenCalledWith(expect.objectContaining({ maxParticipants: DEFAULT_MAX_ROOM_PARTICIPANTS }));
+    });
+
+    it.each([
+      ['below the minimum', 2],
+      ['above the maximum', 13],
+      ['fractional', 4.5],
+      ['a numeric string', '6'],
+    ])('rejects a %s maxParticipants without touching the database', async (_label, maxParticipants) => {
+      const deps = baseDeps();
+      const app = buildApp(deps);
+      const res = await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds: 300, maxParticipants });
+      expect(res.status).toBe(400);
+      expect(deps.insertRoom).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('POST /api/rooms/join', () => {
@@ -234,6 +288,35 @@ describe('POST /api/rooms/join', () => {
 
       expect(res.status).toBe(200);
       expect(deps.removeParticipant).not.toHaveBeenCalled();
+    });
+
+    // BE-2 (SPEC-0002): before this, every room -- regardless of what its
+    // creator picked -- was capped at the same global constant. This proves
+    // the join check now reads the room's *own* stored value: a room
+    // created with maxParticipants: 3 must reject a 4th joiner even though
+    // that's well below DEFAULT_MAX_ROOM_PARTICIPANTS (6).
+    it("enforces the room's own max_participants, not the global default", async () => {
+      const deps = baseDeps({
+        getRoomByCode: vi.fn().mockResolvedValue({ id: 'r1', code: 'ABCXYZ', status: 'waiting', max_participants: 3 }),
+        isParticipant: vi.fn().mockResolvedValue(false),
+        listParticipantsFn: vi.fn().mockResolvedValue(Array(3).fill({ user_id: 'someone' })),
+      });
+      const app = buildApp(deps);
+      const res = await request(app).post('/api/rooms/join').send({ code: 'ABCXYZ' });
+      expect(res.status).toBe(409);
+      expect(deps.addParticipant).not.toHaveBeenCalled();
+    });
+
+    it('allows joining a room below its own smaller max_participants', async () => {
+      const deps = baseDeps({
+        getRoomByCode: vi.fn().mockResolvedValue({ id: 'r1', code: 'ABCXYZ', status: 'waiting', max_participants: 3 }),
+        isParticipant: vi.fn().mockResolvedValue(false),
+        listParticipantsFn: vi.fn().mockResolvedValue(Array(2).fill({ user_id: 'someone' })),
+      });
+      const app = buildApp(deps);
+      const res = await request(app).post('/api/rooms/join').send({ code: 'ABCXYZ' });
+      expect(res.status).toBe(200);
+      expect(deps.addParticipant).toHaveBeenCalledWith('r1', 'user-1', 'user-1');
     });
   });
 

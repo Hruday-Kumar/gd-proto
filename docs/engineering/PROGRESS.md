@@ -2,10 +2,97 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-07-31 (M5/N8 close-out + BUG-SPEC-0001 E2E test — see
-the entry directly below. Older entries, including BUG-SPEC-0006/5/4/3/2/1
-and the 2026-07-30 doc-sync + pilot-readiness pass, are preserved further
-down, unchanged.)
+**Last updated:** 2026-08-01 (BE-2 configurable room capacity — see the
+entry directly below. Older entries, including the 2026-07-31 M5/N8
+close-out + BUG-SPEC-0001 E2E test and everything before it, are preserved
+further down, unchanged.)
+
+## BE-2 — configurable room capacity (2026-08-01)
+
+Picked up per direct user instruction to start working through
+`place-me-UI/docs/BACKEND_REQUIREMENTS.md`'s gaps one at a time. This is a
+new work stream — `place-me-UI` (TanStack Start) is a second frontend
+already rendering UI for backend capability `apps/server` doesn't have yet;
+every gap is tracked there as `BE-1`…`BE-20`. User picked the order:
+BE-2 → BE-3 → BE-1 (P0s, dependency-ordered — BE-1's listing endpoint needs
+BE-3's `visibility` column first). This session did BE-2 only. Spec at
+`docs/specs/active/SPEC-0002-be-2-configurable-room-capacity.md`, branch
+`feat/be-2-room-capacity` off `dev`.
+
+**Repo-hygiene detour before starting:** the working tree was on `main`
+(not `dev`) with an uncommitted CORS fix from earlier in the same session
+(`place-me-UI` runs on port 8080 in dev, `DEFAULT_DEV_ORIGINS` only listed
+5173) sitting directly in the working tree — a guardrail #12 violation in
+progress (never commit to `main`/`dev` directly). Local `dev` also turned
+out to be 8 commits behind `origin/dev`. Fixed before any BE-2 work:
+stashed the CORS diff, fast-forwarded local `dev` to `origin/dev`
+(confirmed via `git diff origin/dev origin/main --stat` that the two are
+actually tree-identical despite different commit hashes — PR #70 merged
+into `dev`, PR #71 separately synced the same content into `main`, nothing
+was actually lost), gave the CORS fix its own branch
+(`fix/place-me-UI-cors-dev-origin`, committed, not yet pushed/PR'd), then
+branched `feat/be-2-room-capacity` off the now-current `dev`.
+
+**Change:** `POST /api/rooms` accepts an optional `maxParticipants`
+(3–12, `domain/roomCapacity.js`'s new `isValidMaxParticipants` — same
+`Number.isInteger`-based shape as `isValidDurationSeconds`), defaults to
+the existing `DEFAULT_MAX_ROOM_PARTICIPANTS` (6) when omitted, and echoes
+it in the response. `db/rooms.js`'s `insertRoom` persists it;
+`getRoomByCode` selects it. `POST /api/rooms/join`'s capacity check now
+reads `room.max_participants` (the room's own stored value) instead of the
+router-level `maxParticipants` constant, which is removed as dead code —
+`isRoomFull`'s second parameter is a JS default parameter (triggers only
+on `undefined`, not falsy), so every pre-existing join-cap test kept
+passing unchanged without modification, since their room fixtures don't
+set `max_participants` at all. Migration `0014_rooms_max_participants.sql`
+adds the column (`not null default 6`, backfills existing rows
+automatically) plus a `CHECK(3-12)` constraint mirroring the route-level
+bound, same defence-in-depth shape as `0009`/`0010`'s duration bounds.
+**Not yet applied to the live Supabase project** — manual step, tracked in
+`PLAN.md` §3, and the PR must not merge to `main` before it's confirmed
+live (would 500 on the missing column otherwise).
+
+`place-me-UI`'s `/rooms/new` "Seats" select is now wired to state and sent
+as `maxParticipants`; the BE-2 `MOCK` comment is removed.
+`place-me-UI/docs/BACKEND_REQUIREMENTS.md`'s BE-2 entry updated to
+"code complete, not yet live" rather than deleted outright, since neither
+the PR nor the migration has landed yet. Note: `place-me-UI` has no
+`CLAUDE.md`/guardrails of its own and already had substantial unrelated
+uncommitted work in progress on its `main` (file renames, new routes) —
+the BE-2 edits were layered onto that working tree without touching its
+git state, since there's no established branch discipline there to
+follow and disturbing an in-progress unrelated diff wasn't this session's
+call to make.
+
+**Tests:** RED confirmed first in both layers. `roomCapacity.test.js`: 10
+new `isValidMaxParticipants` cases, confirmed failing (`is not a
+function`) before the domain function existed. `roomsApi.test.js`: 7 new
+cases (create-route validation ×4, defaulting, response echo,
+per-room-cap-not-global-default enforcement ×2) confirmed failing for the
+right reasons (500s from an unguarded invalid value reaching the DB-layer
+mock; a false-200 where a room's own lower cap should have rejected the
+joiner) before the route changed. GREEN after: full suite (not just the
+touched files) run fresh via `npx vitest run --root apps/server` —
+348/348 passed, 8 skipped (offline live-RLS, expected, unrelated).
+`npx oxlint apps/server/src
+apps/server/test` clean (2 pre-existing, unrelated warnings). No
+`place-me-UI` test infra exists yet (no test script, no test files) — its
+`npm run build` (TanStack Start/Nitro, Node 22) ran clean instead, and
+`npx eslint` on the two edited files was clean after one auto-fixed
+formatting nit.
+
+**Residual/open:**
+- Migration `0014` needs a human to run it against the live Supabase
+  project (manual SQL Editor step, same as every other migration in this
+  repo) before this branch can merge to `main`.
+- Branch not yet pushed or PR'd — held pending the user's go-ahead, plus
+  the sibling `fix/place-me-UI-cors-dev-origin` branch from the same
+  session's earlier CORS fix.
+- Guardrail #1 does not apply — no room/audio/transcription/attribution/
+  feedback behavior changed, only room-creation capacity.
+- No manual click-through against the real deployed UI yet — the
+  migration isn't live anywhere to test against.
+- Next up per the agreed order: **BE-3** (room visibility).
 
 ## M5/N8 close-out + BUG-SPEC-0001 automated E2E check (2026-07-31)
 

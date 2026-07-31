@@ -12,7 +12,13 @@ import { listParticipants, removeParticipant } from '../../db/roomParticipants.j
 import { listProfiles } from '../../db/profiles.js';
 import { listTranscriptLinesForRoom } from '../../db/transcriptLines.js';
 import { createLlmRateLimiter, createRoomActionRateLimiter } from '../middleware/rateLimit.js';
-import { isRoomFull, DEFAULT_MAX_ROOM_PARTICIPANTS } from '../../domain/roomCapacity.js';
+import {
+  isRoomFull,
+  isValidMaxParticipants,
+  DEFAULT_MAX_ROOM_PARTICIPANTS,
+  MIN_ROOM_PARTICIPANTS,
+  MAX_ROOM_PARTICIPANTS,
+} from '../../domain/roomCapacity.js';
 
 // Interim group-size default for random matching (PHASE1_PLAN.md §8,
 // decided 2026-07-26: anchored to the AI Voice Practice mode's stated
@@ -23,6 +29,7 @@ const DEFAULT_MIN_GROUP_SIZE = 3;
 const DEFAULT_MAX_GROUP_SIZE = 6;
 
 const INVALID_DURATION_ERROR = `durationSeconds must be a whole number of seconds between ${MIN_DURATION_SECONDS} and ${MAX_DURATION_SECONDS}`;
+const INVALID_MAX_PARTICIPANTS_ERROR = `maxParticipants must be a whole number between ${MIN_ROOM_PARTICIPANTS} and ${MAX_ROOM_PARTICIPANTS}`;
 
 // Maps a DB room row (snake_case) to the shape sessionStateMachine.js
 // expects (camelCase, millisecond timestamps).
@@ -44,7 +51,6 @@ export function createRoomsRouter(requireAuth, deps) {
     updateRoomStatus,
     addParticipant,
     removeParticipant: removeParticipantFn = removeParticipant,
-    maxParticipants = DEFAULT_MAX_ROOM_PARTICIPANTS,
     listQueue,
     addToQueue,
     removeFromQueue,
@@ -115,7 +121,7 @@ export function createRoomsRouter(requireAuth, deps) {
   // code with no throttle. Separate limiter from llmRateLimiter (H4) since
   // neither route calls Gemini itself.
   router.post('/api/rooms', requireAuth, roomActionRateLimiter, async (req, res) => {
-    const { topicId, durationSeconds } = req.body || {};
+    const { topicId, durationSeconds, maxParticipants } = req.body || {};
     if (!topicId || !durationSeconds) {
       return res.status(400).json({ error: 'topicId and durationSeconds are required' });
     }
@@ -125,8 +131,21 @@ export function createRoomsRouter(requireAuth, deps) {
     if (!isValidDurationSeconds(durationSeconds)) {
       return res.status(400).json({ error: INVALID_DURATION_ERROR });
     }
+    // BE-2 (SPEC-0002): maxParticipants is optional -- omitting it preserves
+    // the pre-BE-2 behavior of every room getting the same default cap.
+    if (maxParticipants !== undefined && !isValidMaxParticipants(maxParticipants)) {
+      return res.status(400).json({ error: INVALID_MAX_PARTICIPANTS_ERROR });
+    }
+    const roomMaxParticipants = maxParticipants ?? DEFAULT_MAX_ROOM_PARTICIPANTS;
     const code = await generateUniqueRoomCode(roomCodeExists);
-    const room = await insertRoom({ code, topicId, durationSeconds, joinMode: 'code', createdBy: req.userId });
+    const room = await insertRoom({
+      code,
+      topicId,
+      durationSeconds,
+      maxParticipants: roomMaxParticipants,
+      joinMode: 'code',
+      createdBy: req.userId,
+    });
     await addParticipant(room.id, req.userId, req.userId);
     res.status(201).json({
       id: room.id,
@@ -134,6 +153,7 @@ export function createRoomsRouter(requireAuth, deps) {
       status: room.status,
       topicId: room.topic_id,
       durationSeconds: room.duration_seconds,
+      maxParticipants: room.max_participants,
     });
   });
 
@@ -153,10 +173,16 @@ export function createRoomsRouter(requireAuth, deps) {
     // room starts, and a Gemini feedback call once it ends. A rejoin by
     // someone already seated is never blocked -- they're one of the
     // counted seats already, not an additional one.
+    //
+    // BE-2 (SPEC-0002): the cap enforced here is the room's own stored
+    // max_participants, not a single global constant -- isRoomFull's
+    // second parameter only falls back to DEFAULT_MAX_ROOM_PARTICIPANTS
+    // when it's undefined (a JS default-parameter, not a `|| `), so this
+    // is exact, not an approximation.
     const alreadySeated = await isParticipant(room.id, req.userId);
     if (!alreadySeated) {
       const before = await listParticipantsFn(room.id);
-      if (isRoomFull(before.length, maxParticipants)) {
+      if (isRoomFull(before.length, room.max_participants)) {
         return res.status(409).json({ error: 'Room is full' });
       }
     }
@@ -174,7 +200,7 @@ export function createRoomsRouter(requireAuth, deps) {
       // insert itself race-safe against duplicates; this only guards
       // against exceeding the participant count.
       const after = await listParticipantsFn(room.id);
-      if (after.length > maxParticipants) {
+      if (after.length > (room.max_participants ?? DEFAULT_MAX_ROOM_PARTICIPANTS)) {
         await removeParticipantFn(room.id, req.userId);
         return res.status(409).json({ error: 'Room is full' });
       }
