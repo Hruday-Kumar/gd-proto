@@ -88,6 +88,34 @@ jobs:
       - run: npm run lint --workspace=@placeme/web
       - run: npm run build --workspace=@placeme/web
 
+  # BUG-SPEC-0001, added 2026-07-31 per direct user instruction to add an
+  # automated check on top of the still-open guardrail #1 human-verification
+  # gate for the lobby nav guard. Proves AppShell's confirm-before-leaving
+  # prompt against a REAL browser-native window.confirm() dialog -- the one
+  # thing apps/web's existing jsdom/RTL component tests (AppShell.test.jsx)
+  # cannot do, since those only ever exercise a mocked window.confirm. Does
+  # NOT satisfy guardrail #1 by itself -- see
+  # .claude/skills/e2e-testing/SKILL.md and the spec's Testing section.
+  #
+  # No live Supabase/LiveKit/AssemblyAI credentials used or needed: the
+  # suite seeds a fake, non-expiring Supabase session directly into
+  # localStorage and mocks apps/web's own backend calls at the network
+  # layer (see apps/web/e2e/lobbyNavGuard.spec.js) -- dummy env values only
+  # (webServer.env in playwright.config.js), so no repo secret is required
+  # here.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+        working-directory: apps/web
+      - run: npm run test:e2e --workspace=@placeme/web
+
   docker-build:
     runs-on: ubuntu-latest
     steps:

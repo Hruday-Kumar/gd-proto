@@ -2,11 +2,111 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-07-31 (BUG-SPEC-0006, transcription-outage incident —
-see the entry directly below. Live captions were silently broken by PR #52;
-transcript persistence and feedback generation were never affected. Older
-entries, including BUG-SPEC-0005/4/3/2/1 and the 2026-07-30 doc-sync +
-pilot-readiness pass, are preserved further down, unchanged.)
+**Last updated:** 2026-07-31 (M5/N8 close-out + BUG-SPEC-0001 E2E test — see
+the entry directly below. Older entries, including BUG-SPEC-0006/5/4/3/2/1
+and the 2026-07-30 doc-sync + pilot-readiness pass, are preserved further
+down, unchanged.)
+
+## M5/N8 close-out + BUG-SPEC-0001 automated E2E check (2026-07-31)
+
+Picked up per direct user instruction to close out the last two audit
+items blocked on a human, and to add an automated check on top of
+BUG-SPEC-0001's still-open guardrail #1 gate. Three independent pieces:
+
+**M5 (audit 2026-07-28) — DONE.** Repository owner set up an independent
+UptimeRobot monitor pinging `GET /health`, closing the single-point-of-
+failure gap the audit named (GitHub Actions itself being briefly
+unavailable/auto-disabled). No code change. `PLAN.md` (§4, §5d, §6) and
+`DEPLOYMENT.md` updated. PR #67 (`docs/m5-n8-close-out`), merge pending.
+
+**N8 (`AUDIT_COMPARISON_2026-07-29.md`) — DONE.** The `rls-security` CI job
+itself shipped in PR #44 (2026-07-29) but had no repo secrets to actually
+run against, so it silently reported "skipped." Set
+`SUPABASE_URL`/`SUPABASE_ANON_KEY`/`SUPABASE_SERVICE_ROLE_KEY` as GitHub
+Actions repo secrets via `gh secret set` (values read from local
+`apps/server/.env`, never printed to chat or logs), confirmed present via
+`gh secret list --repo placemestudy1/gd-proto`. **Verified for real, not
+assumed**: PR #67's own CI run shows `rls-security` executing both RLS
+isolation test files with 2/2 files and 5/5 tests passed, no skip marker,
+no `::warning::` annotation — genuine coverage, not just secrets existing.
+Same PR #67 as M5 above.
+
+**BUG-SPEC-0001 — added a Playwright E2E test, guardrail #1 still open.**
+The spec's own component test (`AppShell.test.jsx`) only ever exercises a
+*mocked* `window.confirm` (`vi.spyOn`) under jsdom — it can't prove a real
+browser actually shows a native confirmation dialog and blocks/proceeds
+correctly. Per direct user instruction ("make it as a check," clarified via
+`AskUserQuestion` as "add an automated E2E test"), added
+`apps/web/e2e/lobbyNavGuard.spec.js` (Playwright, real Chromium, real Vite
+dev server) plus `apps/web/playwright.config.js` and a new `e2e` CI job.
+Spec updated first (`docs/specs/active/BUG-SPEC-0001-...md`'s Testing
+section and Implementation Tasks) per CLAUDE.md's "update the spec when
+scope changes," before writing test code.
+
+**Design, not guessed — verified against the installed packages:**
+authenticating the test required seeding a fake Supabase session before the
+app's first script runs. Initial attempt used `@supabase/auth-js`'s own
+documented standalone default storage key (`supabase.auth.token`,
+`lib/constants.js`'s `STORAGE_KEY`) — this silently failed
+(`getSession()` resolved `session: null` despite a validly-shaped stored
+session). Root-caused by adding a temporary `console.log` directly into
+the *installed* `node_modules/@supabase/auth-js/dist/module/GoTrueClient.js`
+(the ESM build Vite actually serves — a first attempt at the CJS
+`dist/main` build never printed, since Vite resolves the package's
+`"module"` field, not `"main"`) and clearing Vite's dep cache to force a
+re-bundle: `@supabase/supabase-js`'s `createClient()` wrapper overrides
+that default, deriving the real storage key from the project URL as
+`sb-<ref>-auth-token`. Fixed the test to seed under that derived key
+instead (pinned to the fake project URL configured in
+`playwright.config.js`'s `webServer.env`) and both tests passed. All debug
+instrumentation (the temporary `console.log` in `node_modules` and in
+`AuthContext.jsx`) was reverted immediately after diagnosis — confirmed via
+`git diff` showing no leftover changes (node_modules isn't tracked either
+way).
+
+**What the test actually covers:** a fake, non-expiring Supabase session
+seeded into `localStorage` (no real Supabase network call — the stored
+`expires_at` is far enough out that `GoTrueClient` never attempts a
+refresh); `apps/web`'s own backend calls
+(`/api/rooms/:id/status`/`/participants`/`/token`/`/api/history/mine`)
+mocked at the network layer via `page.route()`, per this project's own
+`testing.md` guidance, rather than mocking `roomsApi.js` directly; real
+`page.on('dialog', ...)` handling of the actual browser-native `confirm()`
+`AppShell.jsx` calls — dismiss blocks navigation (asserted via the dialog's
+own message text and unchanged URL), accept proceeds (asserted via the new
+URL). A second test proves no dialog fires at all while `status: 'waiting'`
+(R3, the non-regression case). `LiveRoomAudio`'s real `room.connect()` is
+left to fail against a deliberately unreachable LiveKit URL — harmless,
+since the guard reads `LobbyPage`'s own polled `status`, not the LiveKit
+connection outcome.
+
+**Verified GREEN twice** (`npx playwright test --reporter=list` from
+`apps/web`, both runs 2/2 passed). **RED verification (temporarily
+disabling `AppShell.jsx`'s `event.preventDefault()` to confirm the test
+actually fails without the guard) could not be completed this session** —
+both the Bash and PowerShell attempts to re-run the suite against the
+deliberately-broken code were denied by the auto-mode permission
+classifier ("Blocked by classifier"), with no indication of which specific
+signal tripped it. The deliberate breakage was reverted immediately either
+way (confirmed via `git diff` showing a clean `AppShell.jsx`), so nothing
+broken was left in the tree. **Flagged to the user as an open item** —
+the test's correctness currently rests on GREEN-only evidence plus a
+read-through of the exact guard logic it exercises, not a confirmed RED,
+which is a real (if small) gap against this repo's own TDD discipline.
+
+**Explicitly still open — guardrail #1 is unchanged by any of this.** Per
+`.claude/skills/e2e-testing/SKILL.md`'s own note and the spec's Testing
+section, this Playwright coverage is additive confidence, not a substitute:
+BUG-SPEC-0001 still cannot move to `docs/specs/completed/` until a real
+human (ideally two, in an actual live multi-participant room) clicks a nav
+link mid-session and confirms the prompt appears and blocks/proceeds
+correctly.
+
+**Also still open, unrelated to this session's work:** **M3** (set
+`HEALTH_CHECK_TOKEN` on the live Render service and as a GitHub Actions
+repo secret — both dashboard-only steps, no code needed) — explained to
+the user this session but not actioned, since it needs Render/GitHub
+dashboard access this session doesn't have.
 
 ## BUG-SPEC-0006 — transcription-outage incident: transcriber's `hidden: true` LiveKit token silently broke live captions (2026-07-31)
 
@@ -68,12 +168,19 @@ at session start (a local install gap, not a repo defect — confirmed by
 `git stash` reproducing the same failure on unmodified `dev`); ran
 `npm install --workspace=@placeme/web` to restore it before testing.
 
-**Residual/verification — guardrail #1 applies, outstanding:** this is a
-live-caption/transcription-adjacent behavior change and is **not** done on
-tests alone. A real human still needs to join an actual live session and
-confirm captions now render on screen while speaking (not just afterward,
-via history — that path was never broken). Flagged in the BUG-SPEC and here
-rather than assumed passing.
+**Residual/verification — guardrail #1 — DONE, 2026-07-31.** The repository
+owner joined a real live session after the merge and confirmed live captions
+now render on screen while speaking. Spec moved to
+`docs/specs/completed/BUG-SPEC-0006-transcriber-hidden-participant-blocks-captions.md`.
+
+**Lesson recorded** in `docs/engineering/LESSONS.md`'s LiveKit entry: a
+`hidden: true` token is invisible to every other client's `RoomEvent.
+DataReceived` sender resolution too, not just the participant list — the
+two (identity authentication vs. staying invisible) are mutually exclusive.
+Also recorded there: a layered debugging playbook (provider creds → health
+endpoint + direct DB query → PR bisection) for future "transcription isn't
+working" reports, since this one initially looked like a full outage but
+was actually an isolated, 100%-reproducible client-side display bug.
 
 ## BUG-SPEC-0005 — skeleton loading states (2026-07-31)
 

@@ -183,6 +183,9 @@ still exists for hard navigation.
 - [x] Wire the guard through `App.jsx`, `LobbyPage.jsx`, and `AppShell.jsx`.
 - [x] Add minimal frontend test infrastructure (`apps/web` had none):
       `vitest`, `jsdom`, `@testing-library/react`, `@testing-library/user-event`.
+- [x] Add a Playwright E2E test (`apps/web/e2e/lobbyNavGuard.spec.js`)
+      proving the guard against a real browser-native `confirm()` dialog —
+      see Testing. Does not satisfy guardrail #1 by itself.
 - [x] Update `docs/engineering/PROGRESS.md`.
 
 ## Testing
@@ -199,6 +202,45 @@ still exists for hard navigation.
   - guard active, `window.confirm` mocked to return `true` → navigation
     proceeds to the clicked link.
   - guard active → "Log out" is likewise gated behind the same confirm.
+- **E2E (added 2026-07-31, per direct user instruction to add an automated
+  check on top of this spec's still-open manual gate):**
+  `apps/web/e2e/lobbyNavGuard.spec.js`, Playwright against a real Chromium
+  browser and the actual Vite dev server (not jsdom). This closes the one
+  real gap the component test above can't: RTL's `AppShell.test.jsx` only
+  ever exercises a *mocked* `window.confirm` (`vi.spyOn`), so it can't prove
+  a real browser actually shows a native confirmation dialog and blocks on
+  `dismiss()`/proceeds on `accept()`. The Playwright test drives the full
+  routed app (`App.jsx` → `ProtectedRoute` → `LobbyPage` → `AppShell`) with:
+  - a fake, non-expiring Supabase session seeded directly into
+    `localStorage` under `supabase.auth.token` before the page's first
+    script runs (matches `@supabase/auth-js`'s own `_saveSession` storage
+    format exactly, confirmed by reading the installed
+    `node_modules/@supabase/auth-js` source rather than assumed) — this
+    avoids any real Supabase network call for `getSession()`/
+    `onAuthStateChange`, since the stored session is valid and far from its
+    `expires_at`;
+  - `page.route()` intercepting `apps/web`'s own backend calls
+    (`GET /api/rooms/:id/status`, `/participants`, `/token`) with canned
+    JSON, per this project's own `testing.md` guidance to mock at the
+    network layer, not by mocking `roomsApi.js` directly — this is the one
+    layer the RTL component tests, by construction, never actually exercise;
+  - real `page.on('dialog', ...)` handling of the browser-native `confirm()`
+    AppShell actually calls, asserting it blocks navigation on dismiss and
+    proceeds on accept — and a `status: 'waiting'` case proving no dialog
+    fires outside the guarded window (R3).
+  - **Explicitly not attempted:** a real LiveKit connection, real audio, or
+    a real multi-participant room. `LiveRoomAudio`'s actual `room.connect()`
+    call is left to fail against a deliberately unreachable LiveKit URL
+    (`getRoomToken` is mocked to return one) — harmless, because the nav
+    guard's `sessionInProgress` is derived from `LobbyPage`'s own polled
+    `status`, not from whether the LiveKit connection itself succeeded.
+  - **This still does not satisfy guardrail #1.** Per
+    `.claude/skills/e2e-testing/SKILL.md`'s own note, Playwright coverage —
+    however good — is explicitly called out as insufficient for a
+    room/audio-adjacent feature; a real human clicking a real nav link in a
+    real multi-person live session (see Rollout) is still the only thing
+    that closes this spec out. The E2E test is additive confidence, not a
+    substitute.
 - Manual/human verification (see Rollout): still required per guardrail #1
   before this is considered fully done for a real multi-person room.
 
