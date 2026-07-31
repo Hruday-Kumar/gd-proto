@@ -3,6 +3,8 @@ import { useAuth } from '../auth/AuthContext.jsx';
 import { getMyHistory, getRoomTranscript } from '../rooms/roomsApi.js';
 import { AppShell } from '../components/AppShell.jsx';
 import { TranscriptList } from '../components/TranscriptList.jsx';
+import { TranscriptSkeleton } from '../components/TranscriptSkeleton.jsx';
+import { HistoryListSkeleton } from '../components/HistoryListSkeleton.jsx';
 
 const STATUS_STYLES = {
   waiting: 'bg-surface-container-high text-on-surface-variant',
@@ -63,7 +65,7 @@ function SessionTranscript({ session, roomId }) {
               {error}
             </p>
           )}
-          {!error && lines === null && <p className="text-body-sm text-outline">Loading…</p>}
+          {!error && lines === null && <TranscriptSkeleton />}
           {lines && <TranscriptList lines={lines} />}
         </div>
       )}
@@ -96,7 +98,7 @@ export function HistoryPage() {
         </p>
       )}
 
-      {!sessions && !error && <p className="text-body-md text-text-secondary">Loading…</p>}
+      {!sessions && !error && <HistoryListSkeleton />}
 
       {sessions && sessions.length === 0 && (
         <div className="rounded-xl border border-dashed border-border-base bg-surface-container-lowest p-12 text-center">

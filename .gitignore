@@ -5,3 +5,38 @@ node_modules/
 Thumbs.db
 dist/
 .vercel
+
+# Local agent/Claude adapter links. Canonical PlaceMe skills live under
+# .github/skills/ so GitHub receives the source once.
+.agents/
+.claude/skills/placeme-*
+.github
+
+# Keep the existing bulk skill/agent installation local unless a separate
+# cleanup/retention decision is approved. Track only the focused PlaceMe
+# engineering environment.
+.github/skills/*
+!.github/skills/placeme-feature/
+!.github/skills/placeme-feature/**
+!.github/skills/placeme-review/
+!.github/skills/placeme-review/**
+!.github/skills/placeme-security/
+!.github/skills/placeme-security/**
+!.github/skills/placeme-pilot/
+!.github/skills/placeme-pilot/**
+!.github/skills/placeme-release/
+!.github/skills/placeme-release/**
+!.github/skills/placeme-incident/
+!.github/skills/placeme-incident/**
+
+.github/agents/*
+!.github/agents/architect.agent.md
+!.github/agents/implementer.agent.md
+!.github/agents/reviewer.agent.md
+!.github/agents/security-engineer.agent.md
+!.github/agents/pilot-engineer.agent.md
+!.github/agents/release-manager.agent.md
+!.github/agents/incident-commander.agent.md
+
+.github/instructions/*
+!.github/instructions/specification.instructions.md

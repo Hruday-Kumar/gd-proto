@@ -10,7 +10,7 @@ const MAX_CAPTIONS = 20;
 
 // N13 (audit comparison, 2026-07-29): must match the identity
 // agent/roomAgent.js mints its own LiveKit token with (`mintTokenFn`
-// call, W5). Only that hidden agent participant's token ever carries
+// call, W5). Only that agent participant's token ever carries
 // canPublishData (M1, audit 2026-07-28) -- a per-speaker identity isn't
 // meaningful here since every caption is relayed through this one bot,
 // not published by the speaking student directly. Checking the sender is
@@ -18,6 +18,12 @@ const MAX_CAPTIONS = 20;
 // carrying canPublishData again, a forged data message wouldn't pass this
 // check even though it could still fake the identity field inside its
 // own payload.
+//
+// BUG-SPEC-0006 (2026-07-31): the transcriber's token must NOT be minted
+// `hidden: true` -- a hidden LiveKit participant is never surfaced to
+// other clients at all, so the `participant` argument below would never
+// resolve for its messages and every caption would be silently dropped
+// (exactly what happened between PR #52 and this fix).
 const TRANSCRIBER_IDENTITY = 'transcriber';
 
 // Joins the room's live LiveKit audio session (W5). Guardrail #3 is

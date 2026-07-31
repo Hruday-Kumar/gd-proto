@@ -1,10 +1,17 @@
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
-import { useLocation, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { getRoomStatus, startRoom, getMyFeedback, getRoomTranscript } from '../rooms/roomsApi.js';
 import { AppShell } from '../components/AppShell.jsx';
+import { ButtonBusyLabel } from '../components/ButtonBusyLabel.jsx';
 import { TranscriptList } from '../components/TranscriptList.jsx';
+import { TranscriptSkeleton } from '../components/TranscriptSkeleton.jsx';
 import { FeedbackRating } from '../components/FeedbackRating.jsx';
+import { isSessionInProgress } from '../rooms/sessionGuard.js';
+import { useSetRoomSessionGuard } from '../rooms/RoomSessionGuardContext.jsx';
+
+const NAV_GUARD_MESSAGE =
+  'Leaving now will disconnect your microphone from the live session. Other participants may be affected.';
 
 // livekit-client is by far the largest dependency in the app and is only
 // ever needed once a room actually goes live -- loading it lazily keeps it
@@ -148,8 +155,14 @@ export function LobbyPage() {
   // mechanism for that. Window: from the moment the session goes live
   // until this student's feedback has actually loaded (or definitively
   // failed) -- not during the waiting room, which is safe to leave.
+  const sessionInProgress = isSessionInProgress(status, feedback, feedbackFailed);
+
+  // Guards in-app navigation (AppShell's nav links and log-out) for the same
+  // window as the beforeunload guard below -- both read isSessionInProgress
+  // so they can never drift apart.
+  useSetRoomSessionGuard(sessionInProgress, NAV_GUARD_MESSAGE);
+
   useEffect(() => {
-    const sessionInProgress = status === 'live' || (status === 'ended' && !feedback && !feedbackFailed);
     if (!sessionInProgress) return undefined;
     function handleBeforeUnload(e) {
       e.preventDefault();
@@ -157,7 +170,7 @@ export function LobbyPage() {
     }
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [status, feedback, feedbackFailed]);
+  }, [sessionInProgress]);
 
   async function handleStart() {
     setStarting(true);
@@ -218,21 +231,31 @@ export function LobbyPage() {
           <p className="mb-3 text-body-sm text-text-secondary">
             Share the room code above with classmates, then start the session once everyone's in.
           </p>
-          <button
-            type="button"
-            onClick={handleStart}
-            disabled={starting}
-            className="rounded-lg bg-primary px-8 py-3 text-label-md font-semibold text-on-primary shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {starting ? 'Starting…' : 'Start session'}
-          </button>
+          <div className="flex items-center gap-6">
+            <button
+              type="button"
+              onClick={handleStart}
+              disabled={starting}
+              className="flex items-center justify-center gap-2 rounded-lg bg-primary px-8 py-3 text-label-md font-semibold text-on-primary shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {starting ? <ButtonBusyLabel label="Starting…" /> : 'Start session'}
+            </button>
+            <Link to="/" className="text-label-md font-semibold text-on-surface-variant hover:underline">
+              Leave room
+            </Link>
+          </div>
         </div>
       )}
 
       {status === 'waiting' && !isCreator && (
-        <div className="flex items-center gap-3 rounded-xl border border-border-base bg-surface-container-lowest p-6 text-body-md text-text-secondary shadow-sm">
-          <span className="material-symbols-outlined animate-pulse text-primary">hourglass_empty</span>
-          Waiting for the room creator to start the session.
+        <div className="flex flex-col items-start gap-3 rounded-xl border border-border-base bg-surface-container-lowest p-6 text-body-md text-text-secondary shadow-sm">
+          <div className="flex items-center gap-3">
+            <span className="material-symbols-outlined animate-pulse text-primary">hourglass_empty</span>
+            Waiting for the room creator to start the session.
+          </div>
+          <Link to="/" className="text-label-md font-semibold text-on-surface-variant hover:underline">
+            Leave room
+          </Link>
         </div>
       )}
 
@@ -267,12 +290,32 @@ export function LobbyPage() {
           </div>
           <div className="mt-6 rounded-lg bg-surface-container-low p-6">
             <p className="text-label-sm font-semibold text-on-surface-variant">Your feedback</p>
-            <p className="mt-1 text-body-md text-on-surface">
-              {feedback ??
-                (feedbackFailed
-                  ? "Your feedback is taking longer than expected. It'll appear under History once it's ready."
-                  : 'Generating your feedback…')}
-            </p>
+            <div aria-live="polite">
+              {feedback != null ? (
+                <p className="mt-1 text-body-md text-on-surface">{feedback}</p>
+              ) : feedbackFailed ? (
+                <p className="mt-1 text-body-md text-on-surface">
+                  Your feedback is taking longer than expected. It&apos;ll appear under History once it&apos;s
+                  ready.
+                </p>
+              ) : (
+                <div className="mt-2 flex items-start gap-3">
+                  <span
+                    className="material-symbols-outlined animate-spin text-2xl text-primary"
+                    aria-hidden="true"
+                  >
+                    progress_activity
+                  </span>
+                  <div>
+                    <p className="text-body-md font-semibold text-on-surface">Generating your feedback…</p>
+                    <p className="mt-1 text-body-sm text-text-secondary">
+                      Gemini is reviewing the discussion now — this usually takes under a minute, occasionally
+                      up to two for longer sessions. It&apos;ll appear here the moment it&apos;s ready.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
             {feedback && (
               <FeedbackRating
                 session={session}
@@ -285,7 +328,7 @@ export function LobbyPage() {
           <div className="mt-4 rounded-lg bg-surface-container-low p-6">
             <p className="mb-2 text-label-sm font-semibold text-on-surface-variant">Transcript</p>
             {transcript && <TranscriptList lines={transcript} />}
-            {!transcript && !transcriptError && <p className="text-body-sm text-outline">Loading…</p>}
+            {!transcript && !transcriptError && <TranscriptSkeleton />}
             {!transcript && transcriptError && (
               <p className="text-body-sm text-outline">
                 We couldn&apos;t load the transcript for this session. You can try again from History.

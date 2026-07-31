@@ -2,17 +2,420 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-07-30 (doc-sync + pilot-readiness/exception-handling
-pass — see the entry directly below. It corrects the 2026-07-29 entry
-that used to be here: `fix/n3-n4-capacity-ratelimit-flush-race` (N8, N6,
-N3, N4) **is merged** — PR #44, confirmed via `git log`/`gh pr list`, not
-left uncommitted as previously recorded. The reference to
-`docs/engineering/CODEX_HANDOVER_2026-07-29.md` below was also stale —
-that file was never created and does not exist in this repo. Treat this
-file and `PLAN.md` as the source of truth. Older context — the N1 fix
-session, Phase 5 release-to-both-remotes, close-out session,
-blockers-investigation, and M4/H6/M10 notes — is preserved further down,
-unchanged.)
+**Last updated:** 2026-07-31 (BUG-SPEC-0006, transcription-outage incident —
+see the entry directly below. Live captions were silently broken by PR #52;
+transcript persistence and feedback generation were never affected. Older
+entries, including BUG-SPEC-0005/4/3/2/1 and the 2026-07-30 doc-sync +
+pilot-readiness pass, are preserved further down, unchanged.)
+
+## BUG-SPEC-0006 — transcription-outage incident: transcriber's `hidden: true` LiveKit token silently broke live captions (2026-07-31)
+
+Picked up as an autonomous `/loop` incident per direct user report
+("transcription is not working in either preview or production"). Treated
+as an incident per `.claude/rules/guardrails.md`, spec at
+`docs/specs/active/BUG-SPEC-0006-transcriber-hidden-participant-blocks-captions.md`.
+
+**Investigation, not guesswork:** before touching any code, checked the
+premise directly against live systems (branch `fix/transcriber-hidden-
+participant-blocks-captions` off `dev`):
+- AssemblyAI: opened a real streaming WebSocket with the live server key —
+  connected successfully (key/quota not the cause).
+- Production `/health/agent` (`gd-proto-1.onrender.com`): `dispatchSuccesses`
+  incrementing, `healthy: true`, most recent success 2026-07-31 10:22 UTC.
+- Queried that room's actual `transcript_lines`/`feedback` rows directly
+  against the live Supabase project: 10/10 lines correctly attributed to the
+  one real participant, and a coherent Gemini feedback response referencing
+  the participant by name and the actual content of what they said.
+- Asked the user directly (`AskUserQuestion`) whether the outage still
+  reproduced given that evidence, and what the actual symptom was, rather
+  than assuming — confirmed: **still broken, specifically "no live captions
+  appear during the session."** History/feedback were never the problem.
+
+**Root cause:** PR #52 (N13, 2026-07-30) changed `LiveRoomAudio.jsx`'s
+`RoomEvent.DataReceived` handler to require
+`participant?.identity === 'transcriber'` before accepting a caption — a
+real security improvement in isolation. But the transcriber's LiveKit token
+(`agent/roomAgent.js`) has always been minted `hidden: true`. Per LiveKit's
+own protocol doc (`ParticipantInfo.hidden`: "indicates that it's hidden to
+others") and confirmed directly in the installed `livekit-client@2.21.0`
+bundle, a hidden participant is never surfaced to *other* clients at all —
+`RoomEvent.DataReceived`'s `participant` argument is resolved via a
+`remoteParticipants` map lookup that a hidden participant's identity is
+never added to elsewhere. So `participant` was always `undefined` for every
+message the transcriber ever sent, the identity check always failed, and
+every caption was silently dropped — invisible before PR #52 because the
+old handler never read `participant` at all. Confirmed **not** the cause:
+PR #46 (process safety net), #50 (CORS/trust proxy), #56 (nav guard) — none
+touch the caption data-channel path.
+
+**Fix:** one boolean, `hidden: true` → `hidden: false` on the transcriber's
+`mintTokenFn` call (`agent/roomAgent.js`). Confirmed safe: the app's own
+participant list (`GET /api/rooms/:id/participants`) is DB-backed, not
+LiveKit-derived, so un-hiding the bot doesn't add it to any visible list;
+`ActiveSpeakersChanged` only reflects publishing participants, and the
+transcriber's `canPublish` stays `false`. Stale "hidden" comments in both
+`roomAgent.js` and `LiveRoomAudio.jsx` corrected to match.
+
+**Tests:** RED — `apps/server/test/roomAgent.test.js` gained an assertion
+that `mintTokenFn` is called with `hidden: false`; confirmed failing against
+unmodified code (received `hidden: true`) before the fix. GREEN after.
+330/330 server tests green (was 329 pre-existing + 1 new; the 8 skipped are
+the usual live-RLS files, offline-expected), 35/35 `apps/web` tests green.
+`npx oxlint apps/server/src apps/server/test apps/web/src` clean (same 5
+pre-existing warnings, no new ones). `npm run build --workspace=apps/web`
+clean. Note: this sandbox's `apps/web` `node_modules` was missing `jsdom`
+at session start (a local install gap, not a repo defect — confirmed by
+`git stash` reproducing the same failure on unmodified `dev`); ran
+`npm install --workspace=@placeme/web` to restore it before testing.
+
+**Residual/verification — guardrail #1 applies, outstanding:** this is a
+live-caption/transcription-adjacent behavior change and is **not** done on
+tests alone. A real human still needs to join an actual live session and
+confirm captions now render on screen while speaking (not just afterward,
+via history — that path was never broken). Flagged in the BUG-SPEC and here
+rather than assumed passing.
+
+## BUG-SPEC-0005 — skeleton loading states (2026-07-31)
+
+Picked up per direct user instruction ("last critique issue (skeleton
+states)") to finish the `/impeccable critique` remediation — the fifth
+and final finding, second of the two P2s, `docs/engineering/PROGRESS.md`'s
+own recorded next step after BUG-SPEC-0004. Branch
+`fix/skeleton-loading-states` off `dev`, spec at
+`docs/specs/active/BUG-SPEC-0005-skeleton-loading-states.md`.
+
+**Bug:** Three spots still fell back to a single bare "Loading…" line with
+no visual weight and no resemblance to the content about to appear,
+contradicting `reference/product.md`'s own rule ("Skeleton states for
+loading, not spinners in the middle of content"): `HistoryPage.jsx`'s
+initial session-list load, `HistoryPage.jsx`'s per-session
+`SessionTranscript` disclosure, and `LobbyPage.jsx`'s ended-view
+transcript block (not the feedback-generation wait directly above it —
+that was already fixed by BUG-SPEC-0003).
+
+**Fix:** two new shared components — `TranscriptSkeleton.jsx` (a handful
+of `animate-pulse` speaker+text bars matching `TranscriptList`'s actual
+`<ul><li>` shape, used at both the `HistoryPage` and `LobbyPage`
+transcript spots so there's one "a transcript is loading" vocabulary, not
+two) and `HistoryListSkeleton.jsx` (two pulsing stat-tile placeholders
+plus a few pulsing session-card placeholders, matching `HistoryPage`'s
+real markup/classes). Both reuse existing `surface-container-high`/
+`rounded-lg`/`rounded-xl` tokens from `DESIGN.md` — a skeleton is a muted
+version of the real content, not a new visual language. Reduced-motion is
+already handled globally by `index.css`'s `*` selector (confirmed, not
+re-implemented — it catches Tailwind's `animate-pulse` the same way it
+already catches `animate-spin`/`animate-ping` elsewhere in the app).
+
+**Explicitly not touched:** `ConsentPage.jsx`'s `LoadingScreen` (a
+full-page auth/session bootstrap gate, not a content region with a
+predictable shape — out of scope, named in the spec as a non-goal); any
+data-fetching, error handling, or loaded-branch logic at any of the three
+spots — presentation-only, swapping one JSX expression for another inside
+already-correct conditionals.
+
+**Tests:** `TranscriptSkeleton.test.jsx` + `HistoryListSkeleton.test.jsx`
+(1 smoke test each). `HistoryPage.jsx` had **zero** test coverage before
+this fix (a pre-existing gap predating this repo's first `apps/web` tests)
+— new `HistoryPage.test.jsx` (4 cases: skeleton while loading then real
+content; error copy unchanged, not skeleton; empty-state unchanged;
+transcript-disclosure skeleton → real lines). `LobbyPage.test.jsx`
+extended with 2 new cases (transcript skeleton → real lines; transcript
+error copy unchanged, not skeleton). RED confirmed first — the 3
+skeleton-assertion tests failed for the right reason (bare text still
+present, no `data-testid`) before the pages were touched. 35/35
+`apps/web` tests green after (was 27; +8 net new, including the
+brand-new `HistoryPage.test.jsx` file). Caught and fixed one real lint
+issue along the way (an unused `beforeEach` import in the new test file).
+
+Ran fresh from repo root under Node 22: `npm test` → 337/337 server +
+35/35 web green; `npm run lint` → clean (same 3 pre-existing
+`only-export-components` warnings, no new ones); `npm run build
+--workspace=apps/web` → clean.
+
+**Residual/verification:** guardrail #1 does not apply (no room/audio/
+transcription/attribution/feedback behavior changed, presentation-only
+around content already fetched and displayed correctly). Unlike
+BUG-SPEC-0004, **no browser-automation tool was available this session**,
+so the visual check (does the skeleton actually look right, not just
+render the right `data-testid`) was not performed — risk is low given the
+skeleton markup directly mirrors the real content's existing classes, but
+a human glance is still worth doing before calling this fully polished.
+
+**This was the last of 5/5 findings from the 2026-07-30 critique.** All
+five (`BUG-SPEC-0001` nav guard, `BUG-SPEC-0002` waiting-state exit,
+`BUG-SPEC-0003` feedback-wait polish, `BUG-SPEC-0004` button/busy-state
+consistency, `BUG-SPEC-0005` skeleton states) are now code-complete and
+merged (once this PR merges). Two items remain genuinely open, not code
+work: **BUG-SPEC-0001's guardrail #1 human-verification gate** (a real
+person clicking a nav link mid-live-session — still never done, oldest
+open item from this whole critique arc) and a general "someone should
+actually look at all five of these in a real browser" pass, since three
+of the five sessions (0001, 0002, 0003, 0005) had no browser-automation
+tool available and only 0004 got a real Playwright check.
+
+## BUG-SPEC-0004 — button size and busy-state vocabulary consistency (2026-07-31)
+
+Picked up per direct user instruction ("Button/busy-state vocabulary P2")
+to continue the `/impeccable critique` remediation — the first of the two
+remaining P2 findings, `docs/engineering/PROGRESS.md`'s own recorded next
+step after BUG-SPEC-0003. Branch `fix/button-busy-state-consistency` off
+`dev`, spec at
+`docs/specs/active/BUG-SPEC-0004-button-busy-state-consistency.md`.
+
+**Bug:** Every primary submit button in `apps/web/src/pages/*.jsx` was
+audited against `DESIGN.md`'s own documented `button-primary` token
+(`padding: "0.75rem 2rem"`, i.e. `py-3 px-8`). Two buttons
+(`JoinRoomPage.jsx`'s "Join room", `MatchPage.jsx`'s "Find me a group")
+used `py-6` instead — twice the documented height, exactly the drift the
+critique's "trained eye" comment named. Separately, only one button
+(`ConsentPage.jsx`'s "I have read this and agree") showed a spinner during
+its busy state; the other six primary submit buttons
+(`LoginPage`/`SignupPage`/`NewRoomPage` ×2/`JoinRoomPage`/`MatchPage`/
+`LobbyPage`'s "Start session") fell back to text-only busy copy, and one of
+those (`NewRoomPage`'s "Create room with this topic") had no busy
+indication at all despite sharing the same `busy` flag as its sibling
+button.
+
+**Fix:** New shared component,
+`apps/web/src/components/ButtonBusyLabel.jsx` — a spinner icon
+(`material-symbols-outlined animate-spin`, `aria-hidden="true"`) plus a
+label, generalizing `ConsentPage`'s pre-existing pattern into one reusable
+piece specifically so this class of drift (the same idea reimplemented
+slightly differently per page) can't quietly reoccur. All seven primary
+submit buttons now render `<ButtonBusyLabel label="…" />` in their busy
+branch instead of bare text, including `NewRoomPage`'s previously-silent
+"Create room with this topic" button (now shows "Creating…" + spinner,
+sharing the same `busy` flag as its sibling — both buttons go busy
+together, which is correct since they're two paths to the same underlying
+"a room is being created" state, not two independent actions).
+`JoinRoomPage` and `MatchPage`'s outlier `py-6` buttons are now `py-3`,
+matching every other primary button and `DESIGN.md`'s own token.
+`ConsentPage`'s existing spinner markup is refactored to the shared
+component (its accessible output is equivalent — `aria-hidden` is now
+present, an improvement, not a behavior change to what's actually
+announced as visible text).
+
+**Explicitly not touched:** any button handler, disabled condition, API
+call, or non-busy label text; `ConsentPage`'s idle-state markup (only its
+busy branch changed, via the shared component); `MatchPage`'s secondary
+give-up-state buttons and `LobbyPage`'s/`MatchPage`'s secondary "Leave"/
+"Cancel" links (not primary submit buttons, not named in the critique
+finding). The remaining 1/5 issue from the same critique (missing skeleton
+loading states, P2) is picked up next, per this file's own recorded order.
+
+**Tests:** New `ButtonBusyLabel.test.jsx` (1 case), `LoginPage.test.jsx`
+(1, new file), `SignupPage.test.jsx` (1, new file), `NewRoomPage.test.jsx`
+(2, new file — one per button, since both share `busy` and needed
+`within()` scoping to avoid ambiguity between two simultaneously-busy
+buttons in the DOM), `JoinRoomPage.test.jsx` (2, new file — spinner busy
+state, plus a `py-3`/not-`py-6` class assertion as a regression guard
+against the exact drift this fix closes). `MatchPage.test.jsx` and
+`LobbyPage.test.jsx` extended with 2 and 1 new cases respectively (busy
+spinner, plus `MatchPage`'s own `py-3`/not-`py-6` guard). 27/27
+`apps/web` tests green (was 17 before this session's new page test files;
++10 net new). `ConsentPage.jsx` still has no test file — pre-existing gap
+from before this repo's first `apps/web` tests (BUG-SPEC-0001), not
+backfilled here since its behavior is unchanged, only its internal markup
+refactored to the shared component; noted as an explicit non-goal in the
+spec rather than silently skipped.
+
+Ran fresh from repo root under Node 22: `npm test` → 337/337 server +
+27/27 web green; `npm run lint` → clean (same 3 pre-existing
+`only-export-components` warnings, no new ones); `npm run build
+--workspace=apps/web` → clean.
+
+**Residual/verification:** guardrail #1 does not apply (presentation-only,
+no room/audio/transcription/attribution/feedback behavior changed).
+Unlike BUG-SPEC-0001/2/3, this session **did** perform a real-browser
+check rather than deferring it: started the `apps/web` Vite dev server and
+drove it with Playwright/Chromium against `LoginPage` (reachable without
+authentication, unlike the room-flow pages). Confirmed the idle button is
+`44px` tall (`py-3`) and stays exactly `44px` once busy (submitted a
+deliberately-wrong credential pair against the real Supabase auth
+endpoint — harmless, no account created), with the spinner rendering
+inline next to "Signing in…" rather than growing the button or falling
+back to bare text — screenshots taken before/during the busy state
+confirm this visually, not just via the DOM. The other five buttons share
+the identical `ButtonBusyLabel` component and were not separately
+re-screenshotted (same component, same rendering, by construction).
+
+## BUG-SPEC-0003 — post-session feedback-wait screen polish (2026-07-30)
+
+Picked up per direct user instruction ("next P1") to continue the
+`/impeccable critique` remediation in the order `PROGRESS.md` recorded as
+next: second and last of the two P1 findings, "the post-session feedback
+wait is under-designed relative to its emotional stakes." Branch
+`fix/feedback-wait-screen-polish` off `dev`, spec at
+`docs/specs/active/BUG-SPEC-0003-feedback-wait-screen-polish.md`.
+
+**Fix:** `LobbyPage.jsx`'s `ended`-status feedback block replaced its bare
+`Generating your feedback…` text (up to 2 minutes with zero visual
+weight) with a spinner (`animate-spin`, reusing the pattern already used
+one screen-state up for the `LiveRoomAudio` Suspense fallback) plus a
+two-line reassurance copy block, matching the tone/format `MatchPage`
+already uses for its own (lower-stakes) searching wait. The whole status
+region also got `aria-live="polite"` so the transition to resolved
+feedback or to the failed-message branch is announced to screen readers —
+directly serving the same "Visibility of System Status" heuristic the
+critique explicitly docked this exact spot for. The already-considered
+`feedbackFailed` copy and the resolved-`feedback` display are otherwise
+unchanged.
+
+**Explicitly not touched:** feedback generation, polling cadence/timeout,
+or Gemini prompt/content — presentation-only, around content already
+fetched or in flight the same way as before. Also not touched: the
+remaining 2/5 issues from the same critique (button/busy-state vocabulary
+drift, P2; missing skeleton loading states, P2) and any wider `aria-live`
+pass elsewhere (MatchPage's status checklist, Lobby's countdown timer) —
+both out of scope for this specific P1's stated fix.
+
+**Tests:** `apps/web/src/pages/LobbyPage.test.jsx` (2 new cases in a new
+`describe` block: spinner + reassurance copy render while
+`status === 'ended'` and feedback hasn't resolved; spinner is replaced by
+the resolved feedback text once `getMyFeedback` returns it). All pass. Ran
+fresh from repo root under Node 22: `npm test` → 329/329 server unit tests
++ 17/17 web tests green (3 server RLS-isolation test files fail identically
+on unmodified `dev` — confirmed via `git stash` — because they need live
+Supabase credentials not present in this sandbox; pre-existing, unrelated
+to this change); `npm run lint` → clean (same 3 pre-existing
+`only-export-components` warnings, no new ones); `npm run build
+--workspace=apps/web` → clean.
+
+**Residual:** guardrail #1 does not strictly apply (no feedback
+generation/attribution/content behavior changed, only the loading/wait
+presentation around it). A manual click-through against a real completed
+session (confirm the spinner appears right after a session ends and is
+replaced by real feedback) was not done this session — no live Supabase
+session was available here — but risk is low given unit coverage of the
+new branch and zero change to the underlying data flow.
+
+**Not done this session (2/5 remaining from the critique, by design, in
+the order previously recorded):** button/busy-state vocabulary drift (P2);
+missing skeleton loading states (P2). Both are P2s now that both P1s are
+done; next session should pick these up in that order absent other
+direction.
+
+## BUG-SPEC-0002 — waiting-state exit affordance (2026-07-30)
+
+Picked up per direct user instruction ("let's start P1") to continue the
+`/impeccable critique` remediation in the order BUG-SPEC-0001 recorded as
+next: first of the two P1 findings, "no cancel/exit affordance in any
+waiting state." Branch `fix/waiting-state-exit-affordance` off `dev`, spec
+at `docs/specs/active/BUG-SPEC-0002-waiting-state-exit-affordance.md`.
+
+**Fix:** `MatchPage.jsx` gets a "Cancel matching" button, visible only while
+`queued`, that calls the same `leaveMatchQueue` request already used by the
+existing unmount/give-up paths, stops the poll/timeout timers, and resets to
+the pre-queue state — no new API. `LobbyPage.jsx` gets a "Leave room" link
+in both the creator's and non-creator's `status === 'waiting'` views,
+navigating to `/`; this is a plain client-side `<Link>`, not a new API call,
+because leaving during `waiting` was already safe and unguarded (`
+isSessionInProgress` returns `false` for that status) — the gap was
+discoverability, not safety.
+
+**Explicitly not touched:** any server-side "leave a room" path (freeing a
+`room_participants` seat, notifying other participants). That's **N14** from
+`PLAN.md` §5e, which the user already decided 2026-07-30 to leave as-is for
+the pilot; this fix only adds a client-side affordance for states that were
+already safe to leave, and does not reopen that decision.
+
+**Tests:** `apps/web/src/pages/MatchPage.test.jsx` (2 cases: button absent
+before queuing; appears once queued, cancels back to the pre-queue state and
+calls `leaveMatchQueue`) + `apps/web/src/pages/LobbyPage.test.jsx` (3 cases:
+"Leave room" present for creator and non-creator waiting views, absent once
+`live`). All 5 pass. Ran fresh from repo root under Node 22: `npm test` →
+337/337 server + 15/15 web green; `npm run lint` → clean (same 3
+pre-existing `only-export-components` warnings, no new ones); `npm run
+build --workspace=apps/web` → clean.
+
+**Residual:** guardrail #1 does not apply (no room/audio/transcription/
+attribution/feedback behavior changed). A manual click-through against a
+real signed-in session (queue → cancel; join a room → leave while waiting)
+was not done this session — no live Supabase session was available here —
+but risk is low given both new paths are covered by unit tests.
+
+**Not done this session (3/5 remaining from the critique, by design, in the
+order BUG-SPEC-0001 recorded):** the under-designed post-session
+feedback-wait screen (P1, next up); button/busy-state vocabulary drift
+(P2); missing skeleton loading states (P2).
+
+## BUG-SPEC-0001 — lobby nav guard for live sessions (2026-07-30)
+
+Ran `/impeccable critique` end-to-end over the whole web app UI (all ten
+routes, `App.jsx` → `apps/web/src/pages/*`), the first full-journey design
+critique this repo has had — snapshot at
+`.impeccable/critique/2026-07-30T17-08-16Z__apps-web-src.md` (score 24/40,
+1 P0, 2 P1, 2 P2). User approved tackling all 5 findings, P0 first,
+production-ready. This session did the P0 only; branch
+`fix/lobby-nav-guard-live-session` off `dev`, spec at
+`docs/specs/active/BUG-SPEC-0001-lobby-nav-guard-live-session.md`.
+
+**Bug:** `AppShell.jsx`'s sidebar/bottom nav links and both "Log out"
+buttons stayed fully clickable while `LobbyPage.jsx` was in `live` status
+(or awaiting feedback). The existing `beforeunload` guard only catches tab
+close/refresh, not React Router client-side navigation, so one click on
+"Home" mid-session silently unmounted `LiveRoomAudio` and dropped that
+student's mic from a session other real students were relying on — no
+confirmation at all.
+
+**Fix:** extracted the existing "session in progress" condition (live, or
+ended-but-feedback-not-yet-resolved/failed) into a shared pure function,
+`apps/web/src/rooms/sessionGuard.js` (`isSessionInProgress`), now used by
+both the pre-existing `beforeunload` guard and a new in-app guard.  A small
+context, `apps/web/src/rooms/RoomSessionGuardContext.jsx`, lets `LobbyPage`
+(write side, `useSetRoomSessionGuard`) tell `AppShell` (read side,
+`useRoomSessionGuard`) that a session is in progress; `AppShell`'s nav-link
+clicks and log-out buttons now call `window.confirm(...)` first and only
+proceed if the user confirms. `RoomSessionGuardProvider` wraps the routed
+tree once in `App.jsx`. **Not covered:** the browser back/forward buttons —
+this app uses `<BrowserRouter>`, not a data router, so `useBlocker` isn't
+available without a bigger router migration; called out as an explicit
+non-goal in the spec, not silently dropped.
+
+**Frontend testing did not exist in this repo before this session** —
+`apps/web` had no test script and zero test files (`apps/server` had 337
+tests, `apps/web` had 0). Added the minimum infra to satisfy this repo's
+TDD mandate for this fix: `vitest` + `jsdom` + `@testing-library/react` +
+`@testing-library/user-event` as devDependencies, `apps/web/vitest.config.js`
+(note `test.globals: true` — required for RTL's automatic per-test
+`cleanup()`, which otherwise silently leaves stale DOM mounted across
+tests and produces flaky-looking failures; hit this directly while writing
+the AppShell test and fixed it), `apps/web/vitest.setup.js`, and
+`npm test` now wired up for `@placeme/web`. This is a one-time cost that
+every future `apps/web` change can build on, not scope creep specific to
+this bug.
+
+**Tests:** `apps/web/src/rooms/sessionGuard.test.js` (5 cases, pure
+function, no DOM) + `apps/web/src/components/AppShell.test.jsx` (5 cases:
+unguarded nav/log-out proceed with no `confirm()` call; guarded nav/log-out
+block on cancel and proceed on confirm). All 10 pass. Ran fresh from repo
+root under Node 22 (`.nvmrc`): `npm test` → 337/337 server + 10/10 web
+green; `npm run lint` → clean (2 pre-existing-pattern `only-export-
+components` warnings, same shape as the already-accepted
+`auth/AuthContext.jsx`, not new failures); `npm run build` → green.
+
+**Residual/open — guardrail #1 applies:** this is room/audio-adjacent
+behavior, so it is **not** to be called fully done on tests alone. Still
+needed: a real human (ideally two, in an actual live multi-participant
+room) clicking a nav link mid-session, confirming the prompt appears,
+blocks on cancel, and proceeds on confirm. Not attempted this session — no
+real room and no second participant were available here. Tracked as an
+open item below.
+
+**Not done this session (4/5 remaining from the same critique, by design —
+user approved doing P0 first):** no cancel/exit affordance in `MatchPage`'s
+queue or `LobbyPage`'s waiting state (P1); under-designed post-session
+feedback-wait screen (P1); button/busy-state vocabulary drift across pages
+(P2); missing skeleton loading states (P2). Next session should pick these
+up in that order.
+
+Also surfaced, not fixed (pre-existing, out of scope for this bug): `npm
+audit` on `apps/web` reports one high-severity advisory in `react-router`
+(GHSA-qwww-vcr4-c8h2, RSC-mode CSRF bypass) via `react-router-dom@7.18.1`.
+This app doesn't use RSC mode, so exposure is unclear, but it's worth its
+own look — `npm audit fix --force` would downgrade `react-router-dom` to
+7.11.0, a breaking change needing its own review, not something to do
+inside a nav-guard bug fix.
 
 ## Pilot-readiness + exception-handling pass (2026-07-30)
 
@@ -2250,6 +2653,8 @@ settle:**
 - ~~**PR #54 (S1, feedback rating) is open, not merged — `supabase/migrations/0007_feedback_rating.sql` must run first.**~~ **CLOSED 2026-07-28** — probed the live project directly: `feedback.rating` and `feedback.rating_reason` both exist, so the migration ran and the S1 code shipped. Migration status for every file now lives in `PLAN.md` §3.
 - **DEEPGRAM_API_KEY still needs revoking in the Deepgram dashboard** — removed from this environment's `.env` (PR #51, S2) since nothing references it, but the key itself is a user action in Deepgram's console, not something this session could do.
 - **B1/B3/B4/B7 from `PILOT_READINESS.md` are still open** — deploy (Render + Cloudflare Pages + `RENDER_APP_URL`), the Supabase "Confirm email" toggle, the post-deploy Render-sleep-vs-agent-worker test, and guardrail #1's human-verification gate for the UI-redesign/live-room-UX/flows-fix body of work. All need dashboard access or real humans, not attempted this session — see "What's next" above.
+- **BUG-SPEC-0001's guardrail #1 human-verification gate is open** — the lobby nav guard (branch `fix/lobby-nav-guard-live-session`) needs a real human clicking a nav link mid-live-session to confirm the prompt actually appears and blocks/allows correctly; not attempted this session (no real room/second participant available). Don't mark this fix fully "done" until that happens.
+- ~~4 of 5 issues from the 2026-07-30 end-to-end UI critique are still open~~ **ALL 5/5 CODE-COMPLETE 2026-07-31** — BUG-SPEC-0001 (nav guard), -0002 (waiting-state exit), -0003 (feedback-wait polish), -0004 (button/busy-state consistency), -0005 (skeleton states). See each entry above. **Not the same as "verified"**: only BUG-SPEC-0004 got a real browser check (no browser-automation tool was available in the 0001/0002/0003/0005 sessions) — a human pass over all five in an actual browser is still worth doing, and BUG-SPEC-0001's guardrail #1 gate (below) is separately still open.
 
 ## Deferred (not v1, tracked so they aren't forgotten)
 GD AI Voice Practice · JAM · Aptitude/Technical · 1-on-1 Roleplay · Drive Simulator · payments · notifications/SMS/push · analytics · advanced observability.
