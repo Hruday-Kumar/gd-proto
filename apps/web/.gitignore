@@ -25,3 +25,8 @@ dist-ssr
 
 .vercel
 .env*
+
+# Playwright (BUG-SPEC-0001 E2E suite)
+/test-results/
+/playwright-report/
+/playwright/.cache/
