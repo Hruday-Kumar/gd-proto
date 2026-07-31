@@ -2,10 +2,82 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-08-01 (BE-2 configurable room capacity — see the
-entry directly below. Older entries, including the 2026-07-31 M5/N8
-close-out + BUG-SPEC-0001 E2E test and everything before it, are preserved
-further down, unchanged.)
+**Last updated:** 2026-08-01 (BE-3 room visibility — see the entry directly
+below. Older entries, including this same day's BE-2 work and the
+2026-07-31 M5/N8 close-out + BUG-SPEC-0001 E2E test, are preserved further
+down, unchanged.)
+
+## BE-3 — room visibility, public/private (2026-08-01)
+
+Second item in the agreed BE-2 → BE-3 → BE-1 order, same session as BE-2
+below. Spec at `docs/specs/active/SPEC-0003-be-3-room-visibility.md`,
+branch `feat/be-3-room-visibility` off `dev`.
+
+**Sequencing note, per direct user instruction:** the user merged PR #73
+(BE-2) and PR #72 (the CORS fix) themselves before this branch existed, so
+`feat/be-3-room-visibility` was created off a freshly fetched `dev` that
+already included both — then rebased once more (`git rebase origin/dev`,
+no conflicts — the only prior commit on this branch was the spec draft,
+which didn't touch any BE-2 file) after the user confirmed the merge.
+Avoided the file-overlap conflict risk (`rooms.js`, `db/rooms.js`,
+`roomsApi.test.js`, `PLAN.md`, `PROGRESS.md` — all touched by both BE-2 and
+BE-3) entirely, rather than resolving it later at PR time.
+
+**Change:** `POST /api/rooms` accepts an optional `visibility`
+(`'public' | 'private'`, new `domain/roomVisibility.js`'s
+`isValidVisibility` — text + closed-set check, matching `rooms.status`/
+`join_mode`'s existing style rather than a new DB enum type), defaults to
+`'private'` when omitted, echoes it in the response. `db/rooms.js`'s
+`insertRoom` persists it. `POST /api/rooms/match` (matched rooms) is
+**unaffected on purpose** — that route never passes `visibility` at all,
+so it stays `undefined`, `JSON.stringify` drops the key entirely, and the
+column's own `DEFAULT 'private'` applies — the exact same mechanism BE-2
+already established for `maxParticipants` on the same route, not a new
+pattern. Matched rooms stay system-formed, not creator-configured, per
+this spec's Non Goals. Migration `0015_rooms_visibility.sql` adds the
+column (backfills existing rows via `NOT NULL DEFAULT 'private'`) plus a
+`CHECK(public/private)` constraint. **Not yet applied to the live Supabase
+project.**
+
+`place-me-UI`'s `/rooms/new` Public/Private radio group is now controlled
+(`checked`/`onChange`, not `defaultChecked`) so the selected-state styling
+actually follows the user's choice instead of always showing "Public" as
+selected regardless of what's picked; sent as `visibility` on create; BE-3
+`MOCK` comment removed.
+
+**Correction made along the way:** `place-me-UI/docs/BACKEND_REQUIREMENTS.md`'s
+BE-3 header read "(P0, depends on BE-1)", but its own "Suggested shape"
+text said the column would be "read by BE-1's listing endpoint" — i.e. the
+dependency runs the other way. Fixed the header to match the content and
+the order already agreed with the user; noted in both the spec and the doc
+itself so it doesn't get re-read backwards later.
+
+**Tests:** RED confirmed first — 6 new `roomsApi.test.js` cases
+(create-route validation ×4, defaulting, response echo) failing for the
+right reasons (undefined response fields, 500s from an unguarded invalid
+value reaching the DB-layer mock) before the route changed. A 7th case (the
+`/match` non-interference guard) is a regression assertion that correctly
+passed both before and after, since that route never touched `visibility`
+either way — not a RED/GREEN pair, deliberately. GREEN after: full suite
+via `npx vitest run --root apps/server` — 365/365 passed, 3 skipped
+(offline live-RLS, expected). `npx oxlint apps/server/src apps/server/test`
+clean (2 pre-existing, unrelated warnings). `place-me-UI`: `npx eslint`
+clean after one auto-fixed formatting nit (same as BE-2's session), `npm
+run build` clean (Node 22).
+
+**Residual/open:**
+- Migration `0015` needs a human to run it against the live Supabase
+  project before this branch can merge to `main` — same constraint as
+  `0014`. If both are still pending when someone applies migrations, apply
+  them together (`PLAN.md` §3 now lists both).
+- Branch not yet pushed or PR'd — held pending the user's go-ahead.
+- Guardrail #1 does not apply — no room/audio/transcription/attribution/
+  feedback behavior changed.
+- No manual click-through yet — blocked on the migration being live, and
+  there's no listing endpoint yet to browse public vs. private rooms by
+  (that's BE-1, next).
+- Next up per the agreed order: **BE-1** (room discovery /
+  `GET /api/rooms/open`), which can now actually filter on `visibility`.
 
 ## BE-2 — configurable room capacity (2026-08-01)
 

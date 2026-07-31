@@ -12,8 +12,15 @@ export async function roomCodeExists(code, { supabase = getSupabase() } = {}) {
 // (api/routes/rooms.js defaults it to DEFAULT_MAX_ROOM_PARTICIPANTS when
 // the request omits it) -- this function itself has no opinion on what a
 // missing value should mean, same as durationSeconds.
+//
+// visibility (BE-3, SPEC-0003) is deliberately *not* always provided --
+// POST /api/rooms defaults it before calling this, but POST /api/rooms/match
+// never passes it at all, so it stays undefined here and the insert below
+// omits the key entirely (JSON.stringify drops undefined-valued keys),
+// letting the column's own DEFAULT 'private' apply. Matched rooms are
+// system-formed, not creator-configured (SPEC-0003's Non Goals).
 export async function insertRoom(
-  { code, topicId, durationSeconds, maxParticipants, joinMode, createdBy },
+  { code, topicId, durationSeconds, maxParticipants, visibility, joinMode, createdBy },
   { supabase = getSupabase() } = {}
 ) {
   const { data, error } = await supabase
@@ -23,10 +30,13 @@ export async function insertRoom(
       topic_id: topicId,
       duration_seconds: durationSeconds,
       max_participants: maxParticipants,
+      visibility,
       join_mode: joinMode,
       created_by: createdBy,
     })
-    .select('id, code, status, topic_id, duration_seconds, max_participants, started_at, ends_at, ended_at, created_by')
+    .select(
+      'id, code, status, topic_id, duration_seconds, max_participants, visibility, started_at, ends_at, ended_at, created_by'
+    )
     .single();
   if (error) throw error;
   return data;

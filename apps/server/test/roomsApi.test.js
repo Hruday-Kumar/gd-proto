@@ -11,6 +11,7 @@ import { createRoomsRouter } from '../src/api/routes/rooms.js';
 import { createLlmRateLimiter, createRoomActionRateLimiter } from '../src/api/middleware/rateLimit.js';
 import { CURRENT_CONSENT_VERSION } from '../src/domain/consent.js';
 import { DEFAULT_MAX_ROOM_PARTICIPANTS } from '../src/domain/roomCapacity.js';
+import { DEFAULT_VISIBILITY } from '../src/domain/roomVisibility.js';
 
 function stubAuth(userId) {
   return (req, _res, next) => {
@@ -173,6 +174,63 @@ describe('POST /api/rooms (create by code)', () => {
       const deps = baseDeps();
       const app = buildApp(deps);
       const res = await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds: 300, maxParticipants });
+      expect(res.status).toBe(400);
+      expect(deps.insertRoom).not.toHaveBeenCalled();
+    });
+  });
+
+  // BE-3 (place-me-UI/docs/BACKEND_REQUIREMENTS.md, SPEC-0003): the room
+  // creator's chosen visibility, persisted per room. No listing endpoint
+  // reads this yet (that's BE-1) -- this only proves the value round-trips
+  // correctly through creation.
+  describe('room visibility (BE-3)', () => {
+    it('passes an explicit visibility through to insertRoom and echoes it in the response', async () => {
+      const deps = baseDeps({
+        insertRoom: vi.fn().mockResolvedValue({
+          id: 'r1',
+          code: 'ABCXYZ',
+          status: 'waiting',
+          topic_id: 't1',
+          duration_seconds: 300,
+          max_participants: DEFAULT_MAX_ROOM_PARTICIPANTS,
+          visibility: 'public',
+        }),
+      });
+      const app = buildApp(deps);
+      const res = await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds: 300, visibility: 'public' });
+      expect(res.status).toBe(201);
+      expect(res.body.visibility).toBe('public');
+      expect(deps.insertRoom).toHaveBeenCalledWith(expect.objectContaining({ visibility: 'public' }));
+    });
+
+    it('defaults to DEFAULT_VISIBILITY (private) when visibility is omitted', async () => {
+      const deps = baseDeps({
+        insertRoom: vi.fn().mockResolvedValue({
+          id: 'r1',
+          code: 'ABCXYZ',
+          status: 'waiting',
+          topic_id: 't1',
+          duration_seconds: 300,
+          max_participants: DEFAULT_MAX_ROOM_PARTICIPANTS,
+          visibility: DEFAULT_VISIBILITY,
+        }),
+      });
+      const app = buildApp(deps);
+      const res = await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds: 300 });
+      expect(res.status).toBe(201);
+      expect(res.body.visibility).toBe(DEFAULT_VISIBILITY);
+      expect(deps.insertRoom).toHaveBeenCalledWith(expect.objectContaining({ visibility: DEFAULT_VISIBILITY }));
+    });
+
+    it.each([
+      ['an unrelated string', 'secret'],
+      ['wrong case', 'Public'],
+      ['a number', 1],
+      ['a boolean', true],
+    ])('rejects a %s visibility without touching the database', async (_label, visibility) => {
+      const deps = baseDeps();
+      const app = buildApp(deps);
+      const res = await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds: 300, visibility });
       expect(res.status).toBe(400);
       expect(deps.insertRoom).not.toHaveBeenCalled();
     });
@@ -395,6 +453,22 @@ describe('POST /api/rooms/match', () => {
     // for them; claimMatchOrQueue's atomic claim already handled this.
     expect(deps.claimFromQueue).toHaveBeenCalledWith(expect.arrayContaining(['a', 'b']));
     expect(deps.removeFromQueue).not.toHaveBeenCalled();
+  });
+
+  // BE-3 (SPEC-0003, Non Goal): matched rooms are system-formed, not
+  // creator-configured -- this route must never pass a visibility, so the
+  // column's own DEFAULT 'private' applies at the DB level.
+  it('does not pass visibility to insertRoom -- matched rooms rely on the column default', async () => {
+    const deps = baseDeps({
+      listQueue: vi.fn().mockResolvedValue([{ id: 'a' }, { id: 'b' }]),
+      generateTopicFn: vi.fn().mockResolvedValue('Should AI grade exams?'),
+      insertGeneratedTopic: vi.fn().mockResolvedValue({ id: 'topic-1', text: 'Should AI grade exams?' }),
+      insertRoom: vi.fn().mockResolvedValue({ id: 'r1', code: 'MATCHD', status: 'waiting', topic_id: 'topic-1', duration_seconds: 300 }),
+    });
+    const app = buildApp(deps, 'c');
+    const res = await request(app).post('/api/rooms/match').send({ durationSeconds: 300 });
+    expect(res.status).toBe(201);
+    expect(deps.insertRoom).toHaveBeenCalledWith(expect.not.objectContaining({ visibility: expect.anything() }));
   });
 
   // H7 (engineering audit, 2026-07-28): two students hitting /match near-

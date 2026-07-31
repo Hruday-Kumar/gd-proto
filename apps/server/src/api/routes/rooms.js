@@ -19,6 +19,7 @@ import {
   MIN_ROOM_PARTICIPANTS,
   MAX_ROOM_PARTICIPANTS,
 } from '../../domain/roomCapacity.js';
+import { isValidVisibility, DEFAULT_VISIBILITY } from '../../domain/roomVisibility.js';
 
 // Interim group-size default for random matching (PHASE1_PLAN.md §8,
 // decided 2026-07-26: anchored to the AI Voice Practice mode's stated
@@ -30,6 +31,7 @@ const DEFAULT_MAX_GROUP_SIZE = 6;
 
 const INVALID_DURATION_ERROR = `durationSeconds must be a whole number of seconds between ${MIN_DURATION_SECONDS} and ${MAX_DURATION_SECONDS}`;
 const INVALID_MAX_PARTICIPANTS_ERROR = `maxParticipants must be a whole number between ${MIN_ROOM_PARTICIPANTS} and ${MAX_ROOM_PARTICIPANTS}`;
+const INVALID_VISIBILITY_ERROR = "visibility must be either 'public' or 'private'";
 
 // Maps a DB room row (snake_case) to the shape sessionStateMachine.js
 // expects (camelCase, millisecond timestamps).
@@ -121,7 +123,7 @@ export function createRoomsRouter(requireAuth, deps) {
   // code with no throttle. Separate limiter from llmRateLimiter (H4) since
   // neither route calls Gemini itself.
   router.post('/api/rooms', requireAuth, roomActionRateLimiter, async (req, res) => {
-    const { topicId, durationSeconds, maxParticipants } = req.body || {};
+    const { topicId, durationSeconds, maxParticipants, visibility } = req.body || {};
     if (!topicId || !durationSeconds) {
       return res.status(400).json({ error: 'topicId and durationSeconds are required' });
     }
@@ -136,13 +138,20 @@ export function createRoomsRouter(requireAuth, deps) {
     if (maxParticipants !== undefined && !isValidMaxParticipants(maxParticipants)) {
       return res.status(400).json({ error: INVALID_MAX_PARTICIPANTS_ERROR });
     }
+    // BE-3 (SPEC-0003): visibility is optional -- omitting it preserves the
+    // pre-BE-3 behavior of every code-created room behaving like 'private'.
+    if (visibility !== undefined && !isValidVisibility(visibility)) {
+      return res.status(400).json({ error: INVALID_VISIBILITY_ERROR });
+    }
     const roomMaxParticipants = maxParticipants ?? DEFAULT_MAX_ROOM_PARTICIPANTS;
+    const roomVisibility = visibility ?? DEFAULT_VISIBILITY;
     const code = await generateUniqueRoomCode(roomCodeExists);
     const room = await insertRoom({
       code,
       topicId,
       durationSeconds,
       maxParticipants: roomMaxParticipants,
+      visibility: roomVisibility,
       joinMode: 'code',
       createdBy: req.userId,
     });
@@ -154,6 +163,7 @@ export function createRoomsRouter(requireAuth, deps) {
       topicId: room.topic_id,
       durationSeconds: room.duration_seconds,
       maxParticipants: room.max_participants,
+      visibility: room.visibility,
     });
   });
 
