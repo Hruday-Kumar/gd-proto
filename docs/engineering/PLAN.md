@@ -309,8 +309,8 @@ BE-3's `visibility` column to exist first).
 | Status | ID | Task | Branch | Notes |
 |---|---|---|---|---|
 | ✅ | **BE-2** | Configurable room capacity | `feat/be-2-room-capacity` | Merged to `dev` via PR #73, 2026-07-31. Migration `0014` **still not yet applied live** — see §3, blocks `main` promotion. |
-| 🔶 | **BE-3** | Room visibility (public/private) | `feat/be-3-room-visibility` | Code complete (`SPEC-0003`), migration `0015` **not yet applied live** — see §3. Not yet merged/PR'd. Also corrects a doc error found along the way: `BACKEND_REQUIREMENTS.md`'s BE-3 header said "depends on BE-1" — backwards, BE-1 depends on this. |
-| ☐ | **BE-1** | Room discovery (`GET /api/rooms/open`) | — | Next up. Depends on BE-3. |
+| ✅ | **BE-3** | Room visibility (public/private) | `feat/be-3-room-visibility` | Merged to `dev` via PR #74, 2026-07-31 (`pr-review`'d, one general blocker-free approve). Migration `0015` **still not yet applied live** — see §3. |
+| 🔶 | **BE-1** | Room discovery (`GET /api/rooms/open`) | `feat/be-1-room-discovery` | Code complete (`SPEC-0004`), **no migration needed** — both `visibility`/`max_participants` already existed, so nothing blocks `main` promotion here. Not yet merged/PR'd. All three agreed P0s now code-complete. |
 
 ---
 

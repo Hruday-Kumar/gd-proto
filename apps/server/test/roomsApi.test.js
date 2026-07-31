@@ -64,6 +64,8 @@ function baseDeps(overrides = {}) {
     listParticipantsFn: vi.fn().mockResolvedValue([]),
     listProfilesFn: vi.fn().mockResolvedValue([]),
     listTranscriptLinesForRoomFn: vi.fn().mockResolvedValue([]),
+    listOpenRoomsFn: vi.fn().mockResolvedValue([]),
+    listParticipantsForRoomsFn: vi.fn().mockResolvedValue([]),
     ...overrides,
   };
 }
@@ -234,6 +236,56 @@ describe('POST /api/rooms (create by code)', () => {
       expect(res.status).toBe(400);
       expect(deps.insertRoom).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('GET /api/rooms/open', () => {
+  it('returns an empty list when there are no open rooms', async () => {
+    const deps = baseDeps();
+    const app = buildApp(deps);
+    const res = await request(app).get('/api/rooms/open');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ rooms: [] });
+  });
+
+  it('shapes open rooms via buildOpenRoomsList, resolving host names from profiles', async () => {
+    const deps = baseDeps({
+      listOpenRoomsFn: vi.fn().mockResolvedValue([
+        {
+          id: 'r1',
+          code: 'ABCXYZ',
+          duration_seconds: 900,
+          max_participants: 6,
+          created_by: 'host-1',
+          created_at: '2026-08-01T00:00:00.000Z',
+          topics: { text: 'Should AI grade exams?' },
+        },
+      ]),
+      listParticipantsForRoomsFn: vi.fn().mockResolvedValue([{ room_id: 'r1', user_id: 'a' }]),
+      listProfilesFn: vi.fn().mockResolvedValue([{ id: 'host-1', display_name: 'Asha' }]),
+    });
+    const app = buildApp(deps);
+    const res = await request(app).get('/api/rooms/open');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      rooms: [
+        {
+          id: 'r1',
+          code: 'ABCXYZ',
+          topicText: 'Should AI grade exams?',
+          durationSeconds: 900,
+          maxParticipants: 6,
+          participantCount: 1,
+          hostDisplayName: 'Asha',
+          createdAt: '2026-08-01T00:00:00.000Z',
+        },
+      ],
+    });
+    // Only the rooms actually returned by listOpenRoomsFn get their
+    // participants/profiles fetched -- confirms the route wires the two
+    // batched queries to the fetched rooms rather than something static.
+    expect(deps.listParticipantsForRoomsFn).toHaveBeenCalledWith(['r1']);
+    expect(deps.listProfilesFn).toHaveBeenCalledWith(['host-1']);
   });
 });
 

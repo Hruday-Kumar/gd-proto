@@ -2,10 +2,98 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-08-01 (BE-3 room visibility — see the entry directly
-below. Older entries, including this same day's BE-2 work and the
+**Last updated:** 2026-08-01 (BE-1 room discovery — see the entry directly
+below. Older entries, including this same day's BE-2/BE-3 work and the
 2026-07-31 M5/N8 close-out + BUG-SPEC-0001 E2E test, are preserved further
 down, unchanged.)
+
+## BE-1 — room discovery, browsable open rooms (2026-08-01)
+
+Last of the three agreed P0s (BE-2 → BE-3 → BE-1), same session. Spec at
+`docs/specs/active/SPEC-0004-be-1-room-discovery.md`, branch
+`feat/be-1-room-discovery` off `dev` (freshly synced after PR #73/#74 both
+merged). **No migration needed** — both `visibility` (BE-3) and
+`max_participants` (BE-2) already existed, so this is a pure code addition
+with nothing blocking `main` promotion, unlike its two predecessors.
+
+**Process change mid-session, per direct user instruction:** ran a full
+`pr-review` skill pass on PR #74 (BE-3) — triage, deep review, guardrail
+checklist, local verification (which caught a real gap: my first
+`npm test --workspace=@placeme/server` run failed on Node 20's missing
+native `WebSocket`, my own mistake — `PLAN.md` §1 already documents this
+exact footgun and I'd forgotten to `nvm use 22` first; re-ran clean at
+373/373 once I did). Drafted a full APPROVE review, then hit
+`Review Can not approve your own pull request` from GitHub itself when
+trying to post it — this identity can never complete that step, matching
+`BRANCHING.md` 5a's own note about no self-approval being possible here.
+User said directly: **"just merge dont review every pr."** Saved as a
+feedback memory (not repeated in full here) — going forward, PRs in this
+repo get merged directly when asked, not routed through the full
+`pr-review` workflow by default. PR #74 was merged via
+`gh pr merge --squash --delete-branch` without a posted review.
+
+**Change:** new `GET /api/rooms/open` — `status='waiting'` AND
+`visibility='public'` rooms, newest first, bounded (`MAX_OPEN_ROOMS=50`,
+`db/rooms.js`, M9 discipline), excluding any room already at its own
+`max_participants` (a full public room is filtered out, not shown then
+rejected on join). New `db/roomParticipants.js#listParticipantsForRooms` —
+one batched query for every open room's participant rows, not one query
+per room; given its own explicit `.limit()` rather than leaning solely on
+the caller's already-bounded room-id list, per this file's own M9/N5
+lesson about not trusting an upstream bound as the only protection. New
+`domain/roomListing.js#buildOpenRoomsList` (new file, same pure-assembly
+shape as `sessionHistory.js`'s `buildSessionHistory`) does the
+counting/host-name-resolution/capacity-filtering, kept DB-free and unit
+tested without a live database. Joining a discovered room reuses the
+existing, untouched `POST /api/rooms/join` by code — no new join
+mechanism, matching the spec's own Non Goals.
+
+`place-me-UI`: `/join`'s room grid and `/`'s "Rooms open now" now fetch
+real data (`useEffect` + `useState<T|null>`, same pattern
+`HistoryPage`/`Index` already use for `getMyHistory`). `RoomCard`
+(`components/pm/blocks.tsx`) gained an optional `onSelect` prop —
+backward-compatible for its two other existing callers (`app.index.tsx`,
+`app.join.tsx`, both untouched, still using `to=`) — real cards use it
+instead of a dead self-link (`to="/join"` rendered *on* `/join` was
+literally a no-op for the old fixture data, which is why its own removed
+comment said "cards intentionally don't navigate anywhere real"; that
+stops being true once the data is real). Clicking a card on `/join`
+prefills the code field; on `/` it navigates to `/join` (no search-param
+deep-link prefill built — named as a deliberate scope cut, not silently
+missing, to avoid touching route search-param typing this session).
+`demo.ts`'s `Room.level` type widened from a fixed 3-value union to
+`string` (only consumer is a plain text render in `RoomCard`, confirmed by
+grep) so a real room can honestly render "Any level" instead of
+fabricating a fake `Beginner`/`Intermediate`/`Advanced` tier — BE-4 (level)
+isn't built. `BACKEND_REQUIREMENTS.md`'s BE-1 entry updated to
+"code complete, not yet live" and corrected to note `/match`'s aside was
+never actually part of this pass (it shows BE-16 live-telemetry, a
+different unbuilt item, not a room listing).
+
+**Tests:** RED confirmed first in both layers.
+`roomListing.test.js` (new file): 6 cases against a module that didn't
+exist yet. `roomsApi.test.js`: 2 new cases, confirmed failing with a plain
+404 (the route didn't exist) before implementing. GREEN after: full suite
+fresh under Node 22 (`npm test --workspace=@placeme/server`) —
+**381/381 passed, 0 skipped** (live RLS creds present in this
+environment). `npx oxlint apps/server/src apps/server/test` clean (2
+pre-existing, unrelated warnings). `place-me-UI`: `npx eslint` clean after
+one auto-fixed formatting nit (same recurring pattern as BE-2/BE-3's
+sessions), `npm run build` clean (Node 22).
+
+**Residual/open:**
+- Branch not yet pushed or PR'd — held pending the user's go-ahead.
+- Guardrail #1 does not apply — no room/audio/transcription/attribution/
+  feedback behavior changed.
+- No manual click-through yet against a real deployed environment.
+- Migrations `0014` (BE-2) and `0015` (BE-3) are **still** not applied to
+  the live Supabase project — both still block `main` promotion for their
+  own PRs (already merged to `dev`). BE-1 itself has no such blocker.
+- **All three agreed P0s (BE-2, BE-3, BE-1) are now code-complete.** Next
+  session should check with the user on: applying the two outstanding
+  migrations live, promoting `dev` → `main` (user's call per
+  `BRANCHING.md`, never proposed by an agent), or picking up the next
+  `BACKEND_REQUIREMENTS.md` item (P1s: BE-4/5/6/7/8/9/10/14/19).
 
 ## BE-3 — room visibility, public/private (2026-08-01)
 

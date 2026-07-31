@@ -65,6 +65,29 @@ export async function getRoomById(id, { supabase = getSupabase() } = {}) {
   return data;
 }
 
+// BE-1 (place-me-UI/docs/BACKEND_REQUIREMENTS.md, SPEC-0004): defensive
+// ceiling on the open-rooms listing (M9 discipline) -- at pilot scale
+// (5-10 concurrent rooms per CLAUDE.md) this is generous headroom, not
+// expected to bind in practice, same reasoning as MAX_HISTORY_ROOMS below.
+const MAX_OPEN_ROOMS = 50;
+
+// visibility = 'public' rooms a caller could browse into -- the capacity
+// filter (has this room already reached its own max_participants) happens
+// in domain/roomListing.js's buildOpenRoomsList, not here, since that
+// needs a second query's worth of participant counts this function
+// doesn't have. topics(text) embedded the same way getRoomById does.
+export async function listOpenRooms({ supabase = getSupabase() } = {}) {
+  const { data, error } = await supabase
+    .from('rooms')
+    .select('id, code, duration_seconds, max_participants, created_by, created_at, topics(text)')
+    .eq('status', 'waiting')
+    .eq('visibility', 'public')
+    .order('created_at', { ascending: false })
+    .limit(MAX_OPEN_ROOMS);
+  if (error) throw error;
+  return data ?? [];
+}
+
 // M9 (audit 2026-07-28): matches roomParticipants.js's listRoomIdsForUser
 // cap -- defensive ceiling on a single student's session history, not
 // expected to bind in practice at pilot scale.

@@ -78,6 +78,28 @@ export async function listRoomIdsForUser(userId, { supabase = getSupabase() } = 
   return (data ?? []).map((row) => row.room_id);
 }
 
+// BE-1 (place-me-UI/docs/BACKEND_REQUIREMENTS.md, SPEC-0004): batched
+// sibling of listParticipants above -- one query for every open room's
+// participants, not one query per room (which is what a naive per-room
+// listParticipants() loop would cost the open-rooms listing endpoint).
+// The number of room ids passed in is already bounded (MAX_OPEN_ROOMS,
+// db/rooms.js) at the only call site today, but M9/N5's own lesson here is
+// not to rely on an upstream caller's bound as the only protection -- this
+// query gets its own explicit ceiling too, generous headroom above
+// MAX_OPEN_ROOMS * a realistic max room size, not a duplicate of either.
+const MAX_PARTICIPANT_ROWS_FOR_ROOMS_QUERY = 1000;
+
+export async function listParticipantsForRooms(roomIds, { supabase = getSupabase() } = {}) {
+  if (!roomIds.length) return [];
+  const { data, error } = await supabase
+    .from('room_participants')
+    .select('room_id, user_id')
+    .in('room_id', roomIds)
+    .limit(MAX_PARTICIPANT_ROWS_FOR_ROOMS_QUERY);
+  if (error) throw error;
+  return data ?? [];
+}
+
 // The student's most recent non-ended room, if any -- lets a queued
 // student (or anyone else) discover a room they're already seated in
 // without needing to know its id or code up front. Two queries rather

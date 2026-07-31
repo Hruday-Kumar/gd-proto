@@ -8,9 +8,10 @@ import { createConsentGate } from '../middleware/consentGate.js';
 import { mintToken } from '../../livekit/token.js';
 import { startTranscriptionForRoom } from '../../agent/roomAgent.js';
 import { getFeedbackForRoomAndUser, rateFeedback } from '../../db/feedback.js';
-import { listParticipants, removeParticipant } from '../../db/roomParticipants.js';
+import { listParticipants, removeParticipant, listParticipantsForRooms } from '../../db/roomParticipants.js';
 import { listProfiles } from '../../db/profiles.js';
 import { listTranscriptLinesForRoom } from '../../db/transcriptLines.js';
+import { listOpenRooms } from '../../db/rooms.js';
 import { createLlmRateLimiter, createRoomActionRateLimiter } from '../middleware/rateLimit.js';
 import {
   isRoomFull,
@@ -20,6 +21,7 @@ import {
   MAX_ROOM_PARTICIPANTS,
 } from '../../domain/roomCapacity.js';
 import { isValidVisibility, DEFAULT_VISIBILITY } from '../../domain/roomVisibility.js';
+import { buildOpenRoomsList } from '../../domain/roomListing.js';
 
 // Interim group-size default for random matching (PHASE1_PLAN.md §8,
 // decided 2026-07-26: anchored to the AI Voice Practice mode's stated
@@ -73,6 +75,8 @@ export function createRoomsRouter(requireAuth, deps) {
     listParticipantsFn = listParticipants,
     listProfilesFn = listProfiles,
     listTranscriptLinesForRoomFn = listTranscriptLinesForRoom,
+    listOpenRoomsFn = listOpenRooms,
+    listParticipantsForRoomsFn = listParticipantsForRooms,
     llmRateLimiter = createLlmRateLimiter(),
     roomActionRateLimiter = createRoomActionRateLimiter(),
   } = deps;
@@ -116,6 +120,22 @@ export function createRoomsRouter(requireAuth, deps) {
   router.get('/api/rooms/mine/active', requireAuth, async (req, res) => {
     const room = await getActiveRoomForUser(req.userId);
     res.status(200).json({ room: room ? { id: room.id, code: room.code, status: room.status } : null });
+  });
+
+  // BE-1 (place-me-UI/docs/BACKEND_REQUIREMENTS.md, SPEC-0004): a bounded
+  // list of rooms anyone could browse into and join right now (waiting +
+  // public + not already full). No mutation, no rate limiter -- same
+  // precedent as /api/rooms/mine/active and /api/history/mine, neither of
+  // which is Gemini-backed or write-adjacent.
+  router.get('/api/rooms/open', requireAuth, async (req, res) => {
+    const rooms = await listOpenRoomsFn();
+    const roomIds = rooms.map((room) => room.id);
+    const hostIds = [...new Set(rooms.map((room) => room.created_by))];
+    const [participantRows, profiles] = await Promise.all([
+      listParticipantsForRoomsFn(roomIds),
+      listProfilesFn(hostIds),
+    ]);
+    res.status(200).json({ rooms: buildOpenRoomsList(rooms, participantRows, profiles) });
   });
 
   // N3 (audit comparison, 2026-07-29): create/join had no rate limiting at
