@@ -5,6 +5,7 @@ import { getRoomStatus, startRoom, getMyFeedback, getRoomTranscript } from '../r
 import { AppShell } from '../components/AppShell.jsx';
 import { ButtonBusyLabel } from '../components/ButtonBusyLabel.jsx';
 import { TranscriptList } from '../components/TranscriptList.jsx';
+import { TranscriptSkeleton } from '../components/TranscriptSkeleton.jsx';
 import { FeedbackRating } from '../components/FeedbackRating.jsx';
 import { isSessionInProgress } from '../rooms/sessionGuard.js';
 import { useSetRoomSessionGuard } from '../rooms/RoomSessionGuardContext.jsx';
@@ -327,7 +328,7 @@ export function LobbyPage() {
           <div className="mt-4 rounded-lg bg-surface-container-low p-6">
             <p className="mb-2 text-label-sm font-semibold text-on-surface-variant">Transcript</p>
             {transcript && <TranscriptList lines={transcript} />}
-            {!transcript && !transcriptError && <p className="text-body-sm text-outline">Loading…</p>}
+            {!transcript && !transcriptError && <TranscriptSkeleton />}
             {!transcript && transcriptError && (
               <p className="text-body-sm text-outline">
                 We couldn&apos;t load the transcript for this session. You can try again from History.
