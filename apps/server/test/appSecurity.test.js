@@ -51,6 +51,16 @@ describe('CORS allowlist wiring', () => {
     expect(res.headers['access-control-allow-origin']).toBe('http://localhost:5173');
     vi.unstubAllEnvs();
   });
+
+  // place-me-UI (TanStack Start) defaults to port 8080, unlike apps/web's
+  // plain-Vite 5173 -- both are local dev frontends for this same API.
+  it('still allows the place-me-UI dev origin (port 8080) outside production', async () => {
+    vi.stubEnv('ALLOWED_ORIGINS', '');
+    const app = createApp({ supabaseUrl: TEST_SUPABASE_URL, nodeEnv: 'development' });
+    const res = await request(app).get('/health').set('Origin', 'http://localhost:8080');
+    expect(res.headers['access-control-allow-origin']).toBe('http://localhost:8080');
+    vi.unstubAllEnvs();
+  });
 });
 
 // N12 (audit comparison, 2026-07-29): behind Render's load balancer,

@@ -32,7 +32,14 @@ import { createProcessSafetyNet } from './processSafetyNet.js';
 // authenticates with a Bearer token, not a cookie, so a page on a
 // developer's localhost can't read another origin's token) but there's no
 // reason to hand back part of M6's own allowlist for no benefit.
-const DEFAULT_DEV_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173'];
+// Two frontends target this API locally: apps/web (plain Vite, 5173) and
+// place-me-UI (TanStack Start, 8080).
+const DEFAULT_DEV_ORIGINS = [
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:8080',
+  'http://127.0.0.1:8080',
+];
 
 export function createApp({
   supabaseUrl,
