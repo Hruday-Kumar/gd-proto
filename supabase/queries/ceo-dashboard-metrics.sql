@@ -1,5 +1,5 @@
 -- B2 (pilot-readiness audit) / Tier 1 instrumentation from
--- business/ceo-dashboard.md §4. Not a schema migration -- these are
+-- docs/business/ceo-dashboard.md §4. Not a schema migration -- these are
 -- read-only reporting queries, paste-and-run in the Supabase SQL Editor
 -- (or save as a saved snippet there) as part of the Monday dashboard
 -- ritual (ceo-dashboard.md §5). Nothing here writes to the database.

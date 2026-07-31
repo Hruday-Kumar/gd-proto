@@ -1,4 +1,4 @@
-// Tier 2 instrumentation (business/ceo-dashboard.md §4): pre-signup/
+// Tier 2 instrumentation (docs/business/ceo-dashboard.md §4): pre-signup/
 // pre-consent funnel behaviour the database genuinely can't see (Postgres
 // only has rows for students who made it all the way to an account).
 //
@@ -22,7 +22,7 @@ function getPosthog() {
   if (!posthogPromise) {
     posthogPromise = import('posthog-js').then(({ default: posthog }) => {
       // Autocapture/session recording off by default -- the events below
-      // are deliberately named and scoped (business/ceo-dashboard.md §4's
+      // are deliberately named and scoped (docs/business/ceo-dashboard.md §4's
       // Tier 2 list), not "capture everything and sort it out later".
       posthog.init(POSTHOG_KEY, {
         api_host: POSTHOG_HOST,

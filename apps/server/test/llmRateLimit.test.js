@@ -12,7 +12,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { createLlmRateLimiter } from '../src/api/rateLimit.js';
+import { createLlmRateLimiter } from '../src/api/middleware/rateLimit.js';
 
 function stubAuth(userId) {
   return (req, _res, next) => {

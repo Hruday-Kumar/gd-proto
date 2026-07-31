@@ -9,7 +9,7 @@ Phase 0b categories)
 Two distinct LLM uses in v1, with two different risk profiles:
 1. **GD topic generation** — student picks a category/difficulty, the LLM
    returns a discussion topic. **No personal data involved at all.**
-2. **Individual written feedback** (`PlaceMe_Product_Context_v2.md`) — the
+2. **Individual written feedback** (`PRODUCT_CONTEXT.md`) — the
    LLM reads a student's own transcript and writes their feedback
    paragraph. **This does involve personal data** — a student's own speech,
    attributed to them.

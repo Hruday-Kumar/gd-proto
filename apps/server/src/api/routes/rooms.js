@@ -1,18 +1,18 @@
 import { Router } from 'express';
-import { generateUniqueRoomCode } from '../domain/roomCode.js';
-import { claimMatchOrQueue } from '../domain/matchmakingClaim.js';
-import { startSession } from '../domain/sessionStateMachine.js';
-import { isValidDurationSeconds, MIN_DURATION_SECONDS, MAX_DURATION_SECONDS } from '../domain/roomDuration.js';
-import { generateTopic } from '../llm/geminiClient.js';
-import { createConsentGate } from './consentGate.js';
-import { mintToken } from '../livekit/token.js';
-import { startTranscriptionForRoom } from '../agent/roomAgent.js';
-import { getFeedbackForRoomAndUser, rateFeedback } from '../db/feedback.js';
-import { listParticipants, removeParticipant } from '../db/roomParticipants.js';
-import { listProfiles } from '../db/profiles.js';
-import { listTranscriptLinesForRoom } from '../db/transcriptLines.js';
-import { createLlmRateLimiter, createRoomActionRateLimiter } from './rateLimit.js';
-import { isRoomFull, DEFAULT_MAX_ROOM_PARTICIPANTS } from '../domain/roomCapacity.js';
+import { generateUniqueRoomCode } from '../../domain/roomCode.js';
+import { claimMatchOrQueue } from '../../domain/matchmakingClaim.js';
+import { startSession } from '../../domain/sessionStateMachine.js';
+import { isValidDurationSeconds, MIN_DURATION_SECONDS, MAX_DURATION_SECONDS } from '../../domain/roomDuration.js';
+import { generateTopic } from '../../llm/geminiClient.js';
+import { createConsentGate } from '../middleware/consentGate.js';
+import { mintToken } from '../../livekit/token.js';
+import { startTranscriptionForRoom } from '../../agent/roomAgent.js';
+import { getFeedbackForRoomAndUser, rateFeedback } from '../../db/feedback.js';
+import { listParticipants, removeParticipant } from '../../db/roomParticipants.js';
+import { listProfiles } from '../../db/profiles.js';
+import { listTranscriptLinesForRoom } from '../../db/transcriptLines.js';
+import { createLlmRateLimiter, createRoomActionRateLimiter } from '../middleware/rateLimit.js';
+import { isRoomFull, DEFAULT_MAX_ROOM_PARTICIPANTS } from '../../domain/roomCapacity.js';
 
 // Interim group-size default for random matching (PHASE1_PLAN.md §8,
 // decided 2026-07-26: anchored to the AI Voice Practice mode's stated

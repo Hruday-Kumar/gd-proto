@@ -11,7 +11,7 @@
 import { describe, it, expect } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { createRoomActionRateLimiter } from '../src/api/rateLimit.js';
+import { createRoomActionRateLimiter } from '../src/api/middleware/rateLimit.js';
 
 function stubAuth(userId) {
   return (req, _res, next) => {

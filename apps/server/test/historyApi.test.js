@@ -6,7 +6,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { createHistoryRouter } from '../src/api/history.js';
+import { createHistoryRouter } from '../src/api/routes/history.js';
 
 function stubAuth(userId) {
   return (req, _res, next) => {

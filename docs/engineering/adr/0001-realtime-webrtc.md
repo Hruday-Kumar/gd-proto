@@ -16,7 +16,7 @@ on the next one — worth knowing for the Phase 1 build, not a blocker now.
 GD Arena Multiplayer needs a live audio room where every participant's mic
 audio is available to the server as a **separate stream**, so each line of
 transcript can be attributed to the right speaker without diarization
-guesswork (a hard product requirement — see `PlaceMe_Product_Context_v2.md`
+guesswork (a hard product requirement — see `PRODUCT_CONTEXT.md`
 and guardrail #1's attribution-verification gate). Per guardrail #5, this ADR
 is written only after the Phase 0a spike (`SPIKE_PLAN.md`) validated that
 assumption end-to-end, automated and human-confirmed, on **LiveKit Cloud**.

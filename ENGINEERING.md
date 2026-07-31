@@ -160,7 +160,7 @@ leave a specification claiming behavior the implementation no longer has.
   logging.
 - Treat migrations and RLS changes as security changes. Test owner isolation and
   service-role boundaries.
-- Follow `templates/security-checklist.md` and use `$placeme-security`.
+- Follow `docs/templates/security-checklist.md` and use `$placeme-security`.
 
 ## Pilot readiness workflow
 
@@ -176,7 +176,7 @@ A pilot-facing change needs:
 7. a named operator and Pilot Engineer sign-off.
 
 Evidence belongs in `docs/pilot/` or the specification. Use
-`templates/pilot-checklist.md` and `$placeme-pilot`.
+`docs/templates/pilot-checklist.md` and `$placeme-pilot`.
 
 ## Release workflow
 
@@ -193,7 +193,7 @@ Evidence belongs in `docs/pilot/` or the specification. Use
    triggers.
 9. Record release evidence and move shipped specifications to `completed/`.
 
-Use `templates/release-checklist.md`, the runbooks in `docs/runbooks/`, and
+Use `docs/templates/release-checklist.md`, the runbooks in `docs/runbooks/`, and
 `$placeme-release`.
 
 ## Definition of Done

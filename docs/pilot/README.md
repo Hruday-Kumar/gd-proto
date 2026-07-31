@@ -14,6 +14,6 @@ Each pilot event should record:
 - success metrics, stop conditions, incidents, and follow-up issues;
 - rollout and rollback decision.
 
-Start from `templates/pilot-checklist.md`. The final record requires Pilot
+Start from `docs/templates/pilot-checklist.md`. The final record requires Pilot
 Engineer and Release Manager sign-off.
 

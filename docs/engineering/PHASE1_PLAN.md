@@ -26,7 +26,7 @@ The v1 MVP boundary from `CLAUDE.md`, nothing more:
 > attribution · individual written feedback per student · per-student
 > session history.
 
-Feedback format is fixed by the product doc (`PlaceMe_Product_Context_v2.md`
+Feedback format is fixed by the product doc (`PRODUCT_CONTEXT.md`
 §A): **a plain readable paragraph — no numeric scores, no charts** —
 answering did they speak clearly, did they stay on topic, did they let
 others speak. Constructive, never discouraging.
@@ -694,7 +694,7 @@ late. Update this section with the answer when each is decided.
    **Group-size numbers** (also required by `matchmake()`): the product
    doc doesn't specify a minimum/maximum for real-human multiplayer
    matching (only the *AI Voice Practice* mode states min 3 / max 5–6
-   participants — PlaceMe_Product_Context_v2.md). Using that as the
+   participants — PRODUCT_CONTEXT.md). Using that as the
    closest available anchor, **`minGroupSize: 3, maxGroupSize: 6`** for
    random-matched rooms as an interim default — easy to tune later since
    it's a config value passed into a pure function, not hardcoded logic.

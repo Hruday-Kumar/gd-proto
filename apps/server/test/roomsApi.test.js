@@ -7,8 +7,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { createRoomsRouter } from '../src/api/rooms.js';
-import { createLlmRateLimiter, createRoomActionRateLimiter } from '../src/api/rateLimit.js';
+import { createRoomsRouter } from '../src/api/routes/rooms.js';
+import { createLlmRateLimiter, createRoomActionRateLimiter } from '../src/api/middleware/rateLimit.js';
 import { CURRENT_CONSENT_VERSION } from '../src/domain/consent.js';
 import { DEFAULT_MAX_ROOM_PARTICIPANTS } from '../src/domain/roomCapacity.js';
 

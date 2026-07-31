@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { createConsentRouter } from '../src/api/consent.js';
+import { createConsentRouter } from '../src/api/routes/consent.js';
 import { CURRENT_CONSENT_VERSION } from '../src/domain/consent.js';
 
 function stubAuth(req, _res, next) {

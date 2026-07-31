@@ -42,7 +42,7 @@ React/Vite browser
 ## Decision history
 
 Accepted technology ADRs remain under `docs/engineering/adr/`. Start new
-decisions from `docs/adr/README.md` and `templates/architecture-decision-record.md`.
+decisions from `docs/adr/README.md` and `docs/templates/architecture-decision-record.md`.
 An ADR is required before changing a selected provider, trust boundary, runtime,
 data ownership model, or deployment topology.
 

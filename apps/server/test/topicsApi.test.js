@@ -5,8 +5,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { createTopicsRouter } from '../src/api/topics.js';
-import { createLlmRateLimiter, createRoomActionRateLimiter } from '../src/api/rateLimit.js';
+import { createTopicsRouter } from '../src/api/routes/topics.js';
+import { createLlmRateLimiter, createRoomActionRateLimiter } from '../src/api/middleware/rateLimit.js';
 
 function stubAuth(req, _res, next) {
   req.userId = 'user-123';
