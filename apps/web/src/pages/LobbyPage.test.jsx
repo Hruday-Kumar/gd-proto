@@ -67,6 +67,32 @@ describe('LobbyPage leave-room affordance', () => {
   });
 });
 
+describe('LobbyPage start-session busy state', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('shows a spinner and busy label while the creator starts the session', async () => {
+    let resolveStart;
+    roomsApi.getRoomStatus.mockResolvedValue({ status: 'waiting', isCreator: true, code: 'ABCDEF' });
+    roomsApi.startRoom.mockReturnValue(
+      new Promise((resolve) => {
+        resolveStart = resolve;
+      })
+    );
+    const user = userEvent.setup();
+    renderRoom({ isCreator: true, code: 'ABCDEF', status: 'waiting' });
+
+    const startButton = await screen.findByRole('button', { name: /start session/i });
+    await user.click(startButton);
+
+    expect(await screen.findByText('Starting…')).toBeInTheDocument();
+    expect(screen.getByText('progress_activity')).toBeInTheDocument();
+
+    resolveStart({});
+  });
+});
+
 describe('LobbyPage feedback-wait screen', () => {
   beforeEach(() => {
     roomsApi.getRoomTranscript.mockResolvedValue({ lines: [] });

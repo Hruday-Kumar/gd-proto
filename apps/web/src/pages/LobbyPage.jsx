@@ -3,6 +3,7 @@ import { Link, useLocation, useParams } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { getRoomStatus, startRoom, getMyFeedback, getRoomTranscript } from '../rooms/roomsApi.js';
 import { AppShell } from '../components/AppShell.jsx';
+import { ButtonBusyLabel } from '../components/ButtonBusyLabel.jsx';
 import { TranscriptList } from '../components/TranscriptList.jsx';
 import { FeedbackRating } from '../components/FeedbackRating.jsx';
 import { isSessionInProgress } from '../rooms/sessionGuard.js';
@@ -234,9 +235,9 @@ export function LobbyPage() {
               type="button"
               onClick={handleStart}
               disabled={starting}
-              className="rounded-lg bg-primary px-8 py-3 text-label-md font-semibold text-on-primary shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+              className="flex items-center justify-center gap-2 rounded-lg bg-primary px-8 py-3 text-label-md font-semibold text-on-primary shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {starting ? 'Starting…' : 'Start session'}
+              {starting ? <ButtonBusyLabel label="Starting…" /> : 'Start session'}
             </button>
             <Link to="/" className="text-label-md font-semibold text-on-surface-variant hover:underline">
               Leave room

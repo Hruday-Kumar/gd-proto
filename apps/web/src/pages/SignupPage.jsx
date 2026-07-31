@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { AuthShell } from '../components/AuthShell.jsx';
+import { ButtonBusyLabel } from '../components/ButtonBusyLabel.jsx';
 import { track } from '../lib/analytics.js';
 
 const inputClasses =
@@ -104,8 +105,14 @@ export function SignupPage() {
           disabled={submitting}
           className="flex w-full items-center justify-center gap-3 rounded-lg bg-primary py-3 text-label-md font-semibold text-on-primary shadow-sm transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-50"
         >
-          {submitting ? 'Creating account…' : 'Create account'}
-          {!submitting && <span className="material-symbols-outlined text-base">arrow_forward</span>}
+          {submitting ? (
+            <ButtonBusyLabel label="Creating account…" />
+          ) : (
+            <>
+              Create account
+              <span className="material-symbols-outlined text-base">arrow_forward</span>
+            </>
+          )}
         </button>
       </form>
 

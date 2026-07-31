@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useConsentStatus } from '../consent/useConsentStatus.js';
 import { AppShell } from '../components/AppShell.jsx';
+import { ButtonBusyLabel } from '../components/ButtonBusyLabel.jsx';
 import { LoadingScreen } from '../components/LoadingScreen.jsx';
 import { track } from '../lib/analytics.js';
 
@@ -170,14 +171,7 @@ export function ConsentPage() {
               disabled={!hasRead || submitting}
               className="flex items-center justify-center gap-2 rounded-lg bg-primary px-12 py-3 text-label-md font-semibold text-on-primary shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {submitting ? (
-                <>
-                  <span className="material-symbols-outlined animate-spin text-base">progress_activity</span>
-                  Recording…
-                </>
-              ) : (
-                'I have read this and agree'
-              )}
+              {submitting ? <ButtonBusyLabel label="Recording…" /> : 'I have read this and agree'}
             </button>
           </div>
         </div>

@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { getActiveRoom, leaveMatchQueue, requestMatch } from '../rooms/roomsApi.js';
 import { AppShell } from '../components/AppShell.jsx';
+import { ButtonBusyLabel } from '../components/ButtonBusyLabel.jsx';
 import { DurationPicker } from '../components/DurationPicker.jsx';
 
 const DEFAULT_DURATION_SECONDS = 600; // see NewRoomPage.jsx for why
@@ -210,9 +211,9 @@ export function MatchPage() {
             type="button"
             onClick={handleMatch}
             disabled={busy || queued}
-            className="w-full rounded-xl bg-primary py-6 text-label-md font-semibold text-on-primary shadow-sm transition-all hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-3 text-label-md font-semibold text-on-primary shadow-sm transition-all hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {busy ? 'Looking for a match…' : queued ? "You're queued" : 'Find me a group'}
+            {busy ? <ButtonBusyLabel label="Looking for a match…" /> : queued ? "You're queued" : 'Find me a group'}
           </button>
 
           {queued && (

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { AuthShell } from '../components/AuthShell.jsx';
+import { ButtonBusyLabel } from '../components/ButtonBusyLabel.jsx';
 
 const inputClasses =
   'w-full rounded-lg border border-border-base bg-surface-container-lowest py-3 pl-10 pr-4 text-body-md text-on-surface outline-none transition-all focus:border-primary focus:ring-2 focus:ring-primary/20';
@@ -97,8 +98,14 @@ export function LoginPage() {
           disabled={submitting}
           className="flex w-full items-center justify-center gap-3 rounded-lg bg-primary py-3 text-label-md font-semibold text-on-primary shadow-sm transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-50"
         >
-          {submitting ? 'Signing in…' : 'Sign in'}
-          {!submitting && <span className="material-symbols-outlined text-base">arrow_forward</span>}
+          {submitting ? (
+            <ButtonBusyLabel label="Signing in…" />
+          ) : (
+            <>
+              Sign in
+              <span className="material-symbols-outlined text-base">arrow_forward</span>
+            </>
+          )}
         </button>
       </form>
 
