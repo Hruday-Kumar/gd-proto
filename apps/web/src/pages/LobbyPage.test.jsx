@@ -121,3 +121,39 @@ describe('LobbyPage feedback-wait screen', () => {
     expect(screen.queryByText(/generating your feedback/i)).not.toBeInTheDocument();
   });
 });
+
+describe('LobbyPage transcript loading state', () => {
+  beforeEach(() => {
+    roomsApi.getMyFeedback.mockResolvedValue({ feedback: 'Great job structuring your points.' });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('shows the transcript skeleton while the transcript is loading, then the real lines', async () => {
+    roomsApi.getRoomStatus.mockResolvedValue({ status: 'ended', isCreator: false, code: 'ABCDEF' });
+    let resolveTranscript;
+    roomsApi.getRoomTranscript.mockReturnValue(
+      new Promise((resolve) => {
+        resolveTranscript = resolve;
+      })
+    );
+    renderRoom({ isCreator: false, code: 'ABCDEF', status: 'ended' });
+
+    expect(await screen.findByTestId('transcript-skeleton')).toBeInTheDocument();
+
+    resolveTranscript({ lines: [{ displayName: 'Alex', text: 'Good point.' }] });
+    expect(await screen.findByText(/good point/i)).toBeInTheDocument();
+    expect(screen.queryByTestId('transcript-skeleton')).not.toBeInTheDocument();
+  });
+
+  it('shows the existing error copy, not the skeleton, if the transcript fails to load', async () => {
+    roomsApi.getRoomStatus.mockResolvedValue({ status: 'ended', isCreator: false, code: 'ABCDEF' });
+    roomsApi.getRoomTranscript.mockRejectedValue(new Error('failed'));
+    renderRoom({ isCreator: false, code: 'ABCDEF', status: 'ended' });
+
+    expect(await screen.findByText(/couldn.t load the transcript/i)).toBeInTheDocument();
+    expect(screen.queryByTestId('transcript-skeleton')).not.toBeInTheDocument();
+  });
+});

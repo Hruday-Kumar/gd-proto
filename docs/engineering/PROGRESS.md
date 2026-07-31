@@ -2,10 +2,89 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-07-31 (BUG-SPEC-0004, button/busy-state consistency —
-see the entry directly below. Older entries, including BUG-SPEC-0003,
-BUG-SPEC-0002, BUG-SPEC-0001, and the 2026-07-30 doc-sync + pilot-readiness
-pass, are preserved further down, unchanged.)
+**Last updated:** 2026-07-31 (BUG-SPEC-0005, skeleton loading states — see
+the entry directly below. **This closes all 5/5 findings from the
+2026-07-30 end-to-end UI critique** (`.impeccable/critique/2026-07-30T17-08-16Z__apps-web-src.md`).
+Older entries, including BUG-SPEC-0004/3/2/1 and the 2026-07-30 doc-sync +
+pilot-readiness pass, are preserved further down, unchanged.)
+
+## BUG-SPEC-0005 — skeleton loading states (2026-07-31)
+
+Picked up per direct user instruction ("last critique issue (skeleton
+states)") to finish the `/impeccable critique` remediation — the fifth
+and final finding, second of the two P2s, `docs/engineering/PROGRESS.md`'s
+own recorded next step after BUG-SPEC-0004. Branch
+`fix/skeleton-loading-states` off `dev`, spec at
+`docs/specs/active/BUG-SPEC-0005-skeleton-loading-states.md`.
+
+**Bug:** Three spots still fell back to a single bare "Loading…" line with
+no visual weight and no resemblance to the content about to appear,
+contradicting `reference/product.md`'s own rule ("Skeleton states for
+loading, not spinners in the middle of content"): `HistoryPage.jsx`'s
+initial session-list load, `HistoryPage.jsx`'s per-session
+`SessionTranscript` disclosure, and `LobbyPage.jsx`'s ended-view
+transcript block (not the feedback-generation wait directly above it —
+that was already fixed by BUG-SPEC-0003).
+
+**Fix:** two new shared components — `TranscriptSkeleton.jsx` (a handful
+of `animate-pulse` speaker+text bars matching `TranscriptList`'s actual
+`<ul><li>` shape, used at both the `HistoryPage` and `LobbyPage`
+transcript spots so there's one "a transcript is loading" vocabulary, not
+two) and `HistoryListSkeleton.jsx` (two pulsing stat-tile placeholders
+plus a few pulsing session-card placeholders, matching `HistoryPage`'s
+real markup/classes). Both reuse existing `surface-container-high`/
+`rounded-lg`/`rounded-xl` tokens from `DESIGN.md` — a skeleton is a muted
+version of the real content, not a new visual language. Reduced-motion is
+already handled globally by `index.css`'s `*` selector (confirmed, not
+re-implemented — it catches Tailwind's `animate-pulse` the same way it
+already catches `animate-spin`/`animate-ping` elsewhere in the app).
+
+**Explicitly not touched:** `ConsentPage.jsx`'s `LoadingScreen` (a
+full-page auth/session bootstrap gate, not a content region with a
+predictable shape — out of scope, named in the spec as a non-goal); any
+data-fetching, error handling, or loaded-branch logic at any of the three
+spots — presentation-only, swapping one JSX expression for another inside
+already-correct conditionals.
+
+**Tests:** `TranscriptSkeleton.test.jsx` + `HistoryListSkeleton.test.jsx`
+(1 smoke test each). `HistoryPage.jsx` had **zero** test coverage before
+this fix (a pre-existing gap predating this repo's first `apps/web` tests)
+— new `HistoryPage.test.jsx` (4 cases: skeleton while loading then real
+content; error copy unchanged, not skeleton; empty-state unchanged;
+transcript-disclosure skeleton → real lines). `LobbyPage.test.jsx`
+extended with 2 new cases (transcript skeleton → real lines; transcript
+error copy unchanged, not skeleton). RED confirmed first — the 3
+skeleton-assertion tests failed for the right reason (bare text still
+present, no `data-testid`) before the pages were touched. 35/35
+`apps/web` tests green after (was 27; +8 net new, including the
+brand-new `HistoryPage.test.jsx` file). Caught and fixed one real lint
+issue along the way (an unused `beforeEach` import in the new test file).
+
+Ran fresh from repo root under Node 22: `npm test` → 337/337 server +
+35/35 web green; `npm run lint` → clean (same 3 pre-existing
+`only-export-components` warnings, no new ones); `npm run build
+--workspace=apps/web` → clean.
+
+**Residual/verification:** guardrail #1 does not apply (no room/audio/
+transcription/attribution/feedback behavior changed, presentation-only
+around content already fetched and displayed correctly). Unlike
+BUG-SPEC-0004, **no browser-automation tool was available this session**,
+so the visual check (does the skeleton actually look right, not just
+render the right `data-testid`) was not performed — risk is low given the
+skeleton markup directly mirrors the real content's existing classes, but
+a human glance is still worth doing before calling this fully polished.
+
+**This was the last of 5/5 findings from the 2026-07-30 critique.** All
+five (`BUG-SPEC-0001` nav guard, `BUG-SPEC-0002` waiting-state exit,
+`BUG-SPEC-0003` feedback-wait polish, `BUG-SPEC-0004` button/busy-state
+consistency, `BUG-SPEC-0005` skeleton states) are now code-complete and
+merged (once this PR merges). Two items remain genuinely open, not code
+work: **BUG-SPEC-0001's guardrail #1 human-verification gate** (a real
+person clicking a nav link mid-live-session — still never done, oldest
+open item from this whole critique arc) and a general "someone should
+actually look at all five of these in a real browser" pass, since three
+of the five sessions (0001, 0002, 0003, 0005) had no browser-automation
+tool available and only 0004 got a real Playwright check.
 
 ## BUG-SPEC-0004 — button size and busy-state vocabulary consistency (2026-07-31)
 
@@ -2508,7 +2587,7 @@ settle:**
 - **DEEPGRAM_API_KEY still needs revoking in the Deepgram dashboard** — removed from this environment's `.env` (PR #51, S2) since nothing references it, but the key itself is a user action in Deepgram's console, not something this session could do.
 - **B1/B3/B4/B7 from `PILOT_READINESS.md` are still open** — deploy (Render + Cloudflare Pages + `RENDER_APP_URL`), the Supabase "Confirm email" toggle, the post-deploy Render-sleep-vs-agent-worker test, and guardrail #1's human-verification gate for the UI-redesign/live-room-UX/flows-fix body of work. All need dashboard access or real humans, not attempted this session — see "What's next" above.
 - **BUG-SPEC-0001's guardrail #1 human-verification gate is open** — the lobby nav guard (branch `fix/lobby-nav-guard-live-session`) needs a real human clicking a nav link mid-live-session to confirm the prompt actually appears and blocks/allows correctly; not attempted this session (no real room/second participant available). Don't mark this fix fully "done" until that happens.
-- **4 of 5 issues from the 2026-07-30 end-to-end UI critique are still open** — `MatchPage`/`LobbyPage` waiting-state exit affordance (P1), the under-designed post-session feedback-wait screen (P1), button/busy-state vocabulary drift (P2), missing skeleton loading states (P2). See the BUG-SPEC-0001 entry above; user approved all 5, this session did only the P0.
+- ~~4 of 5 issues from the 2026-07-30 end-to-end UI critique are still open~~ **ALL 5/5 CODE-COMPLETE 2026-07-31** — BUG-SPEC-0001 (nav guard), -0002 (waiting-state exit), -0003 (feedback-wait polish), -0004 (button/busy-state consistency), -0005 (skeleton states). See each entry above. **Not the same as "verified"**: only BUG-SPEC-0004 got a real browser check (no browser-automation tool was available in the 0001/0002/0003/0005 sessions) — a human pass over all five in an actual browser is still worth doing, and BUG-SPEC-0001's guardrail #1 gate (below) is separately still open.
 
 ## Deferred (not v1, tracked so they aren't forgotten)
 GD AI Voice Practice · JAM · Aptitude/Technical · 1-on-1 Roleplay · Drive Simulator · payments · notifications/SMS/push · analytics · advanced observability.
