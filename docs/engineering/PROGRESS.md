@@ -2,10 +2,96 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-07-30 (BUG-SPEC-0003, feedback-wait screen polish —
-see the entry directly below. Older entries, including BUG-SPEC-0002,
-BUG-SPEC-0001, and the same-day doc-sync + pilot-readiness pass, are
-preserved further down, unchanged.)
+**Last updated:** 2026-07-31 (BUG-SPEC-0004, button/busy-state consistency —
+see the entry directly below. Older entries, including BUG-SPEC-0003,
+BUG-SPEC-0002, BUG-SPEC-0001, and the 2026-07-30 doc-sync + pilot-readiness
+pass, are preserved further down, unchanged.)
+
+## BUG-SPEC-0004 — button size and busy-state vocabulary consistency (2026-07-31)
+
+Picked up per direct user instruction ("Button/busy-state vocabulary P2")
+to continue the `/impeccable critique` remediation — the first of the two
+remaining P2 findings, `docs/engineering/PROGRESS.md`'s own recorded next
+step after BUG-SPEC-0003. Branch `fix/button-busy-state-consistency` off
+`dev`, spec at
+`docs/specs/active/BUG-SPEC-0004-button-busy-state-consistency.md`.
+
+**Bug:** Every primary submit button in `apps/web/src/pages/*.jsx` was
+audited against `DESIGN.md`'s own documented `button-primary` token
+(`padding: "0.75rem 2rem"`, i.e. `py-3 px-8`). Two buttons
+(`JoinRoomPage.jsx`'s "Join room", `MatchPage.jsx`'s "Find me a group")
+used `py-6` instead — twice the documented height, exactly the drift the
+critique's "trained eye" comment named. Separately, only one button
+(`ConsentPage.jsx`'s "I have read this and agree") showed a spinner during
+its busy state; the other six primary submit buttons
+(`LoginPage`/`SignupPage`/`NewRoomPage` ×2/`JoinRoomPage`/`MatchPage`/
+`LobbyPage`'s "Start session") fell back to text-only busy copy, and one of
+those (`NewRoomPage`'s "Create room with this topic") had no busy
+indication at all despite sharing the same `busy` flag as its sibling
+button.
+
+**Fix:** New shared component,
+`apps/web/src/components/ButtonBusyLabel.jsx` — a spinner icon
+(`material-symbols-outlined animate-spin`, `aria-hidden="true"`) plus a
+label, generalizing `ConsentPage`'s pre-existing pattern into one reusable
+piece specifically so this class of drift (the same idea reimplemented
+slightly differently per page) can't quietly reoccur. All seven primary
+submit buttons now render `<ButtonBusyLabel label="…" />` in their busy
+branch instead of bare text, including `NewRoomPage`'s previously-silent
+"Create room with this topic" button (now shows "Creating…" + spinner,
+sharing the same `busy` flag as its sibling — both buttons go busy
+together, which is correct since they're two paths to the same underlying
+"a room is being created" state, not two independent actions).
+`JoinRoomPage` and `MatchPage`'s outlier `py-6` buttons are now `py-3`,
+matching every other primary button and `DESIGN.md`'s own token.
+`ConsentPage`'s existing spinner markup is refactored to the shared
+component (its accessible output is equivalent — `aria-hidden` is now
+present, an improvement, not a behavior change to what's actually
+announced as visible text).
+
+**Explicitly not touched:** any button handler, disabled condition, API
+call, or non-busy label text; `ConsentPage`'s idle-state markup (only its
+busy branch changed, via the shared component); `MatchPage`'s secondary
+give-up-state buttons and `LobbyPage`'s/`MatchPage`'s secondary "Leave"/
+"Cancel" links (not primary submit buttons, not named in the critique
+finding). The remaining 1/5 issue from the same critique (missing skeleton
+loading states, P2) is picked up next, per this file's own recorded order.
+
+**Tests:** New `ButtonBusyLabel.test.jsx` (1 case), `LoginPage.test.jsx`
+(1, new file), `SignupPage.test.jsx` (1, new file), `NewRoomPage.test.jsx`
+(2, new file — one per button, since both share `busy` and needed
+`within()` scoping to avoid ambiguity between two simultaneously-busy
+buttons in the DOM), `JoinRoomPage.test.jsx` (2, new file — spinner busy
+state, plus a `py-3`/not-`py-6` class assertion as a regression guard
+against the exact drift this fix closes). `MatchPage.test.jsx` and
+`LobbyPage.test.jsx` extended with 2 and 1 new cases respectively (busy
+spinner, plus `MatchPage`'s own `py-3`/not-`py-6` guard). 27/27
+`apps/web` tests green (was 17 before this session's new page test files;
++10 net new). `ConsentPage.jsx` still has no test file — pre-existing gap
+from before this repo's first `apps/web` tests (BUG-SPEC-0001), not
+backfilled here since its behavior is unchanged, only its internal markup
+refactored to the shared component; noted as an explicit non-goal in the
+spec rather than silently skipped.
+
+Ran fresh from repo root under Node 22: `npm test` → 337/337 server +
+27/27 web green; `npm run lint` → clean (same 3 pre-existing
+`only-export-components` warnings, no new ones); `npm run build
+--workspace=apps/web` → clean.
+
+**Residual/verification:** guardrail #1 does not apply (presentation-only,
+no room/audio/transcription/attribution/feedback behavior changed).
+Unlike BUG-SPEC-0001/2/3, this session **did** perform a real-browser
+check rather than deferring it: started the `apps/web` Vite dev server and
+drove it with Playwright/Chromium against `LoginPage` (reachable without
+authentication, unlike the room-flow pages). Confirmed the idle button is
+`44px` tall (`py-3`) and stays exactly `44px` once busy (submitted a
+deliberately-wrong credential pair against the real Supabase auth
+endpoint — harmless, no account created), with the spinner rendering
+inline next to "Signing in…" rather than growing the button or falling
+back to bare text — screenshots taken before/during the busy state
+confirm this visually, not just via the DOM. The other five buttons share
+the identical `ButtonBusyLabel` component and were not separately
+re-screenshotted (same component, same rendering, by construction).
 
 ## BUG-SPEC-0003 — post-session feedback-wait screen polish (2026-07-30)
 

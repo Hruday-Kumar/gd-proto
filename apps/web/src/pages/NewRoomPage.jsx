@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { createRoom, generateTopic, submitCustomTopic } from '../rooms/roomsApi.js';
 import { AppShell } from '../components/AppShell.jsx';
+import { ButtonBusyLabel } from '../components/ButtonBusyLabel.jsx';
 import { DurationPicker } from '../components/DurationPicker.jsx';
 
 // 10 minutes -- a pre-filled UI default only (the student can change it
@@ -72,9 +73,9 @@ export function NewRoomPage() {
             type="button"
             onClick={handleGenerate}
             disabled={busy}
-            className="mt-6 rounded-lg bg-primary py-3 text-label-md font-semibold text-on-primary shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+            className="mt-6 flex items-center justify-center gap-2 rounded-lg bg-primary py-3 text-label-md font-semibold text-on-primary shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {busy ? 'Working…' : 'Generate & create room'}
+            {busy ? <ButtonBusyLabel label="Working…" /> : 'Generate & create room'}
           </button>
         </div>
 
@@ -97,9 +98,9 @@ export function NewRoomPage() {
             <button
               type="submit"
               disabled={busy || !customText.trim()}
-              className="rounded-lg border border-primary py-3 text-label-md font-semibold text-primary transition-all hover:bg-primary-container disabled:cursor-not-allowed disabled:opacity-60"
+              className="flex items-center justify-center gap-2 rounded-lg border border-primary py-3 text-label-md font-semibold text-primary transition-all hover:bg-primary-container disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Create room with this topic
+              {busy ? <ButtonBusyLabel label="Creating…" /> : 'Create room with this topic'}
             </button>
           </form>
         </div>

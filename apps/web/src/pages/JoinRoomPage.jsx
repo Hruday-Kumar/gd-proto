@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { joinRoomByCode } from '../rooms/roomsApi.js';
 import { AppShell } from '../components/AppShell.jsx';
+import { ButtonBusyLabel } from '../components/ButtonBusyLabel.jsx';
 
 export function JoinRoomPage() {
   const { session } = useAuth();
@@ -52,9 +53,9 @@ export function JoinRoomPage() {
           <button
             type="submit"
             disabled={busy || !code.trim()}
-            className="w-full rounded-lg bg-primary py-6 text-label-md font-semibold text-on-primary shadow-sm transition-all hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary py-3 text-label-md font-semibold text-on-primary shadow-sm transition-all hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {busy ? 'Joining…' : 'Join room'}
+            {busy ? <ButtonBusyLabel label="Joining…" /> : 'Join room'}
           </button>
 
           {error && (

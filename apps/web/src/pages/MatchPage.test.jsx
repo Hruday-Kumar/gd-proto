@@ -56,3 +56,35 @@ describe('MatchPage cancel-matching affordance', () => {
     expect(screen.queryByText(/nobody else is free/i)).not.toBeInTheDocument();
   });
 });
+
+describe('MatchPage button consistency', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('uses the shared py-3 primary-button height, not the py-6 outlier', () => {
+    renderPage();
+    const button = screen.getByRole('button', { name: /find me a group/i });
+    expect(button.className).toContain('py-3');
+    expect(button.className).not.toContain('py-6');
+  });
+
+  it('shows a spinner and busy label while requesting a match', async () => {
+    let resolveMatch;
+    roomsApi.requestMatch.mockReturnValue(
+      new Promise((resolve) => {
+        resolveMatch = resolve;
+      })
+    );
+    const user = userEvent.setup();
+    renderPage();
+
+    const button = screen.getByRole('button', { name: /find me a group/i });
+    await user.click(button);
+
+    expect(await screen.findByText('Looking for a match…')).toBeInTheDocument();
+    expect(screen.getByText('progress_activity')).toBeInTheDocument();
+
+    resolveMatch({ status: 'queued' });
+  });
+});
