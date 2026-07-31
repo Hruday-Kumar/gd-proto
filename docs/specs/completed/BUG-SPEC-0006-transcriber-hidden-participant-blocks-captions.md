@@ -1,6 +1,9 @@
 # BUG-SPEC-0006 — Live captions never render because the transcriber's LiveKit token is minted `hidden: true`
 
-**Status:** Implementing
+**Status:** Done — merged (PR #65, squash-merged into `dev`,
+`4f8af6b`) and guardrail #1 verified live by the repository owner
+(2026-07-31): a real session was joined and live captions were confirmed
+rendering correctly.
 **Owner:** Claude Code (agent-assisted), autonomous incident response per direct
 user instruction ("transcription is not working in either preview or
 production")
@@ -177,9 +180,9 @@ grant-shape change beyond the one boolean.
 
 - [x] `startTranscriptionForRoom` mints the transcriber's token with
       `hidden: false` (regression test).
-- [ ] **Guardrail #1 — outstanding:** a real human, in an actual live
-      session, confirms captions now render during the session (not just
-      after, via history).
+- [x] **Guardrail #1 — verified 2026-07-31:** the repository owner joined a
+      real live session and confirmed captions now render during the
+      session (not just after, via history).
 
 ## Implementation Tasks
 
@@ -196,10 +199,9 @@ grant-shape change beyond the one boolean.
 
 - **Unit:** `apps/server/test/roomAgent.test.js` — asserts the `mintTokenFn`
   spy's grant options include `hidden: false` for the transcriber token.
-- **Manual/human verification (guardrail #1, outstanding):** join a real
-  live session as at least one student, speak, and confirm caption text
-  actually appears in `LiveRoomAudio` while the session is live (not only in
-  the post-session transcript view, which was never broken).
+- **Manual/human verification (guardrail #1) — DONE, 2026-07-31:** the
+  repository owner joined a real live session, spoke, and confirmed caption
+  text actually appeared in `LiveRoomAudio` while the session was live.
 
 ## Verification
 

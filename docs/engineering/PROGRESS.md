@@ -4,9 +4,11 @@ _Durable state so any session can resume from docs, not conversation memory._
 
 **Last updated:** 2026-07-31 (BUG-SPEC-0006, transcription-outage incident —
 see the entry directly below. Live captions were silently broken by PR #52;
-transcript persistence and feedback generation were never affected. Older
-entries, including BUG-SPEC-0005/4/3/2/1 and the 2026-07-30 doc-sync +
-pilot-readiness pass, are preserved further down, unchanged.)
+transcript persistence and feedback generation were never affected. **Fixed,
+merged (PR #65), and guardrail #1 verified live by the repository owner** —
+moved to `docs/specs/completed/`. Older entries, including BUG-SPEC-0005/4/3/2/1
+and the 2026-07-30 doc-sync + pilot-readiness pass, are preserved further
+down, unchanged.)
 
 ## BUG-SPEC-0006 — transcription-outage incident: transcriber's `hidden: true` LiveKit token silently broke live captions (2026-07-31)
 
@@ -68,12 +70,19 @@ at session start (a local install gap, not a repo defect — confirmed by
 `git stash` reproducing the same failure on unmodified `dev`); ran
 `npm install --workspace=@placeme/web` to restore it before testing.
 
-**Residual/verification — guardrail #1 applies, outstanding:** this is a
-live-caption/transcription-adjacent behavior change and is **not** done on
-tests alone. A real human still needs to join an actual live session and
-confirm captions now render on screen while speaking (not just afterward,
-via history — that path was never broken). Flagged in the BUG-SPEC and here
-rather than assumed passing.
+**Residual/verification — guardrail #1 — DONE, 2026-07-31.** The repository
+owner joined a real live session after the merge and confirmed live captions
+now render on screen while speaking. Spec moved to
+`docs/specs/completed/BUG-SPEC-0006-transcriber-hidden-participant-blocks-captions.md`.
+
+**Lesson recorded** in `docs/engineering/LESSONS.md`'s LiveKit entry: a
+`hidden: true` token is invisible to every other client's `RoomEvent.
+DataReceived` sender resolution too, not just the participant list — the
+two (identity authentication vs. staying invisible) are mutually exclusive.
+Also recorded there: a layered debugging playbook (provider creds → health
+endpoint + direct DB query → PR bisection) for future "transcription isn't
+working" reports, since this one initially looked like a full outage but
+was actually an isolated, 100%-reproducible client-side display bug.
 
 ## BUG-SPEC-0005 — skeleton loading states (2026-07-31)
 

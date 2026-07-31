@@ -54,6 +54,40 @@ on top of that open-source core.
   connects independently), so this failed **silently** from a student's
   point of view. Fixed by wrapping `room.connect()` in a bounded retry
   (`domain/retry.js`, 3 attempts / 1s backoff by default).
+- **A token minted `hidden: true` is invisible to every *other* client, not
+  just absent from the participant list — including for the browser SDK's
+  own `RoomEvent.DataReceived` sender resolution** (confirmed live,
+  2026-07-31, `docs/specs/active/BUG-SPEC-0006-*.md`). Our transcriber agent
+  has always joined `hidden: true` so it wouldn't show up as a "person" to
+  students. That was harmless until a security fix (N13, PR #52) started
+  requiring the browser SDK's `RoomEvent.DataReceived` `participant`
+  argument to authenticate the caption sender — but a hidden participant's
+  identity is never added to another client's local `remoteParticipants`
+  map (per `@livekit/protocol`'s own doc comment on `ParticipantInfo.hidden`:
+  "indicates that it's hidden to others"), so that argument was always
+  `undefined` and every live caption was silently dropped, even though
+  transcription/attribution/feedback (all server-side) kept working
+  perfectly. **Symptom looked like a transcription outage but wasn't one** —
+  `/health/agent`'s `dispatchSuccesses` and the DB's own `transcript_lines`/
+  `feedback` rows stayed healthy throughout, because `hidden` only affects
+  what *other clients* can see, not the agent's own connection or server-
+  side processing. If a bot/agent participant's identity ever needs to be
+  authenticated client-side (data messages, active-speaker state, etc.), it
+  cannot be minted `hidden: true` — the two are mutually exclusive. Fixed by
+  minting the transcriber `hidden: false` (confirmed safe here since this
+  app's own participant list UI is DB-backed, not LiveKit-derived).
+- **Debugging playbook for "transcription isn't working" reports going
+  forward:** check the layers in order rather than guessing which PR broke
+  it — (1) provider credentials/quota (a real WebSocket handshake to
+  AssemblyAI, or checking LiveKit dispatch success independently costs
+  seconds and rules out two entire categories at once); (2) the live
+  `/health/agent` endpoint and a direct query of the most recent room's
+  `transcript_lines`/`feedback` rows against the real Supabase project --
+  this tells you *which stage* is actually broken (dispatch vs. persistence
+  vs. display) before reading a single line of diff; (3) only then bisect
+  the recent PRs, and only the ones that touch the specific broken stage.
+  Backend-healthy-but-UI-silent is a strong signal to look at the client
+  code path first, not the server.
 
 ---
 
