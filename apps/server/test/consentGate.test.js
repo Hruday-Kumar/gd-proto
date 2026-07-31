@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { createConsentGate } from '../src/api/consentGate.js';
+import { createConsentGate } from '../src/api/middleware/consentGate.js';
 import { CURRENT_CONSENT_VERSION } from '../src/domain/consent.js';
 
 function appWithGate(getLatestConsent) {

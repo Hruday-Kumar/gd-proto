@@ -19,5 +19,5 @@ transcripts, or unnecessary student identifiers into a ticket or chat.
 | Live pilot session | `pilot-monitoring.md` |
 
 For a SEV-1 or SEV-2 event, invoke the Incident Commander and
-`$placeme-incident`; use `templates/incident-report.md`.
+`$placeme-incident`; use `docs/templates/incident-report.md`.
 

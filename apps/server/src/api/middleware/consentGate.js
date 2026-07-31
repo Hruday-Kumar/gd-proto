@@ -1,4 +1,4 @@
-import { canEnableMic } from '../domain/consent.js';
+import { canEnableMic } from '../../domain/consent.js';
 
 // The composable form of guardrail #3: mount this in front of any route
 // that lets a client into a mic-enabled room. W5's real LiveKit token mint

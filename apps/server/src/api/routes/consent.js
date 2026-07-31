@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { CURRENT_CONSENT_VERSION, canEnableMic } from '../domain/consent.js';
+import { CURRENT_CONSENT_VERSION, canEnableMic } from '../../domain/consent.js';
 
 // W3 (guardrail #3): lets a student record consent and check their current
 // status. Recording is append-only (see the migration's RLS policy) — a new

@@ -29,5 +29,5 @@ transcripts in an incident record or shared screenshot.
 - **SEV-3:** limited degradation with a documented workaround and no privacy or
   integrity risk.
 
-Use `templates/incident-report.md`, `templates/post-mortem.md`, and
+Use `docs/templates/incident-report.md`, `docs/templates/post-mortem.md`, and
 `$placeme-incident` for incidents.

@@ -6,7 +6,7 @@
 // every other response in this API uses, and nothing is logged anywhere
 // the team would actually see it during a live pilot session.
 import { describe, it, expect, vi } from 'vitest';
-import { createErrorHandler } from '../src/api/errorHandler.js';
+import { createErrorHandler } from '../src/api/middleware/errorHandler.js';
 
 function buildRes() {
   const res = { statusCode: null, body: null, headersSent: false };

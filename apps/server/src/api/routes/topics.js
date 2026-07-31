@@ -1,7 +1,7 @@
 import { Router } from 'express';
-import { generateTopic } from '../llm/geminiClient.js';
-import { createLlmRateLimiter, createRoomActionRateLimiter } from './rateLimit.js';
-import { isValidCustomTopicText, MAX_CUSTOM_TOPIC_LENGTH } from '../domain/topicText.js';
+import { generateTopic } from '../../llm/geminiClient.js';
+import { createLlmRateLimiter, createRoomActionRateLimiter } from '../middleware/rateLimit.js';
+import { isValidCustomTopicText, MAX_CUSTOM_TOPIC_LENGTH } from '../../domain/topicText.js';
 
 // W4: custom topic entry + Gemini-generated topics. Custom topics are
 // attributed to the student who entered them; generated topics have no

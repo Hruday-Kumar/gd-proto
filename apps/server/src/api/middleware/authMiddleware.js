@@ -1,5 +1,5 @@
 import { createRemoteJWKSet } from 'jose';
-import { createTokenVerifier } from '../domain/verifyToken.js';
+import { createTokenVerifier } from '../../domain/verifyToken.js';
 
 // Every protected route sits behind this — see PHASE1_PLAN.md W2. Building
 // the JWKS resolver here (once, at middleware-creation time) rather than

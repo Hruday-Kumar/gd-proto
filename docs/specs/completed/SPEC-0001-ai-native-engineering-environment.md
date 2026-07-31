@@ -49,7 +49,7 @@ project-focused selection policy.
 
 Root context files provide short entry points; `ENGINEERING.md` owns lifecycle
 policy; `docs/` owns durable specifications, architecture, decisions, runbooks,
-operations, and pilot evidence; `templates/` owns reusable artifacts;
+operations, and pilot evidence; `docs/templates/` owns reusable artifacts;
 `.github/agents` and `.github/skills/placeme-*` own focused AI workflows.
 Existing documents remain in place and are indexed from the new structure.
 

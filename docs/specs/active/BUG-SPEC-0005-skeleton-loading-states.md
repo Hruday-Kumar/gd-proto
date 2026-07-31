@@ -53,7 +53,7 @@ every single time regardless of how fast the network is.
 **Evidence:** Source read of `apps/web/src/pages/HistoryPage.jsx` and
 `apps/web/src/pages/LobbyPage.jsx`; cross-checked against
 `reference/product.md`'s "Skeleton states for loading, not spinners in
-the middle of content" rule and `templates/bug-fix-specification.md`.
+the middle of content" rule and `docs/templates/bug-fix-specification.md`.
 
 ## Goals
 

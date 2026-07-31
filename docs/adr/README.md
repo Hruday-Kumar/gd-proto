@@ -6,7 +6,7 @@ directory layout.
 
 For a new decision:
 
-1. Copy `templates/architecture-decision-record.md` here.
+1. Copy `docs/templates/architecture-decision-record.md` here.
 2. Use the next four-digit sequence and a short slug, for example
    `0010-provider-failover.md`.
 3. Set status to `Proposed`, obtain design/security review, then mark it

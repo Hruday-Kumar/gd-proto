@@ -20,7 +20,7 @@ attribution.** The server subscribes to each participant's audio track separatel
 attribution is structural, not inferred by diarization. That's what makes individual
 feedback possible in a group setting.
 
-**[E]** The full product vision (`PlaceMe_Product_Context_v2.md`) is much larger than
+**[E]** The full product vision (`PRODUCT_CONTEXT.md`) is much larger than
 v1 — five pieces: GD Arena (multiplayer + AI-voice), JAM, Aptitude/Technical tests,
 1-on-1 Roleplay Interviews, and the "crown jewel" **Drive Simulator** (paste a real
 company's JD + round structure the night before a drive, get a stitched end-to-end
@@ -153,7 +153,7 @@ with real students in a live room. That asymmetry should shape the launch plan.
 **[E]** No `TODO`/`FIXME` comments in code — the discipline is high. The roadmap lives
 in docs:
 
-- **Roadmap:** `PlaceMe_Product_Context_v2.md` build order → GD Multiplayer → GD AI
+- **Roadmap:** `PRODUCT_CONTEXT.md` build order → GD Multiplayer → GD AI
   Voice → JAM/Aptitude/Roleplay → Drive Simulator.
 - **Open blockers, updated 2026-07-29 (most of the 07-27 list is now closed — see
   `PROGRESS.md`/`PLAN.md` §6 for the full verification record):**

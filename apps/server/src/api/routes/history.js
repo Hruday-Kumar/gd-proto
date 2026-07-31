@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { buildSessionHistory } from '../domain/sessionHistory.js';
+import { buildSessionHistory } from '../../domain/sessionHistory.js';
 
 // W7 (Session history): a student's own past sessions -- topic, date,
 // status, and their own feedback. Scoped to req.userId throughout (never a
