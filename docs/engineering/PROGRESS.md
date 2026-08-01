@@ -2,10 +2,84 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-08-01 (BE-8 score trend — see the entry directly
+**Last updated:** 2026-08-01 (BE-9 aggregate stats — see the entry directly
 below. Older entries, including this same day's BE-1/BE-2/BE-3/BE-4/BE-6/
-BE-7/BE-19/BE-10/BE-14 work and the 2026-07-31 M5/N8 close-out +
+BE-7/BE-19/BE-10/BE-14/BE-8 work and the 2026-07-31 M5/N8 close-out +
 BUG-SPEC-0001 E2E test, are preserved further down, unchanged.)
+
+## BE-9 — aggregate stats: streak, avg score, speak-time % (2026-08-01)
+
+Fourth of the planned batch (BE-10 → BE-14 → BE-8 → **BE-9** → BE-5, last).
+Spec at `docs/specs/active/SPEC-0009-be-9-aggregate-stats.md`, branch
+`feat/be-9-aggregate-stats` off `dev`.
+
+**Unlike BE-8 (fully client-side), this one needed a real backend
+addition**: "avg score" and "streak" are computable from data
+`GET /api/history/mine` already returns, but "speak-time %" isn't — BE-10
+only put `talkShare` on `GET /api/rooms/:id/participants` (every
+participant of *one* room), not the caller's own share across *many*
+history rooms.
+
+**Change:** `db/transcriptLines.js`'s new `listTranscriptLinesForRooms` —
+one batched query across every room in a student's history
+(`.in('room_id', roomIds)`), not one query per room, own explicit
+`MAX_HISTORY_TRANSCRIPT_LINES` ceiling (same batch-don't-loop lesson
+BE-1/BE-10 already established, and the same M9 "don't rely solely on an
+upstream caller's bound" lesson from BE-10's own `listParticipantsForRooms`).
+`domain/talkTime.js`'s new `computeMyTalkShareByRoom` groups that flat,
+multi-room line list by `room_id` and reuses BE-10's existing
+`computeTalkTimeShares` per room, with the caller's id explicitly seeded
+into the participant set so a room where they were silent reports a real
+`0` rather than being indistinguishable from a room with no transcript at
+all (which simply has no entry in the returned map — `sessionHistory.js`
+maps that absence to `null`, never a fabricated `0`, same rule already
+governing `score`). `db/feedback.js` untouched; only three files changed
+in `apps/server`'s application code beyond the two new domain/db
+functions: `sessionHistory.js` (third parameter), `history.js` (one more
+parallel fetch), and their tests.
+
+`place-me-UI`: `HistorySession` gains `talkShare`. `history.tsx` and
+`index.tsx` each gained `average()` and `computeStreak()` (duplicated
+per-file, same precedent as `toSessionRow`/`buildScoreTrend` already
+established for small page-local helpers over a shared module) and now
+render real Sessions/Avg. score/Speak time/Streak tiles — no `delta`
+comparison text, since that's a period-over-period feature this item
+doesn't ask for and `StatCard`'s `delta` prop is already optional.
+`index.tsx`'s home-page greeting subtitle ("You're on a 12-day streak. Two
+rooms match your practice level right now.") is now real for the streak
+half; the "level-matched rooms" clause was dropped rather than kept
+fake — no backend item computes that count, and inventing one wasn't in
+scope here. Streak semantics: consecutive calendar days with at least one
+`ended` session, counted as still active through the end of the day after
+the most recent practiced day (standard habit-tracker semantics, not
+reset to 0 just because today hasn't happened yet) — a genuine design
+choice with no prior spec, documented in code and in `SPEC-0009` rather
+than silently picked.
+
+**Tests:** RED confirmed first across three files — 4 new
+`talkTime.test.js` cases (module function didn't exist), 2
+`sessionHistory.test.js` changes (one extended assertion, one new case),
+1 new `historyApi.test.js` case — all failing for the right reasons
+before implementing. GREEN after: full suite fresh under Node 22
+(`npm test --workspace=@placeme/server`) — **421/421 passed**, 2 skipped
+(BE-14's guard, unrelated). `npx oxlint apps/server/src apps/server/test`
+clean (2 pre-existing, unrelated warnings). `place-me-UI`: `npx eslint`
+clean, `npm run build` clean (Node 22).
+
+**Residual/open:**
+- Branch not yet pushed or PR'd at the time of writing.
+- Guardrail #1 does not apply — presentation/aggregation only, no new
+  room/audio/transcription/attribution/feedback behavior.
+- Depends on `gd-proto`'s migration `0017` (BE-6/BE-7) being live for
+  "Avg. score" to show anything but a placeholder; `talkShare` itself
+  needs no migration (transcript_lines already had the needed columns,
+  same as BE-10).
+- No manual click-through against a real multi-session account yet.
+- **Last item in this planned batch is BE-5** (match preferences +
+  BE-4's deferred level-filter) — the riskiest, since it touches
+  `domain/matchmaking.js`'s pure, tested, race-sensitive core. Worth a
+  fresh look at scope/design before starting, not just implementing on
+  autopilot.
 
 ## BE-8 — score trend over time (2026-08-01)
 

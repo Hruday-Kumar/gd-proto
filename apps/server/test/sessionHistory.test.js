@@ -55,6 +55,7 @@ describe('buildSessionHistory', () => {
         dimensions: [],
         strengths: [],
         improvements: [],
+        talkShare: null,
       },
       {
         id: 'r1',
@@ -69,8 +70,24 @@ describe('buildSessionHistory', () => {
         dimensions,
         strengths: ['Clear opening.'],
         improvements: ['Invite others in more.'],
+        talkShare: null,
       },
     ]);
+  });
+
+  // BE-9 (place-me-UI/docs/BACKEND_REQUIREMENTS.md, SPEC-0009): the
+  // caller's own per-room talk-time share, threaded through as a third,
+  // optional parameter -- a room absent from the map (no transcript at
+  // all) reports null, never a fabricated 0.
+  it('attaches talkShare from the given map, or null when a room is absent from it', () => {
+    const rooms = [
+      { id: 'r1', code: 'CODE1', status: 'ended', duration_seconds: 300, started_at: null, ended_at: null, topics: null },
+      { id: 'r2', code: 'CODE2', status: 'ended', duration_seconds: 300, started_at: null, ended_at: null, topics: null },
+    ];
+    const talkShareByRoomId = new Map([['r1', 42]]);
+    const history = buildSessionHistory(rooms, [], talkShareByRoomId);
+    expect(history[0].talkShare).toBe(42);
+    expect(history[1].talkShare).toBeNull();
   });
 
   it('reports feedback: null (not a missing key) for a room still awaiting generation', () => {
@@ -85,6 +102,7 @@ describe('buildSessionHistory', () => {
     expect(history[0].dimensions).toEqual([]);
     expect(history[0].strengths).toEqual([]);
     expect(history[0].improvements).toEqual([]);
+    expect(history[0].talkShare).toBeNull();
   });
 
   it('returns an empty list for a student with no sessions', () => {

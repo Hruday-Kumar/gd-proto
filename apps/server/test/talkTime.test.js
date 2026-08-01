@@ -3,10 +3,10 @@
 // total attributed speaking time. Kept pure/storage-agnostic, same reason
 // domain/sessionHistory.js and domain/roomListing.js are.
 import { describe, it, expect } from 'vitest';
-import { computeTalkTimeShares } from '../src/domain/talkTime.js';
+import { computeTalkTimeShares, computeMyTalkShareByRoom } from '../src/domain/talkTime.js';
 
-function line(userId, startedAtMs, endedAtMs) {
-  return { user_id: userId, started_at_ms: startedAtMs, ended_at_ms: endedAtMs };
+function line(userId, startedAtMs, endedAtMs, roomId = 'r1') {
+  return { room_id: roomId, user_id: userId, started_at_ms: startedAtMs, ended_at_ms: endedAtMs };
 }
 
 describe('computeTalkTimeShares', () => {
@@ -55,5 +55,40 @@ describe('computeTalkTimeShares', () => {
     const shares = computeTalkTimeShares(lines, ['a', 'b']);
     expect(shares.get('a')).toBe(0);
     expect(shares.get('b')).toBe(0);
+  });
+});
+
+// BE-9 (place-me-UI/docs/BACKEND_REQUIREMENTS.md, SPEC-0009): GET
+// /api/history/mine's per-session "my own talk share" -- a flat,
+// multi-room line list (one batched query, not one per room) grouped and
+// reduced to a single caller-scoped percentage per room.
+describe('computeMyTalkShareByRoom', () => {
+  it('computes the given user\'s share per room from a flat multi-room line list', () => {
+    const lines = [
+      line('me', 0, 2000, 'room-1'),
+      line('other', 2000, 3000, 'room-1'),
+      line('me', 0, 1000, 'room-2'),
+      line('other', 1000, 4000, 'room-2'),
+    ];
+    const shares = computeMyTalkShareByRoom(lines, 'me');
+    expect(shares.get('room-1')).toBe(67);
+    expect(shares.get('room-2')).toBe(25);
+  });
+
+  it('gives the caller an explicit 0, not an absence, for a room where they never spoke', () => {
+    const lines = [line('other', 0, 1000, 'room-1')];
+    const shares = computeMyTalkShareByRoom(lines, 'me');
+    expect(shares.get('room-1')).toBe(0);
+  });
+
+  it('has no entry at all for a room with zero transcript lines', () => {
+    const lines = [line('me', 0, 1000, 'room-1')];
+    const shares = computeMyTalkShareByRoom(lines, 'me');
+    expect(shares.has('room-2')).toBe(false);
+  });
+
+  it('returns an empty map for an empty line list', () => {
+    const shares = computeMyTalkShareByRoom([], 'me');
+    expect(shares.size).toBe(0);
   });
 });

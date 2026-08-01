@@ -20,3 +20,29 @@ export function computeTalkTimeShares(transcriptLines, participantUserIds) {
   }
   return shareByUserId;
 }
+
+// BE-9 (place-me-UI/docs/BACKEND_REQUIREMENTS.md, SPEC-0009): GET
+// /api/history/mine's "my own talk share" per past session -- takes a
+// flat, multi-room line list (one batched query across every history
+// room, not one query per room) and reduces it to a single caller-scoped
+// percentage per room_id. userId is included in each room's participant
+// set explicitly, so a room where the caller was silent still reports a
+// real 0 rather than being indistinguishable from "no transcript at all"
+// (a room absent from the input entirely simply has no entry in the
+// returned map -- the route layer maps that to null, never a fabricated
+// 0, same rule already applied to `score`).
+export function computeMyTalkShareByRoom(transcriptLines, userId) {
+  const linesByRoomId = new Map();
+  for (const line of transcriptLines) {
+    if (!linesByRoomId.has(line.room_id)) linesByRoomId.set(line.room_id, []);
+    linesByRoomId.get(line.room_id).push(line);
+  }
+
+  const shareByRoomId = new Map();
+  for (const [roomId, lines] of linesByRoomId) {
+    const participantIds = [...new Set([userId, ...lines.map((l) => l.user_id)])];
+    const shares = computeTalkTimeShares(lines, participantIds);
+    shareByRoomId.set(roomId, shares.get(userId) ?? 0);
+  }
+  return shareByRoomId;
+}

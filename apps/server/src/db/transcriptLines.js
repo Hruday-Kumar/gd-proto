@@ -43,3 +43,22 @@ export async function listTranscriptLinesForRoom(roomId, { supabase = getSupabas
   if (error) throw error;
   return data;
 }
+
+// BE-9 (place-me-UI/docs/BACKEND_REQUIREMENTS.md, SPEC-0009): one batched
+// query across every room in a student's history, not one query per room
+// (the same batch-don't-loop lesson BE-1/BE-10 already established) --
+// backs GET /api/history/mine's per-session talk-share. No `text` in the
+// projection: this path only ever needs timing to compute a percentage,
+// never the spoken content, so it isn't selected.
+const MAX_HISTORY_TRANSCRIPT_LINES = 20000;
+
+export async function listTranscriptLinesForRooms(roomIds, { supabase = getSupabase() } = {}) {
+  if (!roomIds.length) return [];
+  const { data, error } = await supabase
+    .from('transcript_lines')
+    .select('room_id, user_id, started_at_ms, ended_at_ms')
+    .in('room_id', roomIds)
+    .limit(MAX_HISTORY_TRANSCRIPT_LINES);
+  if (error) throw error;
+  return data ?? [];
+}
