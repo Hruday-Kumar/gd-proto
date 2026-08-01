@@ -2,10 +2,37 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-08-01 (BE-6/BE-7 structured feedback — see the entry
+**Last updated:** 2026-08-01 (BE-19 score-badge wiring — see the entry
 directly below. Older entries, including this same day's BE-1/BE-2/BE-3/
-BE-4 work and the 2026-07-31 M5/N8 close-out + BUG-SPEC-0001 E2E test, are
-preserved further down, unchanged.)
+BE-4/BE-6/BE-7 work and the 2026-07-31 M5/N8 close-out + BUG-SPEC-0001 E2E
+test, are preserved further down, unchanged.)
+
+## BE-19 — "Analyzed" badge → real score (2026-08-01)
+
+Checked per direct user instruction whether this item, which its own doc
+entry claimed "resolves automatically once BE-6 ships," was actually done
+now that BE-6/BE-7 (immediately above) merged. It wasn't — `GET
+/api/history/mine` returning a real `score` server-side wasn't sufficient
+by itself.
+
+**Change, `place-me-UI` only, no `gd-proto` code:** `src/lib/api.ts`'s
+`HistorySession` type gained `score: number | null`; both `toSessionRow`
+mappers (`history.tsx`, `index.tsx`) now pass `score: s.score ?? undefined`
+through instead of only ever setting `status: "Analyzed" | "Processing"`.
+`components/pm/blocks.tsx`'s `SessionRow` needed **no change** — whoever
+built it already wrote the right fallback logic ahead of time (`s.score !=
+null ? <PmBadge>{s.score}</PmBadge> : ...Analyzed`), anticipating exactly
+this. "Analyzed" is now a genuine fallback (feedback exists, score
+doesn't — e.g. a pre-migration row) rather than the everyday case.
+`BACKEND_REQUIREMENTS.md`'s BE-19 entry corrected to note the "automatic"
+prediction was wrong and explain what actually shipped.
+
+**Verification:** `npx eslint` clean, `npm run build` clean (Node 22). No
+`gd-proto` server tests affected (nothing there changed). **Not visibly
+live yet** — depends on migration `0017` (BE-6/BE-7) being applied to the
+live Supabase project; until then `GET /api/history/mine` still returns
+`score: null` for every row and the fallback path is all that's ever
+seen.
 
 ## BE-6/BE-7 — structured feedback (numeric score + per-dimension rubric) (2026-08-01)
 
