@@ -2,10 +2,101 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-08-01 (BE-4 room level — see the entry directly
-below. Older entries, including this same day's BE-1/BE-2/BE-3 work and the
-2026-07-31 M5/N8 close-out + BUG-SPEC-0001 E2E test, are preserved further
-down, unchanged.)
+**Last updated:** 2026-08-01 (BE-6/BE-7 structured feedback — see the entry
+directly below. Older entries, including this same day's BE-1/BE-2/BE-3/
+BE-4 work and the 2026-07-31 M5/N8 close-out + BUG-SPEC-0001 E2E test, are
+preserved further down, unchanged.)
+
+## BE-6/BE-7 — structured feedback (numeric score + per-dimension rubric) (2026-08-01)
+
+Picked up directly per user instruction, ahead of the remaining P1 order
+(BE-5/8/9/10/14/19) — `place-me-UI`'s feedback UI (`ended.$roomId.tsx`)
+already renders a `ScoreRing`, a 5-dimension `ScoreBar` rubric, and
+strengths/improvements lists against hardcoded mock data, while
+`domain/feedbackPrompt.js` explicitly told Gemini to reply with "a single
+plain paragraph. No numeric scores." Spec at
+`docs/specs/active/SPEC-0006-be-6-be-7-feedback-structured-output.md`,
+branch `feat/be-6-be-7-feedback-structured-output` off `dev`.
+
+**Guardrail #1 applies directly to this change** (it's feedback-content
+behavior, not adjacent to it) — flagged to the user before starting, and
+restated here: this cannot be called done on tests alone. A real human
+must read actual generated feedback from a real session, including a
+genuinely low-scoring one, and confirm it still reads as specific and
+non-discouraging, not just that the JSON parses. **That verification has
+not happened yet.**
+
+**Change:** `buildFeedbackPrompt` requests Gemini's structured-output mode
+(`generationConfig.responseMimeType`/`responseSchema`, wired in
+`llm/geminiClient.js`) instead of free prose — an overall 0–100 score, a
+fixed 5-dimension rubric (`FEEDBACK_DIMENSION_LABELS`: Content depth /
+Clarity / Confidence / Listening / Fluency, matching `place-me-UI`'s
+existing mock exactly so the frontend never sees an unknown label), 2–3
+strengths, 2–3 improvements, and a short prose summary. The "never
+discouraging" instruction wasn't just carried over — it's stated more
+strongly for the new numeric fields specifically: *"A low score must still
+read as specific and actionable, not harsh -- explain what to do
+differently, never just that something was bad."* `parseFeedbackResponse`
+validates the full shape defensively (score range, exact dimension count/
+labels/order, non-empty strings, a max list length) before anything
+reaches the DB or a student — a malformed reply fails loudly as that one
+student's generation error (the existing per-student isolation in
+`domain/feedbackGeneration.js`), never a corrupted row.
+
+`domain/feedbackGeneration.js`'s transcription-failed stub was updated to
+match the new shape with `score: null` and empty arrays rather than a
+fabricated `0` — the same guardrail-#1 reasoning that already covered the
+prose case ("this isn't a reflection of your participation") now covers
+the numeric fields too, so a caller can't accidentally render a real-
+looking low score for a session with no evidence behind it.
+`agent/feedbackWorker.js`'s persistence call unpacks the structured result
+into the four new `feedback` columns; `body` keeps its existing name and
+meaning (the prose summary), not renamed. `GET /api/rooms/:id/feedback/mine`
+and `GET /api/history/mine` (`domain/sessionHistory.js`) return the new
+fields additively — `feedback: string|null` is unchanged, so any existing
+caller reading only that key keeps working untouched. `place-me-UI`'s
+`ended.$roomId.tsx` wiring to the real fields (removing its `feedbackScores`/
+`feedbackStrengths`/`feedbackImprovements` mock imports) was done in the
+same pass — see that repo's own history for the frontend side, not
+duplicated here. Migration `0017_feedback_structured_output.sql` adds
+`feedback.score integer` (+ a 0–100 `CHECK`) and
+`dimensions`/`strengths`/`improvements jsonb not null default '[]'` — no
+RLS change, `feedback` has no client-writable policy today and these
+columns don't need one either. **Not yet applied to the live Supabase
+project.**
+
+**A repo-hygiene note from this same session, recorded so it isn't
+repeated:** partway through this work, BE-4's own documentation got left
+stranded uncommitted/stashed while this item's code was started in the
+same working tree, and a `feat/be-4-room-level`/`feat/be-6-be-7-...`
+branch-switching mix-up briefly made it look like work had gone missing
+(it hadn't — `git stash list` and `git reflog` fully accounted for
+everything once checked carefully). BE-4 was finished and merged (PR #76)
+before returning to this branch. This branch itself forked from `dev`
+*before* BE-1 and BE-4 merged, so it needed a rebase onto current `dev`
+(resolving a small, expected conflict in this file's own migration table
+and §5f section) before its own PR — done as part of wrapping this up.
+
+**Tests:** 392/392 passing on this branch's pre-rebase base (full suite
+not yet re-run post-rebase at the time of writing this entry — see the PR
+itself for the final confirmed count). RED/GREEN discipline followed per
+commit message narration (`feedbackPrompt.test.js`/`geminiClient.test.js`/
+`feedbackGeneration.test.js`/`feedbackWorker.test.js`/`sessionHistory.test.js`/
+`historyApi.test.js`/`roomsApi.test.js` all extended).
+
+**Residual/open:**
+- **Guardrail #1's human-verification gate is the main open item** — not
+  optional, not a formality, given this changes what students actually
+  read about their own performance.
+- Migration `0017` not yet applied to the live Supabase project — blocks
+  `main` promotion, not `dev` merges.
+- `BACKEND_REQUIREMENTS.md`'s BE-6/BE-7/BE-19 entries not yet updated to
+  reflect this (BE-19 in particular "resolves automatically once BE-6
+  ships," per its own existing text — worth confirming that's actually
+  true once this is live).
+- `apps/web` (`gd-proto`'s other, currently-shipping frontend) is
+  unaffected by design — same `feedback` string, no visual change there;
+  explicitly flagged in the spec as an open scope question, not decided.
 
 ## BE-4 — room level, room-creation half only (2026-08-01)
 

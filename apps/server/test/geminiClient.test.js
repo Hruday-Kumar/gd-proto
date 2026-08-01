@@ -111,8 +111,28 @@ describe('generateTopic', () => {
 // (domain/feedbackGeneration.js builds it per student) rather than
 // structured filters -- it's the raw `generate(prompt)` shape the
 // orchestrator calls directly.
+//
+// SPEC-0006 (BE-6/BE-7): feedback is now structured JSON, so the fake
+// Gemini response text must itself be a JSON string (parseFeedbackResponse
+// parses+validates it), and the request body must carry generationConfig's
+// responseMimeType/responseSchema so Gemini's structured-output mode is
+// actually requested, not just hoped for via prompt wording.
 describe('generateFeedback', () => {
   const prompt = 'Write feedback only for Asha based on this transcript...';
+
+  function fakeFeedbackJsonResponse() {
+    return JSON.stringify({
+      summary: 'You stayed on topic and let others speak.',
+      score: 82,
+      dimensions: ['Content depth', 'Clarity', 'Confidence', 'Listening', 'Fluency'].map((label) => ({
+        label,
+        score: 80,
+        note: 'Specific note.',
+      })),
+      strengths: ['Clear opening.'],
+      improvements: ['Invite others in more.'],
+    });
+  }
 
   it('throws when no API key is configured', async () => {
     await expect(generateFeedback(prompt, { apiKey: undefined, fetchImpl: fakeFetchOk('x') })).rejects.toThrow(
@@ -120,13 +140,27 @@ describe('generateFeedback', () => {
     );
   });
 
-  it('calls the configured model endpoint with the given prompt and returns the parsed text', async () => {
-    const fetchImpl = fakeFetchOk('You stayed on topic and let others speak.');
+  it('calls the configured model endpoint with the given prompt and returns the parsed structured feedback', async () => {
+    const fetchImpl = fakeFetchOk(fakeFeedbackJsonResponse());
     const result = await generateFeedback(prompt, { apiKey: 'test-key', fetchImpl });
-    expect(result).toBe('You stayed on topic and let others speak.');
+    expect(result.summary).toBe('You stayed on topic and let others speak.');
+    expect(result.score).toBe(82);
+    expect(result.dimensions).toHaveLength(5);
     const [url, options] = fetchImpl.mock.calls[0];
     expect(url).toContain(DEFAULT_GEMINI_MODEL);
     expect(JSON.parse(options.body).contents[0].parts[0].text).toBe(prompt);
+  });
+
+  it('requests Gemini JSON mode with the feedback response schema', async () => {
+    const fetchImpl = fakeFetchOk(fakeFeedbackJsonResponse());
+    await generateFeedback(prompt, { apiKey: 'test-key', fetchImpl });
+    const [, options] = fetchImpl.mock.calls[0];
+    const body = JSON.parse(options.body);
+    expect(body.generationConfig.responseMimeType).toBe('application/json');
+    expect(body.generationConfig.responseSchema).toBeTruthy();
+    expect(body.generationConfig.responseSchema.required).toEqual(
+      expect.arrayContaining(['summary', 'score', 'dimensions', 'strengths', 'improvements'])
+    );
   });
 
   it('throws a descriptive error when the API responds with a non-OK status', async () => {

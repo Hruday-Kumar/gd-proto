@@ -897,7 +897,39 @@ describe('GET /api/rooms/:id/feedback/mine', () => {
     const app = buildApp(deps);
     const res = await request(app).get('/api/rooms/r1/feedback/mine');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ feedback: 'You stayed on topic throughout.' });
+    // SPEC-0006 (BE-6/BE-7): a pre-migration/pre-structured row has no
+    // score/dimensions/strengths/improvements -- these must default to
+    // null/[] rather than being omitted or crashing the route.
+    expect(res.body).toEqual({
+      feedback: 'You stayed on topic throughout.',
+      score: null,
+      dimensions: [],
+      strengths: [],
+      improvements: [],
+    });
+  });
+
+  it("returns the caller's own structured score/rubric/strengths/improvements once generated", async () => {
+    const dimensions = [{ label: 'Content depth', score: 80, note: 'Backed a claim.' }];
+    const deps = baseDeps({
+      getFeedbackForRoomAndUserFn: vi.fn().mockResolvedValue({
+        body: 'You stayed on topic throughout.',
+        score: 82,
+        dimensions,
+        strengths: ['Clear opening.'],
+        improvements: ['Invite others in more.'],
+      }),
+    });
+    const app = buildApp(deps);
+    const res = await request(app).get('/api/rooms/r1/feedback/mine');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      feedback: 'You stayed on topic throughout.',
+      score: 82,
+      dimensions,
+      strengths: ['Clear opening.'],
+      improvements: ['Invite others in more.'],
+    });
   });
 
   it('looks up feedback scoped to the caller, not just the room', async () => {
@@ -913,7 +945,15 @@ describe('GET /api/rooms/:id/feedback/mine', () => {
     });
     const app = buildApp(deps);
     const res = await request(app).get('/api/rooms/r1/feedback/mine');
-    expect(res.body).toEqual({ feedback: 'Good pacing.', rating: true, ratingReason: 'Specific and kind' });
+    expect(res.body).toEqual({
+      feedback: 'Good pacing.',
+      score: null,
+      dimensions: [],
+      strengths: [],
+      improvements: [],
+      rating: true,
+      ratingReason: 'Specific and kind',
+    });
   });
 });
 

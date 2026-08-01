@@ -423,6 +423,13 @@ export function createRoomsRouter(requireAuth, deps) {
     if (!feedback) return res.status(200).json({ feedback: null });
     res.status(200).json({
       feedback: feedback.body,
+      // SPEC-0006 (BE-6/BE-7): default to null/[] rather than omitting --
+      // a pre-migration row or the transcription-failed stub has none of
+      // these, and a caller must never render a missing score as 0.
+      score: feedback.score ?? null,
+      dimensions: feedback.dimensions ?? [],
+      strengths: feedback.strengths ?? [],
+      improvements: feedback.improvements ?? [],
       ...(feedback.rating !== undefined ? { rating: feedback.rating, ratingReason: feedback.rating_reason } : {}),
     });
   });

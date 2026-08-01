@@ -79,6 +79,10 @@ describe('GET /api/history/mine', () => {
           startedAt: '2026-07-26T10:00:00.000Z',
           endedAt: '2026-07-26T10:05:00.000Z',
           feedback: 'You stayed on topic throughout.',
+          score: null,
+          dimensions: [],
+          strengths: [],
+          improvements: [],
         },
       ],
     });

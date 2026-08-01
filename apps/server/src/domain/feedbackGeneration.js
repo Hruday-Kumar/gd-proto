@@ -17,6 +17,18 @@ import { buildFeedbackPrompt } from './feedbackPrompt.js';
 export const TRANSCRIPTION_FAILED_MESSAGE =
   "We weren't able to capture a transcript for this session due to a technical issue on our end -- this isn't a reflection of your participation. Please try another session, and let us know if this keeps happening.";
 
+// SPEC-0006 (BE-6/BE-7): feedback bodies are now the structured shape
+// domain/feedbackPrompt.js's parseFeedbackResponse produces (summary,
+// score, dimensions, strengths, improvements), not a bare string. This
+// short-circuit stub must match that shape -- `score: null` and empty
+// arrays, never a fabricated number, so a caller can't render a 0 as if it
+// were a real (and very low) performance score. Guardrail #1 already
+// required this path never judge a session it has no evidence for; the
+// same reasoning now covers the numeric fields too.
+function transcriptionFailedBody() {
+  return { summary: TRANSCRIPTION_FAILED_MESSAGE, score: null, dimensions: [], strengths: [], improvements: [] };
+}
+
 // How many Gemini calls may be in flight at once (M11, audit 2026-07-28).
 // Every participant's call used to go out in a single Promise.all -- six at
 // once for a full room (maxGroupSize, api/rooms.js), against a free tier with
@@ -36,7 +48,7 @@ export async function generateFeedbackForRoom(
   { generate, concurrency = DEFAULT_FEEDBACK_CONCURRENCY }
 ) {
   if (transcriptLines.length === 0) {
-    return participants.map(({ userId }) => ({ userId, status: 'ok', body: TRANSCRIPTION_FAILED_MESSAGE }));
+    return participants.map(({ userId }) => ({ userId, status: 'ok', body: transcriptionFailedBody() }));
   }
 
   // Never throws: one student's failure becomes that student's result, so it

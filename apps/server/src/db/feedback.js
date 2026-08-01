@@ -4,11 +4,27 @@
 // a student's own client.
 import { getSupabase } from './supabase.js';
 
-export async function insertFeedback({ roomId, userId, body, model }, { supabase = getSupabase() } = {}) {
+// SPEC-0006 (BE-6/BE-7): score/dimensions/strengths/improvements are the
+// new structured-feedback columns (migration 0017). Optional here (default
+// null/[] at the DB level) so the transcription-failed stub -- which has
+// no score to give -- can still insert cleanly.
+export async function insertFeedback(
+  { roomId, userId, body, model, score, dimensions, strengths, improvements },
+  { supabase = getSupabase() } = {}
+) {
   const { data, error } = await supabase
     .from('feedback')
-    .insert({ room_id: roomId, user_id: userId, body, model })
-    .select('id, room_id, user_id, body, model, generated_at')
+    .insert({
+      room_id: roomId,
+      user_id: userId,
+      body,
+      model,
+      score: score ?? null,
+      dimensions: dimensions ?? [],
+      strengths: strengths ?? [],
+      improvements: improvements ?? [],
+    })
+    .select('id, room_id, user_id, body, model, generated_at, score, dimensions, strengths, improvements')
     .single();
   if (error) throw error;
   return data;
@@ -28,7 +44,7 @@ export async function listFeedbackUserIdsForRoom(roomId, { supabase = getSupabas
 export async function getFeedbackForRoomAndUser(roomId, userId, { supabase = getSupabase() } = {}) {
   const { data, error } = await supabase
     .from('feedback')
-    .select('id, room_id, user_id, body, model, generated_at, rating, rating_reason')
+    .select('id, room_id, user_id, body, model, generated_at, rating, rating_reason, score, dimensions, strengths, improvements')
     .eq('room_id', roomId)
     .eq('user_id', userId)
     .maybeSingle();
@@ -59,7 +75,11 @@ export async function rateFeedback(roomId, userId, { rating, reason }, { supabas
 // getFeedbackForRoomAndUser, just for many rooms at once.
 export async function listFeedbackForUserAndRooms(userId, roomIds, { supabase = getSupabase() } = {}) {
   if (!roomIds.length) return [];
-  const { data, error } = await supabase.from('feedback').select('room_id, body').eq('user_id', userId).in('room_id', roomIds);
+  const { data, error } = await supabase
+    .from('feedback')
+    .select('room_id, body, score, dimensions, strengths, improvements')
+    .eq('user_id', userId)
+    .in('room_id', roomIds);
   if (error) throw error;
   return data ?? [];
 }

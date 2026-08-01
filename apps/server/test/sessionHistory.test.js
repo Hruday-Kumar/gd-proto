@@ -27,7 +27,17 @@ describe('buildSessionHistory', () => {
         topics: { text: 'Is remote work good for productivity?' },
       },
     ];
-    const feedbackRows = [{ room_id: 'r1', body: 'You stayed on topic throughout.' }];
+    const dimensions = [{ label: 'Content depth', score: 80, note: 'Backed a claim.' }];
+    const feedbackRows = [
+      {
+        room_id: 'r1',
+        body: 'You stayed on topic throughout.',
+        score: 82,
+        dimensions,
+        strengths: ['Clear opening.'],
+        improvements: ['Invite others in more.'],
+      },
+    ];
 
     const history = buildSessionHistory(rooms, feedbackRows);
 
@@ -41,6 +51,10 @@ describe('buildSessionHistory', () => {
         startedAt: '2026-07-26T10:00:00.000Z',
         endedAt: '2026-07-26T10:05:00.000Z',
         feedback: null,
+        score: null,
+        dimensions: [],
+        strengths: [],
+        improvements: [],
       },
       {
         id: 'r1',
@@ -51,6 +65,10 @@ describe('buildSessionHistory', () => {
         startedAt: '2026-07-25T10:00:00.000Z',
         endedAt: '2026-07-25T10:05:00.000Z',
         feedback: 'You stayed on topic throughout.',
+        score: 82,
+        dimensions,
+        strengths: ['Clear opening.'],
+        improvements: ['Invite others in more.'],
       },
     ]);
   });
@@ -60,6 +78,13 @@ describe('buildSessionHistory', () => {
     const history = buildSessionHistory(rooms, []);
     expect(history[0].feedback).toBeNull();
     expect(history[0].topicText).toBeNull();
+    // SPEC-0006 (BE-6/BE-7): same "null/[], never omitted or fabricated"
+    // rule as the API route -- a room with no feedback row yet has no
+    // score to show, not a 0.
+    expect(history[0].score).toBeNull();
+    expect(history[0].dimensions).toEqual([]);
+    expect(history[0].strengths).toEqual([]);
+    expect(history[0].improvements).toEqual([]);
   });
 
   it('returns an empty list for a student with no sessions', () => {
