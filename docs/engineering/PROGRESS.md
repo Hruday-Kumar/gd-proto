@@ -2,10 +2,90 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-08-01 (BE-1 room discovery — see the entry directly
-below. Older entries, including this same day's BE-2/BE-3 work and the
+**Last updated:** 2026-08-01 (BE-4 room level — see the entry directly
+below. Older entries, including this same day's BE-1/BE-2/BE-3 work and the
 2026-07-31 M5/N8 close-out + BUG-SPEC-0001 E2E test, are preserved further
 down, unchanged.)
+
+## BE-4 — room level, room-creation half only (2026-08-01)
+
+First P1 after the three P0s. Per direct user instruction, every merge
+target from here on is `dev` only — `dev` → `main` stays entirely the
+user's own call, never proposed or actioned by an agent (this doesn't
+change anything already true per `BRANCHING.md`, just makes it explicit
+again for this new phase of work). Spec at
+`docs/specs/active/SPEC-0005-be-4-room-level.md`, branch
+`feat/be-4-room-level` off `dev`.
+
+**Scope split, per direct user instruction:** `BACKEND_REQUIREMENTS.md`'s
+BE-4 bundles two behaviors of very different risk — (a) a `level` field a
+room creator picks at creation time, and (b) an optional `level` filter on
+`POST /api/rooms/match` that only groups same-level queue members. (b)
+requires a `matchmaking_queue` schema change (currently stores only
+`user_id`) and a change to `domain/matchmaking.js`'s `matchmake()` — the
+pure, tested, race-sensitive core of the whole matching system
+(`matchmakingClaim.js`'s own comment: "matchmake() itself is untouched --
+PLAN.md is explicit that it must stay pure"). Materially bigger and
+riskier than a single-table field, and BE-5 already touches the same
+`/api/rooms/match` request body (group size, topic pool) — so (b) is
+deferred to fold in alongside BE-5 rather than being built twice. This
+session did (a) only.
+
+**Change:** `POST /api/rooms` accepts an optional `level`
+(`'beginner'|'intermediate'|'advanced'`, new
+`domain/roomLevel.js#isValidLevel`, same closed-set shape as
+`roomVisibility.js`), defaults to `'intermediate'`, echoes it in the
+response. `db/rooms.js`'s `insertRoom` persists it — and, matching the
+exact pattern already established for `maxParticipants`/`visibility`,
+`POST /api/rooms/match`'s `insertRoom` call never passes `level` either,
+so the DB's own `DEFAULT 'intermediate'` applies; matched rooms stay
+system-formed, not creator-configured. Migration `0016_rooms_level.sql`
+adds the column + a `CHECK` constraint, same defence-in-depth shape as
+`0014`/`0015`. **Not yet applied to the live Supabase project.**
+
+`place-me-UI`'s `/rooms/new` Level select is now a controlled input (was
+`defaultValue`-only, so it never actually reflected a click, same class of
+bug BE-3's Visibility radio group had before that fix) and sends the
+choice. `BACKEND_REQUIREMENTS.md`'s BE-4 entry updated to record the
+split explicitly (room-creation half done, match-filtering half still
+open, not silently dropped), and BE-5's entry updated to note it now also
+covers the deferred `level` filter.
+
+**Tests:** RED confirmed first — 7 new `roomsApi.test.js` cases
+(create-route validation ×4, defaulting, response echo, `/match`
+non-interference) plus 9 new `roomLevel.test.js` cases, all failing for
+the right reasons before implementing. GREEN after: full suite fresh under
+Node 22 (`npm test --workspace=@placeme/server`) — **397/397 passed, 0
+skipped** (live RLS creds present in this environment). `npx oxlint
+apps/server/src apps/server/test` clean (2 pre-existing, unrelated
+warnings). `place-me-UI`: `npx eslint` clean after one auto-fixed
+formatting nit (same recurring pattern as every prior BE session), `npm
+run build` clean (Node 22).
+
+**A process hiccup this session, recorded for the record:** partway
+through wrapping up BE-4's documentation, work moved on to starting
+BE-6/BE-7 (numeric score + rubric) in the same working tree without this
+file being updated first — leaving BE-4's `PROGRESS.md` entry and some doc
+edits stranded uncommitted/stashed rather than landed. Recovered cleanly
+(nothing was lost — `git stash`/`git reflog` fully accounted for
+everything), but the lesson is explicit: finish and land one item's
+documentation and PR before starting the next item's code, even under
+`/compact` or similar context-window pressure, rather than letting two
+items' in-progress state overlap in the same working tree.
+
+**Residual/open:**
+- Branch not yet pushed or PR'd at the time of writing — see the PR
+  immediately following this entry's commit for the actual merge record.
+- Guardrail #1 does not apply — no room/audio/transcription/attribution/
+  feedback behavior changed.
+- No manual click-through yet against a real deployed environment.
+- Migrations `0014`/`0015`/`0016` are all still unapplied to the live
+  Supabase project — all three block `main` promotion for their own
+  work, though none block merging further BE-item branches into `dev`.
+- Next up: BE-6/BE-7 (numeric score + rubric) is already partway
+  implemented on `feat/be-6-be-7-feedback-structured-output` — to be
+  reviewed with the user before continuing, since it touches the Gemini
+  feedback prompt directly (guardrail #1, "never discouraging" framing).
 
 ## BE-1 — room discovery, browsable open rooms (2026-08-01)
 

@@ -13,14 +13,15 @@ export async function roomCodeExists(code, { supabase = getSupabase() } = {}) {
 // the request omits it) -- this function itself has no opinion on what a
 // missing value should mean, same as durationSeconds.
 //
-// visibility (BE-3, SPEC-0003) is deliberately *not* always provided --
-// POST /api/rooms defaults it before calling this, but POST /api/rooms/match
-// never passes it at all, so it stays undefined here and the insert below
-// omits the key entirely (JSON.stringify drops undefined-valued keys),
-// letting the column's own DEFAULT 'private' apply. Matched rooms are
-// system-formed, not creator-configured (SPEC-0003's Non Goals).
+// visibility (BE-3, SPEC-0003) and level (BE-4, SPEC-0005) are both
+// deliberately *not* always provided -- POST /api/rooms defaults them
+// before calling this, but POST /api/rooms/match never passes either, so
+// they stay undefined here and the insert below omits those keys entirely
+// (JSON.stringify drops undefined-valued keys), letting the columns' own
+// DEFAULTs ('private', 'intermediate') apply. Matched rooms are
+// system-formed, not creator-configured (both specs' Non Goals).
 export async function insertRoom(
-  { code, topicId, durationSeconds, maxParticipants, visibility, joinMode, createdBy },
+  { code, topicId, durationSeconds, maxParticipants, visibility, level, joinMode, createdBy },
   { supabase = getSupabase() } = {}
 ) {
   const { data, error } = await supabase
@@ -31,11 +32,12 @@ export async function insertRoom(
       duration_seconds: durationSeconds,
       max_participants: maxParticipants,
       visibility,
+      level,
       join_mode: joinMode,
       created_by: createdBy,
     })
     .select(
-      'id, code, status, topic_id, duration_seconds, max_participants, visibility, started_at, ends_at, ended_at, created_by'
+      'id, code, status, topic_id, duration_seconds, max_participants, visibility, level, started_at, ends_at, ended_at, created_by'
     )
     .single();
   if (error) throw error;

@@ -12,6 +12,7 @@ import { createLlmRateLimiter, createRoomActionRateLimiter } from '../src/api/mi
 import { CURRENT_CONSENT_VERSION } from '../src/domain/consent.js';
 import { DEFAULT_MAX_ROOM_PARTICIPANTS } from '../src/domain/roomCapacity.js';
 import { DEFAULT_VISIBILITY } from '../src/domain/roomVisibility.js';
+import { DEFAULT_LEVEL } from '../src/domain/roomLevel.js';
 
 function stubAuth(userId) {
   return (req, _res, next) => {
@@ -233,6 +234,64 @@ describe('POST /api/rooms (create by code)', () => {
       const deps = baseDeps();
       const app = buildApp(deps);
       const res = await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds: 300, visibility });
+      expect(res.status).toBe(400);
+      expect(deps.insertRoom).not.toHaveBeenCalled();
+    });
+  });
+
+  // BE-4 (place-me-UI/docs/BACKEND_REQUIREMENTS.md, SPEC-0005): the room
+  // creator's chosen level, room-creation half only -- match-side
+  // filtering is deferred (see the /match test below).
+  describe('room level (BE-4)', () => {
+    it('passes an explicit level through to insertRoom and echoes it in the response', async () => {
+      const deps = baseDeps({
+        insertRoom: vi.fn().mockResolvedValue({
+          id: 'r1',
+          code: 'ABCXYZ',
+          status: 'waiting',
+          topic_id: 't1',
+          duration_seconds: 300,
+          max_participants: DEFAULT_MAX_ROOM_PARTICIPANTS,
+          visibility: DEFAULT_VISIBILITY,
+          level: 'advanced',
+        }),
+      });
+      const app = buildApp(deps);
+      const res = await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds: 300, level: 'advanced' });
+      expect(res.status).toBe(201);
+      expect(res.body.level).toBe('advanced');
+      expect(deps.insertRoom).toHaveBeenCalledWith(expect.objectContaining({ level: 'advanced' }));
+    });
+
+    it('defaults to DEFAULT_LEVEL (intermediate) when level is omitted', async () => {
+      const deps = baseDeps({
+        insertRoom: vi.fn().mockResolvedValue({
+          id: 'r1',
+          code: 'ABCXYZ',
+          status: 'waiting',
+          topic_id: 't1',
+          duration_seconds: 300,
+          max_participants: DEFAULT_MAX_ROOM_PARTICIPANTS,
+          visibility: DEFAULT_VISIBILITY,
+          level: DEFAULT_LEVEL,
+        }),
+      });
+      const app = buildApp(deps);
+      const res = await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds: 300 });
+      expect(res.status).toBe(201);
+      expect(res.body.level).toBe(DEFAULT_LEVEL);
+      expect(deps.insertRoom).toHaveBeenCalledWith(expect.objectContaining({ level: DEFAULT_LEVEL }));
+    });
+
+    it.each([
+      ['an unrelated string', 'expert'],
+      ['wrong case', 'Beginner'],
+      ['a number', 1],
+      ['a boolean', true],
+    ])('rejects a %s level without touching the database', async (_label, level) => {
+      const deps = baseDeps();
+      const app = buildApp(deps);
+      const res = await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds: 300, level });
       expect(res.status).toBe(400);
       expect(deps.insertRoom).not.toHaveBeenCalled();
     });
@@ -521,6 +580,22 @@ describe('POST /api/rooms/match', () => {
     const res = await request(app).post('/api/rooms/match').send({ durationSeconds: 300 });
     expect(res.status).toBe(201);
     expect(deps.insertRoom).toHaveBeenCalledWith(expect.not.objectContaining({ visibility: expect.anything() }));
+  });
+
+  // BE-4 (SPEC-0005, Non Goal): match-side level filtering is deferred
+  // (to fold in alongside BE-5) -- this route must never pass a level
+  // either, so the column's own DEFAULT 'intermediate' applies.
+  it('does not pass level to insertRoom -- matched rooms rely on the column default', async () => {
+    const deps = baseDeps({
+      listQueue: vi.fn().mockResolvedValue([{ id: 'a' }, { id: 'b' }]),
+      generateTopicFn: vi.fn().mockResolvedValue('Should AI grade exams?'),
+      insertGeneratedTopic: vi.fn().mockResolvedValue({ id: 'topic-1', text: 'Should AI grade exams?' }),
+      insertRoom: vi.fn().mockResolvedValue({ id: 'r1', code: 'MATCHD', status: 'waiting', topic_id: 'topic-1', duration_seconds: 300 }),
+    });
+    const app = buildApp(deps, 'c');
+    const res = await request(app).post('/api/rooms/match').send({ durationSeconds: 300 });
+    expect(res.status).toBe(201);
+    expect(deps.insertRoom).toHaveBeenCalledWith(expect.not.objectContaining({ level: expect.anything() }));
   });
 
   // H7 (engineering audit, 2026-07-28): two students hitting /match near-

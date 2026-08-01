@@ -21,6 +21,7 @@ import {
   MAX_ROOM_PARTICIPANTS,
 } from '../../domain/roomCapacity.js';
 import { isValidVisibility, DEFAULT_VISIBILITY } from '../../domain/roomVisibility.js';
+import { isValidLevel, DEFAULT_LEVEL } from '../../domain/roomLevel.js';
 import { buildOpenRoomsList } from '../../domain/roomListing.js';
 
 // Interim group-size default for random matching (PHASE1_PLAN.md §8,
@@ -34,6 +35,7 @@ const DEFAULT_MAX_GROUP_SIZE = 6;
 const INVALID_DURATION_ERROR = `durationSeconds must be a whole number of seconds between ${MIN_DURATION_SECONDS} and ${MAX_DURATION_SECONDS}`;
 const INVALID_MAX_PARTICIPANTS_ERROR = `maxParticipants must be a whole number between ${MIN_ROOM_PARTICIPANTS} and ${MAX_ROOM_PARTICIPANTS}`;
 const INVALID_VISIBILITY_ERROR = "visibility must be either 'public' or 'private'";
+const INVALID_LEVEL_ERROR = "level must be one of 'beginner', 'intermediate', or 'advanced'";
 
 // Maps a DB room row (snake_case) to the shape sessionStateMachine.js
 // expects (camelCase, millisecond timestamps).
@@ -143,7 +145,7 @@ export function createRoomsRouter(requireAuth, deps) {
   // code with no throttle. Separate limiter from llmRateLimiter (H4) since
   // neither route calls Gemini itself.
   router.post('/api/rooms', requireAuth, roomActionRateLimiter, async (req, res) => {
-    const { topicId, durationSeconds, maxParticipants, visibility } = req.body || {};
+    const { topicId, durationSeconds, maxParticipants, visibility, level } = req.body || {};
     if (!topicId || !durationSeconds) {
       return res.status(400).json({ error: 'topicId and durationSeconds are required' });
     }
@@ -163,8 +165,16 @@ export function createRoomsRouter(requireAuth, deps) {
     if (visibility !== undefined && !isValidVisibility(visibility)) {
       return res.status(400).json({ error: INVALID_VISIBILITY_ERROR });
     }
+    // BE-4 (SPEC-0005): level is optional -- omitting it preserves the
+    // pre-BE-4 behavior of every code-created room defaulting to
+    // 'intermediate'. Room-creation half only; POST /api/rooms/match never
+    // passes this (see that route, unchanged).
+    if (level !== undefined && !isValidLevel(level)) {
+      return res.status(400).json({ error: INVALID_LEVEL_ERROR });
+    }
     const roomMaxParticipants = maxParticipants ?? DEFAULT_MAX_ROOM_PARTICIPANTS;
     const roomVisibility = visibility ?? DEFAULT_VISIBILITY;
+    const roomLevel = level ?? DEFAULT_LEVEL;
     const code = await generateUniqueRoomCode(roomCodeExists);
     const room = await insertRoom({
       code,
@@ -172,6 +182,7 @@ export function createRoomsRouter(requireAuth, deps) {
       durationSeconds,
       maxParticipants: roomMaxParticipants,
       visibility: roomVisibility,
+      level: roomLevel,
       joinMode: 'code',
       createdBy: req.userId,
     });
@@ -184,6 +195,7 @@ export function createRoomsRouter(requireAuth, deps) {
       durationSeconds: room.duration_seconds,
       maxParticipants: room.max_participants,
       visibility: room.visibility,
+      level: room.level,
     });
   });
 
