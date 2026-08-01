@@ -1112,8 +1112,33 @@ describe('GET /api/rooms/:id/participants', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       participants: [
-        { userId: 'u1', displayName: 'Asha' },
-        { userId: 'u2', displayName: 'u2' },
+        { userId: 'u1', displayName: 'Asha', talkShare: 0 },
+        { userId: 'u2', displayName: 'u2', talkShare: 0 },
+      ],
+    });
+  });
+
+  // BE-10 (place-me-UI/docs/BACKEND_REQUIREMENTS.md, SPEC-0007): each
+  // participant's share of the room's total attributed speaking time.
+  it('includes each participant\'s talkShare computed from the room\'s transcript', async () => {
+    const deps = baseDeps({
+      listParticipantsFn: vi.fn().mockResolvedValue([{ user_id: 'u1' }, { user_id: 'u2' }]),
+      listProfilesFn: vi.fn().mockResolvedValue([
+        { id: 'u1', display_name: 'Asha' },
+        { id: 'u2', display_name: 'Karan' },
+      ]),
+      listTranscriptLinesForRoomFn: vi.fn().mockResolvedValue([
+        { user_id: 'u1', started_at_ms: 0, ended_at_ms: 2000 },
+        { user_id: 'u2', started_at_ms: 2000, ended_at_ms: 3000 },
+      ]),
+    });
+    const app = buildApp(deps);
+    const res = await request(app).get('/api/rooms/r1/participants');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      participants: [
+        { userId: 'u1', displayName: 'Asha', talkShare: 67 },
+        { userId: 'u2', displayName: 'Karan', talkShare: 33 },
       ],
     });
   });

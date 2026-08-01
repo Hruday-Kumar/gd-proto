@@ -23,6 +23,7 @@ import {
 import { isValidVisibility, DEFAULT_VISIBILITY } from '../../domain/roomVisibility.js';
 import { isValidLevel, DEFAULT_LEVEL } from '../../domain/roomLevel.js';
 import { buildOpenRoomsList } from '../../domain/roomListing.js';
+import { computeTalkTimeShares } from '../../domain/talkTime.js';
 
 // Interim group-size default for random matching (PHASE1_PLAN.md §8,
 // decided 2026-07-26: anchored to the AI Voice Practice mode's stated
@@ -385,8 +386,21 @@ export function createRoomsRouter(requireAuth, deps) {
     const participant = await isParticipant(req.params.id, req.userId);
     if (!participant) return res.status(403).json({ error: 'Not a participant of this room' });
 
-    const participants = await resolveParticipantNames(req.params.id);
-    res.status(200).json({ participants });
+    // BE-10 (place-me-UI/docs/BACKEND_REQUIREMENTS.md, SPEC-0007): each
+    // participant's share of the room's total attributed speaking time,
+    // computed post-hoc from the transcript. Live/mid-session speak-time
+    // is BE-17, a separate harder real-time version -- not this.
+    const [participants, transcriptLines] = await Promise.all([
+      resolveParticipantNames(req.params.id),
+      listTranscriptLinesForRoomFn(req.params.id),
+    ]);
+    const talkShareByUserId = computeTalkTimeShares(
+      transcriptLines,
+      participants.map((p) => p.userId)
+    );
+    res.status(200).json({
+      participants: participants.map((p) => ({ ...p, talkShare: talkShareByUserId.get(p.userId) ?? 0 })),
+    });
   });
 
   // Lets a student re-read the attributed transcript of a session they were

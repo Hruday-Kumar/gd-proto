@@ -2,10 +2,78 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-08-01 (BE-19 score-badge wiring — see the entry
+**Last updated:** 2026-08-01 (BE-10 talk-time share — see the entry
 directly below. Older entries, including this same day's BE-1/BE-2/BE-3/
-BE-4/BE-6/BE-7 work and the 2026-07-31 M5/N8 close-out + BUG-SPEC-0001 E2E
-test, are preserved further down, unchanged.)
+BE-4/BE-6/BE-7/BE-19 work and the 2026-07-31 M5/N8 close-out +
+BUG-SPEC-0001 E2E test, are preserved further down, unchanged.)
+
+## BE-10 — per-participant talk-time share, post-session half (2026-08-01)
+
+Per direct user instruction to work through the remaining backlog item by
+item without stopping between each. First of this batch (planned order:
+BE-10 → BE-14 → BE-8 → BE-9 → BE-5, last because it's the riskiest —
+touches `domain/matchmaking.js`'s core). Spec at
+`docs/specs/active/SPEC-0007-be-10-talk-time-share.md`, branch
+`feat/be-10-talk-time-share` off `dev`.
+
+**Scope correction made before implementing, not after:** `BACKEND_REQUIREMENTS.md`'s
+BE-10 "Where" line lists three UI spots (`ParticipantTile`'s live badge,
+`/ended`'s Talk-time split, `/session`'s live speak-time card), but the
+same entry's own "Suggested shape" text already separates the live ones
+out as BE-17, "a separate, harder real-time version of this same
+computation." Built the post-session half only (`/ended`); live/mid-session
+wiring is explicitly left to BE-17, not silently dropped.
+
+**Change:** `domain/talkTime.js` (new file, pure, no DB, same shape as
+`sessionHistory.js`/`roomListing.js`): `computeTalkTimeShares` sums each
+participant's `ended_at_ms - started_at_ms` across their own
+`transcript_lines` rows, converts to an integer percentage of the room's
+total attributed speaking time, seeds every requested participant at `0`
+first (so a silent participant gets an explicit entry, not an absence),
+and ignores any line attributed to a user outside the given participant
+list (defensive — shouldn't happen given `domain/attribution.js`'s
+existing guarantees, but the aggregation itself doesn't rely on that).
+`GET /api/rooms/:id/participants` now fetches the room's transcript
+alongside participant names (parallel, same `Promise.all` pattern
+`/transcript` already uses) and merges `talkShare` onto each entry. No
+schema change — `transcript_lines` already had both timestamp columns.
+
+`place-me-UI`'s `ended.$roomId.tsx` — still 100% fixture data for
+participants before this (`import { participants } from "@/lib/demo"`,
+never actually fetched anything real) — now calls `getRoomParticipants`
+for the first time on this page. Found and fixed a real latent bug while
+wiring this: the old mock render multiplied `talkShare` by `3` for the bar
+width (`width: ${p.talkShare * 3}%`), presumably because the fixture data
+used small values on some other scale — with real 0–100 percentages that
+would blow past 100% width for anything above ~33%. Removed the
+multiplier; `p.id`/`p.name` (demo shape) corrected to `p.userId`/
+`p.displayName` (real API shape) at the same time. Checked both other
+`RoomParticipant` consumers (`live-room.tsx`, `lobby.$roomId.tsx`) before
+widening the type with a new required `talkShare` field — neither
+constructs one manually, both only ever pass through the real API
+response, so neither needed a change.
+
+**Tests:** RED confirmed first — 6 new `talkTime.test.js` cases (module
+didn't exist) and 2 `roomsApi.test.js` cases (one extended an existing
+assertion to require `talkShare: 0`, one new dedicated computation case)
+failing for the right reasons before implementing. GREEN after: full suite
+fresh under Node 22 (`npm test --workspace=@placeme/server`) — **415/415
+passed, 0 skipped** (live RLS creds present). `npx oxlint apps/server/src
+apps/server/test` clean (2 pre-existing, unrelated warnings). `place-me-UI`:
+`npx eslint` clean, `npm run build` clean (Node 22) — also manually
+checked (no `tsc` step exists in this repo) that widening `RoomParticipant`
+didn't silently break either of its other two consumers.
+
+**Residual/open:**
+- Branch not yet pushed or PR'd at the time of writing — see the
+  immediately following PR for the actual merge record.
+- Guardrail #1 does not apply — no room/audio/transcription/attribution/
+  feedback *content* changed, this only aggregates existing transcript
+  timestamps into a display percentage.
+- No manual click-through against a real multi-person session yet.
+- Live/mid-session speak-time (BE-17) remains fully unbuilt — this item
+  doesn't move it forward beyond sharing the same underlying computation.
+- Next in the planned batch: **BE-14** (signup fields).
 
 ## BE-19 — "Analyzed" badge → real score (2026-08-01)
 
