@@ -2,10 +2,52 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-08-01 (BE-14 signup profile fields — see the entry
-directly below. Older entries, including this same day's BE-1/BE-2/BE-3/
-BE-4/BE-6/BE-7/BE-19/BE-10 work and the 2026-07-31 M5/N8 close-out +
+**Last updated:** 2026-08-01 (BE-8 score trend — see the entry directly
+below. Older entries, including this same day's BE-1/BE-2/BE-3/BE-4/BE-6/
+BE-7/BE-19/BE-10/BE-14 work and the 2026-07-31 M5/N8 close-out +
 BUG-SPEC-0001 E2E test, are preserved further down, unchanged.)
+
+## BE-8 — score trend over time (2026-08-01)
+
+Third of the planned batch (BE-10 → BE-14 → **BE-8** → BE-9 → BE-5).
+Entirely `place-me-UI`, no `gd-proto` code or spec — same "frontend-only,
+no dedicated SPEC file" treatment as BE-19, since the item's own suggested
+shape explicitly prefers client-side computation over a new endpoint at
+this scale, and the actual change is small (one component prop + a
+same-shaped helper duplicated in two route files, matching this repo's
+existing `toSessionRow` precedent of small per-page helpers over a shared
+module).
+
+**Change:** `ProgressChart` (`components/pm/blocks.tsx`) gained an
+optional `series` prop, defaulting to the existing fixture
+`progressSeries` so the untouched legacy `/app/history` page (still using
+`<ProgressChart />` with no props) keeps rendering exactly as before.
+`history.tsx` and `index.tsx` each gained a `buildScoreTrend` helper:
+filters their already-fetched `GET /api/history/mine` sessions to ones
+with both a `score` and a `startedAt`, sorts chronologically, and caps at
+the last 8 — a plain "your last N scored sessions" line rather than the
+mock's "Last 6 weeks" framing, since a student may have very few sessions
+at pilot scale and fake weekly buckets would be more misleading than
+honest sparse data. Both pages now show "No scored sessions yet" instead
+of an empty chart when there's nothing to plot. `index.tsx`'s history fetch
+was restructured slightly: it previously only ever stored the sliced
+"recent 3" sessions for its own sidebar list; now it stores the full
+fetched list and derives both `recent` (still sliced to 3) and the trend
+from the same single fetch, rather than needing a second call to the same
+endpoint.
+
+**Tests:** no `apps/server` change, so no server test impact — confirmed
+by re-running the full suite anyway (unchanged: 415/415 passed, 2 skipped
+per BE-14's guard). `place-me-UI`: `npx eslint` clean after a couple of
+auto-fixed formatting nits, `npm run build` clean (Node 22).
+
+**Residual/open:**
+- Depends entirely on `gd-proto`'s migration `0017` (BE-6/BE-7) being
+  applied live — until then `GET /api/history/mine` returns `score: null`
+  for every row, so both trend cards will only ever show the empty state.
+- Guardrail #1 does not apply — presentation-only around data BE-6/BE-7
+  already produces.
+- Next in the planned batch: **BE-9** (aggregate stats).
 
 ## BE-14 — signup profile fields: college, graduating year (2026-08-01)
 
