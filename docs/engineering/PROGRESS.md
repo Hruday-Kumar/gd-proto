@@ -2,10 +2,88 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-08-01 (BE-10 talk-time share — see the entry
+**Last updated:** 2026-08-01 (BE-14 signup profile fields — see the entry
 directly below. Older entries, including this same day's BE-1/BE-2/BE-3/
-BE-4/BE-6/BE-7/BE-19 work and the 2026-07-31 M5/N8 close-out +
+BE-4/BE-6/BE-7/BE-19/BE-10 work and the 2026-07-31 M5/N8 close-out +
 BUG-SPEC-0001 E2E test, are preserved further down, unchanged.)
+
+## BE-14 — signup profile fields: college, graduating year (2026-08-01)
+
+Second of the planned batch (BE-10 → **BE-14** → BE-8 → BE-9 → BE-5). Spec
+at `docs/specs/active/SPEC-0008-be-14-signup-profile-fields.md`, branch
+`feat/be-14-signup-profile-fields` off `dev`.
+
+**This item is structurally different from every other one this
+session**: the entire behavior lives in a Postgres trigger function
+(`handle_new_user()`, fires on `auth.users` insert), not in
+`apps/server`'s Express/domain JS at all. No pure function exists to unit
+test.
+
+**Change:** migration `0018` adds `profiles.college text` and
+`profiles.graduation_year int` (both nullable — signup doesn't mark either
+field required, and unlike `display_name` there's no natural fallback
+value) and extends `handle_new_user()` to read both from
+`raw_user_meta_data`, same pattern already used for `display_name`.
+`nullif(value, '')::int` rather than a bare cast for `graduation_year` — an
+empty-string metadata value would otherwise throw and fail the entire
+signup, the single most safety-critical path a trigger bug here could
+break. `place-me-UI`'s `/signup` "College" and "Graduating year" fields —
+previously entirely uncontrolled, no state, never submitted — now mirror
+the existing `name`/`email`/`password` pattern exactly and are sent
+through `signUp`'s `data`.
+
+**Notably, this migration is the only one so far this session where
+skipping it doesn't break anything already working** — every prior
+migration (`0014`–`0017`) would 500 a real request on its missing column;
+`handle_new_user()` before this change simply never reads the two new
+metadata keys, so signup keeps functioning identically whether or not
+`0018` has been applied.
+
+**Verification approach differs accordingly:** wrote
+`profilesSignupTrigger.test.js` (live-Supabase only, same
+`describe.skipIf(!hasLiveCreds)` pattern as `topicsRlsIsolation.test.js`)
+and **actually ran it against the current live project** rather than only
+reasoning about it: it failed with `column profiles.college does not
+exist`, confirming the test genuinely detects pre-migration state (the
+expected RED, not a defect) — the same "prove it, don't assume it"
+discipline `topicsRlsIsolation.test.js`/`roomParticipantsRlsIsolation.test.js`
+already established for RLS changes, applied here to a trigger change
+instead.
+
+**Caught before merging, not after:** a bare RED like that would leave
+this suite genuinely failing in CI indefinitely, not just locally — this
+repo's CI already has real Supabase secrets configured (`PROGRESS.md`'s
+N8 entry), so every PR's `test` job would go red until a human manually
+applied `0018`, unlike the other live-RLS files (which test something
+already live and green). Added a `beforeAll` schema probe
+(`select college from profiles limit 0`) that sets a `migrationApplied`
+flag; each test calls Vitest's test-context `ctx.skip()` and returns
+immediately when false, and the probe logs a `::warning::` annotation so
+the skip stays visible on a PR rather than becoming a quiet checkmark —
+same spirit as N8's `rls-security` job. Re-ran after adding the guard:
+2 skipped, 0 failed, warning printed. Real test-user accounts created
+during the earlier bare run were cleaned up via the test's own `afterAll`
+(`admin.auth.admin.deleteUser`), same as the existing live-RLS test
+files' convention.
+
+**Tests:** no unit tests (no JS logic exists to test — noted explicitly in
+the spec, not an oversight). `profilesSignupTrigger.test.js`: RED
+confirmed live pre-guard; skips cleanly post-guard (see above); the real
+assertions will only actually run once the user applies migration `0018`.
+`place-me-UI`: `npx eslint` clean after one auto-fixed formatting nit,
+`npm run build` clean (Node 22). Full `apps/server` suite: fresh run under
+Node 22 — **415/415 passed, 2 skipped** (this new file), 49/49 test files
+green.
+
+**Residual/open:**
+- Branch not yet pushed or PR'd at the time of writing.
+- Guardrail #1 does not apply — no room/audio/transcription/attribution/
+  feedback behavior changed.
+- Migration `0018` not yet applied live — unlike other pending migrations,
+  this one is genuinely optional to apply before `main` promotion in the
+  sense that nothing breaks either way, but the feature itself obviously
+  needs it live to actually persist anything.
+- Next in the planned batch: **BE-8** (score trend over time).
 
 ## BE-10 — per-participant talk-time share, post-session half (2026-08-01)
 
