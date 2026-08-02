@@ -6,6 +6,7 @@ import {
   generateTopic,
   generateFeedback,
   generateTranscriptAnalysis,
+  generateCriterionEvaluation,
   DEFAULT_GEMINI_MODEL,
   DEFAULT_EVAL_TEMPERATURE,
 } from '../src/llm/geminiClient.js';
@@ -245,5 +246,82 @@ describe('generateTranscriptAnalysis', () => {
   it('throws a descriptive error when the API responds with a non-OK status', async () => {
     const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => 'server error' });
     await expect(generateTranscriptAnalysis(prompt, { apiKey: 'test-key', fetchImpl })).rejects.toThrow(/500/);
+  });
+});
+
+// SPEC-0011 state 3: same raw generate(prompt) shape, plus a parseContext
+// (participant tags / subdimension ids / evidence ids this specific call
+// offered) since validating a criterion-evaluation response needs to know
+// what was actually offered, unlike the fixed-schema stages above.
+describe('generateCriterionEvaluation', () => {
+  const prompt = 'Evaluate Clarity for all participants using only this evidence...';
+  const parseContext = {
+    dimensionLabel: 'Clarity',
+    tagToUserId: { P1: 'user-a' },
+    evidenceIds: ['E1'],
+    subdimensionIds: ['structure', 'word_choice', 'conciseness'],
+  };
+
+  function fakeCriterionEvaluationJsonResponse() {
+    return JSON.stringify({
+      participant_evaluations: [
+        {
+          participant_tag: 'P1',
+          subdimensions: ['structure', 'word_choice', 'conciseness'].map((subdimension_id) => ({
+            subdimension_id,
+            level: 'demonstrated',
+            evidence_ids: ['E1'],
+            reasoning: 'Grounded in the cited evidence.',
+          })),
+        },
+      ],
+    });
+  }
+
+  it('throws when no API key is configured', async () => {
+    await expect(
+      generateCriterionEvaluation(prompt, parseContext, { apiKey: undefined, fetchImpl: fakeFetchOk('x') })
+    ).rejects.toThrow(/GEMINI_API_KEY/);
+  });
+
+  it('calls the configured model endpoint and returns the parsed per-participant subdimension levels', async () => {
+    const fetchImpl = fakeFetchOk(fakeCriterionEvaluationJsonResponse());
+    const result = await generateCriterionEvaluation(prompt, parseContext, { apiKey: 'test-key', fetchImpl });
+    expect(result.dimensionLabel).toBe('Clarity');
+    expect(result.participantEvaluations).toHaveLength(1);
+    expect(result.participantEvaluations[0].participantUserId).toBe('user-a');
+    const [url, options] = fetchImpl.mock.calls[0];
+    expect(url).toContain(DEFAULT_GEMINI_MODEL);
+    expect(JSON.parse(options.body).contents[0].parts[0].text).toBe(prompt);
+  });
+
+  it('requests Gemini JSON mode with the criterion evaluation response schema', async () => {
+    const fetchImpl = fakeFetchOk(fakeCriterionEvaluationJsonResponse());
+    await generateCriterionEvaluation(prompt, parseContext, { apiKey: 'test-key', fetchImpl });
+    const [, options] = fetchImpl.mock.calls[0];
+    const body = JSON.parse(options.body);
+    expect(body.generationConfig.responseMimeType).toBe('application/json');
+    expect(body.generationConfig.responseSchema.required).toEqual(['participant_evaluations']);
+  });
+
+  it('pins a low, fixed temperature, same as the other evaluation-stage calls', async () => {
+    const fetchImpl = fakeFetchOk(fakeCriterionEvaluationJsonResponse());
+    await generateCriterionEvaluation(prompt, parseContext, { apiKey: 'test-key', fetchImpl });
+    const [, options] = fetchImpl.mock.calls[0];
+    expect(JSON.parse(options.body).generationConfig.temperature).toBe(DEFAULT_EVAL_TEMPERATURE);
+  });
+
+  it('rejects a response citing an evidence_id outside this call\'s parseContext, even though the shape is otherwise valid', async () => {
+    const badJson = JSON.parse(fakeCriterionEvaluationJsonResponse());
+    badJson.participant_evaluations[0].subdimensions[0].evidence_ids = ['E99'];
+    const fetchImpl = fakeFetchOk(JSON.stringify(badJson));
+    await expect(generateCriterionEvaluation(prompt, parseContext, { apiKey: 'test-key', fetchImpl })).rejects.toThrow(
+      /evidence_id not in the evidence ledger/i
+    );
+  });
+
+  it('throws a descriptive error when the API responds with a non-OK status', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => 'server error' });
+    await expect(generateCriterionEvaluation(prompt, parseContext, { apiKey: 'test-key', fetchImpl })).rejects.toThrow(/500/);
   });
 });

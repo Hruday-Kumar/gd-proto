@@ -13,6 +13,10 @@
 import { buildTopicPrompt, parseTopicResponse } from '../domain/topicPrompt.js';
 import { parseFeedbackResponse, FEEDBACK_RESPONSE_SCHEMA } from '../domain/feedbackPrompt.js';
 import { parseTranscriptAnalysisResponse, TRANSCRIPT_ANALYSIS_RESPONSE_SCHEMA } from '../domain/transcriptAnalysisPrompt.js';
+import {
+  parseCriterionEvaluationResponse,
+  CRITERION_EVALUATION_RESPONSE_SCHEMA,
+} from '../domain/criterionEvaluationPrompt.js';
 import { withRetry } from '../domain/retry.js';
 
 export const DEFAULT_GEMINI_MODEL = 'gemini-3.6-flash';
@@ -168,4 +172,39 @@ export async function generateTranscriptAnalysis(
     shouldRetry: isRetryableGeminiError,
   });
   return parseTranscriptAnalysisResponse(body);
+}
+
+// SPEC-0011 state 3: sends an already-built Criterion Evaluator prompt
+// (domain/criterionEvaluationPrompt.js's buildCriterionEvaluationPrompt)
+// for one rubric dimension and returns the parsed per-participant
+// subdimension levels. Takes `parseContext` (also returned by
+// buildCriterionEvaluationPrompt) because -- unlike generateFeedback/
+// generateTranscriptAnalysis's fixed, context-free schemas -- validating
+// this response requires knowing which participant tags, subdimension ids,
+// and evidence ids were actually offered in this specific call (R2/AC3:
+// an invented or foreign reference must be rejected, not silently passed
+// through).
+export async function generateCriterionEvaluation(
+  prompt,
+  parseContext,
+  {
+    apiKey = process.env.GEMINI_API_KEY,
+    model = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL,
+    fetchImpl = fetch,
+    timeoutMs = DEFAULT_GEMINI_TIMEOUT_MS,
+    retryAttempts = DEFAULT_GEMINI_RETRY_ATTEMPTS,
+    retryDelayMs = DEFAULT_GEMINI_RETRY_DELAY_MS,
+  } = {}
+) {
+  const generationConfig = {
+    responseMimeType: 'application/json',
+    responseSchema: CRITERION_EVALUATION_RESPONSE_SCHEMA,
+    temperature: DEFAULT_EVAL_TEMPERATURE,
+  };
+  const body = await withRetry(() => callGemini(prompt, { apiKey, model, fetchImpl, timeoutMs, generationConfig }), {
+    attempts: retryAttempts,
+    delayMs: retryDelayMs,
+    shouldRetry: isRetryableGeminiError,
+  });
+  return parseCriterionEvaluationResponse(body, parseContext);
 }

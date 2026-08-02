@@ -14,7 +14,7 @@ Verified / Done.
 | 0 | Spec + branches created | Done | 2026-08-02 | SPEC-0011 drafted; 9 task branches cut from `dev` (`feat/eval-schema-foundation`, `feat/eval-transcript-analysis`, `feat/eval-criterion-scoring`, `feat/eval-score-aggregation`, `feat/eval-validation-layer`, `feat/eval-confidence-score`, `feat/eval-feedback-decoupled`, `test/eval-golden-suite`, `chore/eval-cutover-cleanup`). |
 | 1 | `feat/eval-schema-foundation` | Implemented — PR not yet opened | 2026-08-02 | Migration `0019_evaluation_pipeline_tables.sql` adds `evaluation_runs`, `evaluation_evidence`, `evaluation_criterion_results`, `evaluation_validation_issues`, `evaluation_confidence`, all RLS-enabled with zero client policies (service-role only). No application code changed. Committed (`dc8f3c4`) and pushed. Still needs: manual application to the live Supabase project (per `CLAUDE.md`, migrations are never applied automatically) before state 2 can insert real rows. |
 | 2 | `feat/eval-transcript-analysis` | Implemented — PR not yet opened | 2026-08-02 | `domain/transcriptAnalysisPrompt.js` (prompt/schema/parser) + `domain/evidenceVerifier.js` (deterministic quote/attribution verification) + `llm/geminiClient.generateTranscriptAnalysis`. Also pinned `temperature` on every eval Gemini call, including the still-live `generateFeedback` (R13, done early — small, safe, directly fixes the reported "random scores"). Branched off state 1's tip (stacked, not off `dev`, since it depends on the schema). Not yet wired into `feedbackWorker.js`/persisted to `evaluation_evidence` — pure, injectable, unit-tested domain functions only. |
-| 3 | `feat/eval-criterion-scoring` | Not started | — | 5 criterion evaluators (all participants at once per dimension) + `domain/evalRubric.js`. |
+| 3 | `feat/eval-criterion-scoring` | Implemented — PR not yet opened | 2026-08-02 | `domain/evalRubric.js` (5 dimensions x 2-3 anchored subdimensions, weights sum to 1.0, `SUBDIMENSION_LEVELS`/`LEVEL_MARK`) + `domain/criterionEvaluationPrompt.js` (one prompt per dimension, evaluates all participants at once from the evidence ledger only, never the raw transcript) + `llm/geminiClient.generateCriterionEvaluation`. Branched off state 2's tip (stacked). Not yet wired into `feedbackWorker.js` -- pure, injectable, unit-tested domain functions only, same as state 2. |
 | 4 | `feat/eval-score-aggregation` | Not started | — | Deterministic aggregator, pure functions, no LLM arithmetic. |
 | 5 | `feat/eval-validation-layer` | Not started | — | Deterministic checks + bounded (max 2) targeted LLM rubric-validation retry. |
 | 6 | `feat/eval-confidence-score` | Not started | — | Confidence from measurable components, pure functions. |
@@ -101,6 +101,41 @@ Verified / Done.
   unrelated `@placeme/web` warnings). Committed (`3b946d9`) and pushed.
   Not yet wired into `feedbackWorker.js` or persisted to
   `evaluation_evidence` — that orchestration is a later state.
-- Next: state 3 (`feat/eval-criterion-scoring`) — the 5 criterion
-  evaluators + `domain/evalRubric.js`, evaluating all participants
-  together per dimension from the evidence ledger (not raw transcript).
+- **2026-08-02 (state 3 done):** Fast-forwarded `feat/eval-criterion-scoring`
+  onto `feat/eval-transcript-analysis`'s tip (stacked, same lineage as
+  states 1-2). Wrote `domain/evalRubric.js`: each of the five existing
+  feedback dimensions broken into 2-3 observable subdimensions with anchor
+  descriptions per level and weights summing to 1.0 (asserted by test, plus
+  a load-time self-check that its dimension labels exactly match
+  `feedbackPrompt.js`'s `FEEDBACK_DIMENSION_LABELS`); exports the fixed
+  `SUBDIMENSION_LEVELS` enum and the `LEVEL_MARK` level-to-percentage table
+  as rubric-owned data only -- deliberately does not compute anything with
+  it, since AC4's aggregator is a later state and this keeps "the LLM
+  output alone never contains a final score" true by construction (there is
+  no score field anywhere in this stage's schema). Wrote
+  `domain/criterionEvaluationPrompt.js`: one prompt per dimension,
+  evaluating all participants together from the evidence ledger only
+  (reuses `transcriptAnalysisPrompt.js`'s `assignParticipantTags` rather
+  than reimplementing anonymization), assigns each evidence item a
+  position-stable id (E1, E2, ...) so the model must cite evidence by id
+  instead of restating it; `parseCriterionEvaluationResponse` does
+  closed-world validation against that specific call's context -- rejects
+  an invented subdimension level, an invented/renamed subdimension id, a
+  missing or duplicate participant, a foreign/invented evidence_id, a
+  non-absence level with no cited evidence, and a `not_observed`/
+  `insufficient_context` level that contradictorily cites evidence anyway.
+  Added `generateCriterionEvaluation` to `geminiClient.js` (same
+  temperature-pinned, structured-output pattern as the other two
+  evaluation-stage calls; takes a `parseContext` since this response's
+  validity depends on what that specific call offered, unlike the other
+  two's fixed schemas). 40 new tests, all passing;
+  `npm test --workspace=@placeme/server`: 486/486 tests passed (same 4
+  pre-existing Node-version-gated RLS test files as states 1-2, confirmed
+  unrelated -- no JS/test files those 4 suites touch were changed). `npm
+  run lint`: no new warnings (only pre-existing, unrelated `@placeme/web`
+  warnings). Not yet wired into `feedbackWorker.js` or persisted to
+  `evaluation_criterion_results` -- that orchestration is a later state.
+- Next: state 4 (`feat/eval-score-aggregation`) — the deterministic
+  aggregator (pure functions, no LLM arithmetic) that turns these
+  subdimension levels + `evalRubric.js`'s weights/`LEVEL_MARK` into a
+  dimension score and an overall score.

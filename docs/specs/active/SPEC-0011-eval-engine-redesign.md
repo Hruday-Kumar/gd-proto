@@ -296,10 +296,13 @@ the state-1 migration.
       (`domain/transcriptAnalysisPrompt.js` + `domain/evidenceVerifier.js`,
       commit `3b946d9`; 33 tests, including adversarial fabricated-quote
       and cross-speaker-attribution cases.)
-- [ ] **AC3 (state 3):** Criterion evaluators produce anchored subdimension
+- [x] **AC3 (state 3):** Criterion evaluators produce anchored subdimension
       levels with evidence IDs for all participants in one call per
       dimension; unsupported/invented levels are rejected by schema
-      validation.
+      validation. (`domain/evalRubric.js` + `domain/criterionEvaluationPrompt.js`
+      + `llm/geminiClient.generateCriterionEvaluation`, commit pending;
+      40 new tests, including adversarial invented-level, invented-
+      subdimension, foreign-evidence-id, and missing-participant cases.)
 - [ ] **AC4 (state 4):** Dimension and overall scores are produced only by
       deterministic code from subdimension levels/weights; a unit test
       proves the LLM output alone (without the aggregator) never contains
@@ -327,7 +330,7 @@ the state-1 migration.
 - [x] `feat/eval-schema-foundation` — migrations for the 5 new tables.
 - [x] `feat/eval-transcript-analysis` — Transcript Analysis service +
       deterministic evidence verifier.
-- [ ] `feat/eval-criterion-scoring` — 5 criterion evaluators + rubric
+- [x] `feat/eval-criterion-scoring` — 5 criterion evaluators + rubric
       module (`domain/evalRubric.js`).
 - [ ] `feat/eval-score-aggregation` — deterministic aggregator (pure
       functions, fully unit-testable without any LLM).
