@@ -16,7 +16,10 @@
 import { getRubricForDimension } from './evalRubric.js';
 import { buildCriterionEvaluationPrompt } from './criterionEvaluationPrompt.js';
 
-const DEFAULT_MAX_RETRIES = 2;
+// Exported so other stages (state 6's confidence calculator) can score a
+// retry count against the same bound this module actually enforces,
+// instead of duplicating the number.
+export const DEFAULT_MAX_RETRIES = 2;
 
 // A rubric weight not summing to 1.0 is a code-review defect in
 // evalRubric.js, not something retrying the LLM could ever fix -- checked

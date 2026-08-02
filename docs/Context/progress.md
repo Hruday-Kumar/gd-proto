@@ -17,7 +17,7 @@ Verified / Done.
 | 3 | `feat/eval-criterion-scoring` | Implemented — PR not yet opened | 2026-08-02 | `domain/evalRubric.js` (5 dimensions x 2-3 anchored subdimensions, weights sum to 1.0, `SUBDIMENSION_LEVELS`/`LEVEL_MARK`) + `domain/criterionEvaluationPrompt.js` (one prompt per dimension, evaluates all participants at once from the evidence ledger only, never the raw transcript) + `llm/geminiClient.generateCriterionEvaluation`. Branched off state 2's tip (stacked). Not yet wired into `feedbackWorker.js` -- pure, injectable, unit-tested domain functions only, same as state 2. |
 | 4 | `feat/eval-score-aggregation` | Implemented — PR not yet opened | 2026-08-03 | `domain/scoreAggregator.js`: `aggregateDimensionScore` (weighted average of subdimension marks, excluding not_observed/insufficient_context, renormalizing remaining weights, null if all excluded), `aggregateOverallScore` (equal-weighted average across the five dimensions, same null-exclusion rule), `aggregateScorecard` (composes both per participant across all five criterion-evaluator results into `{participantUserId, dimensions: [{label, score}], overallScore}`). Branched off state 3's tip (stacked). |
 | 5 | `feat/eval-validation-layer` | Implemented — PR not yet opened | 2026-08-03 | `domain/validationLayer.js`: `validateWeightTotal`/`validateScoreRange` (deterministic, always) + `evaluateCriterionWithValidation` (bounded max-2 same-criterion retry around a flagged/parse-failing criterion evaluator response, returns a flagged issue instead of throwing once exhausted). Branched off state 4's tip (stacked). Also merged into new consolidated `phase-2` branch per user instruction — every state branch is merged into `phase-2` as it lands, kept in sync going forward. |
-| 6 | `feat/eval-confidence-score` | Not started | — | Confidence from measurable components, pure functions. |
+| 6 | `feat/eval-confidence-score` | Implemented — PR not yet opened | 2026-08-03 | `domain/confidenceCalculator.js`: `computeTranscriptIntegrityComponent`/`computeSpeakerAttributionComponent` (from state 2's `verifyEvidenceLedger` verified/rejected counts, rejection reasons bucketed via `bucketEvidenceRejections`), `computeEvidenceSufficiencyComponent` (per participant, fraction of subdimension levels that are evidence-backed rather than not_observed/insufficient_context), `computeValidationSuccessComponent` (from state 5's `evaluateCriterionWithValidation` valid/retryCount outcomes, reusing its exported `DEFAULT_MAX_RETRIES`), `aggregateConfidence` (equal-weighted average of the four, rounded to an integer), `computeConfidenceForRun` (composes all of the above into one `{participantUserId, confidence, components}` entry per participant, same participant-extraction/dimension-coverage-check pattern as state 4's `aggregateScorecard`). Branched off state 5's tip (stacked). Persistence to `evaluation_confidence` deferred to state 7's `feedbackWorker.js` wiring, same scope pattern as states 2-5. |
 | 7 | `feat/eval-feedback-decoupled` | Not started | — | Cutover point: feedback generation reads validated scorecard/evidence; `feedback` row shape unchanged; requires guardrail #1 human verification before merge to `main`. |
 | 8 | `test/eval-golden-suite` | Not started | — | Fixture transcripts + determinism/metamorphic/evidence tests in `npm test`. |
 | 9 | `chore/eval-cutover-cleanup` | Not started | — | Remove old single-shot scoring path, update docs, final human-verification checklist. |
@@ -201,7 +201,56 @@ Verified / Done.
   `npm run lint`: no new warnings. Checked off AC5 and the state-5 task row
   in SPEC-0011. Merged into `phase-2` and pushed, per the new convention
   above.
-- Next: state 6 (`feat/eval-confidence-score`) — confidence calculated from
-  measurable components (transcript integrity, speaker attribution quality,
-  evidence sufficiency, validation success), pure functions, never asked of
-  the LLM directly.
+- **2026-08-03 (state 6 done):** Fast-forwarded `feat/eval-confidence-score`
+  onto `feat/eval-validation-layer`'s tip (stacked, same lineage as states
+  1-5). Wrote `domain/confidenceCalculator.js`, pure functions only, no LLM
+  calls, exactly R6's four named components (transcript integrity, speaker
+  attribution, evidence sufficiency, validation success): the two
+  evidence-ledger components read state 2's `verifyEvidenceLedger`
+  verified/rejected output, splitting rejection reasons via
+  `bucketEvidenceRejections` into a speaker-boundary-crossing bucket
+  (attribution) versus everything else (fabricated quote, out-of-range
+  index -- general integrity), both room-wide since the ledger is produced
+  once per room; evidence sufficiency is computed per participant, from
+  state 3's subdimension levels, as the fraction that landed on an
+  evidence-backed level rather than not_observed/insufficient_context
+  (R9-consistent: absence isn't scored as failure, but it does lower
+  confidence); validation success reads state 5's
+  `evaluateCriterionWithValidation` `{valid, retryCount}` outcomes per
+  dimension, scoring a clean pass 100, a retried-but-passing criterion
+  proportionally lower, and an exhausted/flagged criterion 0 -- exported
+  `DEFAULT_MAX_RETRIES` from `validationLayer.js` so this reuses the same
+  bound rather than duplicating it. `aggregateConfidence` equal-weights the
+  four components (`CONFIDENCE_COMPONENT_WEIGHT`, 0.25 each, same
+  equal-weighting rationale as state 4's `aggregateOverallScore` --
+  SPEC-0011 doesn't define relative weights across these four, so this is
+  the simplest deterministic choice satisfying R6, flagged not hidden) and
+  rounds to an integer, matching `evaluation_confidence.confidence`'s
+  column type. `computeConfidenceForRun` composes all of it into one
+  `{participantUserId, confidence, components}` entry per participant,
+  reusing the same participant-extraction and five-dimension-coverage
+  check `aggregateScorecard` (state 4) already established. Deliberately
+  did not implement the 0019 migration comment's illustrative fifth
+  component, "execution_quality" -- that's orchestration-level (pipeline
+  completed without error/on time), not a signal available to a pure
+  domain function, and R6 itself only names four; left to state 7's
+  `feedbackWorker.js` wiring, noted in SPEC-0011 rather than fabricated
+  here. 23 new tests in `test/confidenceCalculator.test.js`, covering every
+  component's edge cases (nothing attempted, nothing rejected, partial
+  rejection, exhausted retry) and `computeConfidenceForRun`'s end-to-end
+  composition including its two guard-clause errors. Full suite: `npm test
+  --workspace=@placeme/server` 533/533 passing (same 4 pre-existing
+  Node-version-gated RLS test files as states 1-5, confirmed unrelated).
+  `npm run lint`: no new warnings (same pre-existing `@placeme/web` ones).
+  Checked off AC6 and the state-6 task row in SPEC-0011 (noting, as AC1
+  did for its own deferred piece, that literal persistence to
+  `evaluation_confidence` is state 7's concern, not this state's). Merged
+  into `phase-2` and pushed, per the state-5-established convention.
+- Next: state 7 (`feat/eval-feedback-decoupled`) — the cutover point:
+  rewire `feedbackWorker.js` to the new pipeline end to end (Transcript
+  Analysis -> evidence verification -> criterion evaluation -> validation
+  -> score aggregation -> confidence -> feedback generation), persist to
+  `evaluation_runs`/`evaluation_evidence`/`evaluation_criterion_results`/
+  `evaluation_confidence`, retire the old single-shot prompt path, and
+  verify the `feedback` table/API contract stays byte-for-byte unchanged --
+  requires guardrail #1 human verification before merge to `main` per AC7.

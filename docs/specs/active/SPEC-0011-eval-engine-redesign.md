@@ -319,8 +319,15 @@ the state-1 migration.
       `validateWeightTotal`/`validateScoreRange` plus
       `evaluateCriterionWithValidation`'s bounded same-criterion retry
       around a flagged (parse-failing) response; 11 new tests.)
-- [ ] **AC6 (state 6):** Confidence and its component breakdown are stored
+- [x] **AC6 (state 6):** Confidence and its component breakdown are stored
       per participant per run, computed only from measurable inputs.
+      (`domain/confidenceCalculator.js`, commit pending; 23 new tests
+      covering every component's edge cases (nothing attempted, nothing
+      rejected, partial rejection, exhausted retry) plus
+      `computeConfidenceForRun`'s end-to-end composition. "Stored" is
+      literal persistence to `evaluation_confidence` -- deferred to state 7
+      alongside the rest of the pipeline's `feedbackWorker.js` wiring, same
+      pattern as states 2-5's pure/injectable-only scope.)
 - [ ] **AC7 (state 7):** Feedback text is generated from the validated
       scorecard/evidence only; `feedback` table rows and both existing API
       routes are byte-for-byte compatible in shape with today; real-human
@@ -344,7 +351,7 @@ the state-1 migration.
       functions, fully unit-testable without any LLM).
 - [x] `feat/eval-validation-layer` — deterministic validators + bounded
       targeted LLM retry.
-- [ ] `feat/eval-confidence-score` — confidence calculator (pure
+- [x] `feat/eval-confidence-score` — confidence calculator (pure
       functions).
 - [ ] `feat/eval-feedback-decoupled` — rewire `feedbackWorker.js` to the
       new pipeline; retire the old single-shot prompt; verify contract
