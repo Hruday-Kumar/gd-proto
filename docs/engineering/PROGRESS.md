@@ -2,10 +2,49 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-08-01 (BE-9 aggregate stats — see the entry directly
-below. Older entries, including this same day's BE-1/BE-2/BE-3/BE-4/BE-6/
-BE-7/BE-19/BE-10/BE-14/BE-8 work and the 2026-07-31 M5/N8 close-out +
-BUG-SPEC-0001 E2E test, are preserved further down, unchanged.)
+**Last updated:** 2026-08-02 (PR #83, `dev` → `main` promotion — see the
+entry directly below. Older entries, including 2026-08-01's BE-1/BE-2/
+BE-3/BE-4/BE-6/BE-7/BE-19/BE-10/BE-14/BE-8/BE-9 work and the 2026-07-31
+M5/N8 close-out + BUG-SPEC-0001 E2E test, are preserved further down,
+unchanged.)
+
+## PR #83 — `dev` → `main` promotion (2026-08-02)
+
+Release PR bundling BE-2/BE-3/BE-1/BE-4/BE-6/BE-7/BE-10/BE-14/BE-9 (PRs
+#72–#82) from `dev` into `main`. Reviewed via this repo's own `pr-review`
+skill.
+
+**Migrations `0014`–`0018`:** all five confirmed applied to the live
+Supabase project by the user, 2026-08-02, clearing `PLAN.md` §3's
+"do not promote before this is live" gate for each — table updated to ✅
+accordingly. Not independently re-verified against the live schema this
+session (no live DB access here) — taken on the user's word, same pattern
+as `0012`'s entry.
+
+**PR title corrected**: was "Frontend changes and route fixes and
+comments to all files", which didn't describe the diff — every changed
+file is `apps/server/**`, `docs/**`, or `supabase/migrations/**`; no
+`apps/web` file is touched by this PR.
+
+**`dependency-audit` CI check left failing, deliberately**: it flags
+`react-router` (GHSA-qwww-vcr4-c8h2, high) in the `7.12.0–8.2.0` range.
+Checked the advisory directly — it's a CSRF issue scoped to React
+Router's unstable RSC (Server Components) code paths only; `apps/web` is
+a plain client-side Vite SPA and doesn't use RSC, so this advisory
+doesn't describe a real exposure here. The only fix `npm audit fix
+--force` offers is downgrading `react-router-dom` 7.18.1 → 7.11.0 (7
+minor versions back, and there is no react-router-dom release depending
+on a patched `react-router` ≥8.3.0) — a real regression risk for a
+vulnerability class this app can't hit. Left as-is rather than forcing
+that downgrade blind; `package.json`/`package-lock.json` are otherwise
+untouched by this PR. Worth a dedicated look (e.g. migrating off
+`react-router-dom` to import from `react-router` directly, per upstream's
+v7 guidance) as separate, deliberate work — not a promotion blocker.
+
+**Residual/open:**
+- Guardrail #1 (human verification) remains outstanding for BE-6/BE-7's
+  feedback-structure change — tracked in the BE-6/BE-7 entry below, not
+  satisfied by the migration being live.
 
 ## BE-9 — aggregate stats: streak, avg score, speak-time % (2026-08-01)
 
