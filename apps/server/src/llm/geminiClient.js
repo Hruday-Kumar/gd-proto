@@ -12,9 +12,20 @@
 // vendor lineup change is a config edit, not a code change.
 import { buildTopicPrompt, parseTopicResponse } from '../domain/topicPrompt.js';
 import { parseFeedbackResponse, FEEDBACK_RESPONSE_SCHEMA } from '../domain/feedbackPrompt.js';
+import { parseTranscriptAnalysisResponse, TRANSCRIPT_ANALYSIS_RESPONSE_SCHEMA } from '../domain/transcriptAnalysisPrompt.js';
 import { withRetry } from '../domain/retry.js';
 
 export const DEFAULT_GEMINI_MODEL = 'gemini-3.6-flash';
+
+// SPEC-0011 R13: the single biggest fix for run-to-run score variance --
+// no evaluation-pipeline call ever left `temperature` unset before this,
+// so the same transcript could score differently across runs purely from
+// default sampling. Pinned low (not 0) since some models degrade into
+// repetitive/degenerate structured output at exactly 0; this is "as
+// deterministic as practical", not a claim of bit-for-bit reproducibility
+// (architecture doc §18: "exact identical scores cannot be guaranteed by
+// a probabilistic model... target bounded variance").
+export const DEFAULT_EVAL_TEMPERATURE = 0.1;
 
 // 2026-07-30 (pilot-readiness + exception-handling pass): no timeout
 // existed anywhere in this file -- a hung request blocked indefinitely,
@@ -115,11 +126,46 @@ export async function generateFeedback(
   // score/dimensions/strengths/improvements shape is enforced by the API
   // itself, not just prompt wording -- parseFeedbackResponse still
   // validates defensively on top of this.
-  const generationConfig = { responseMimeType: 'application/json', responseSchema: FEEDBACK_RESPONSE_SCHEMA };
+  const generationConfig = {
+    responseMimeType: 'application/json',
+    responseSchema: FEEDBACK_RESPONSE_SCHEMA,
+    temperature: DEFAULT_EVAL_TEMPERATURE,
+  };
   const body = await withRetry(() => callGemini(prompt, { apiKey, model, fetchImpl, timeoutMs, generationConfig }), {
     attempts: retryAttempts,
     delayMs: retryDelayMs,
     shouldRetry: isRetryableGeminiError,
   });
   return parseFeedbackResponse(body);
+}
+
+// SPEC-0011 state 2: sends an already-built Transcript Analysis prompt
+// (domain/transcriptAnalysisPrompt.js's buildTranscriptAnalysisPrompt) and
+// returns the parsed conversation_understanding + evidence_ledger. Same
+// raw `generate(prompt)` shape as generateFeedback, and the same
+// structured-output + defensive-parse pairing -- the API schema keeps the
+// shape reliable, parseTranscriptAnalysisResponse still validates
+// defensively on top of it.
+export async function generateTranscriptAnalysis(
+  prompt,
+  {
+    apiKey = process.env.GEMINI_API_KEY,
+    model = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL,
+    fetchImpl = fetch,
+    timeoutMs = DEFAULT_GEMINI_TIMEOUT_MS,
+    retryAttempts = DEFAULT_GEMINI_RETRY_ATTEMPTS,
+    retryDelayMs = DEFAULT_GEMINI_RETRY_DELAY_MS,
+  } = {}
+) {
+  const generationConfig = {
+    responseMimeType: 'application/json',
+    responseSchema: TRANSCRIPT_ANALYSIS_RESPONSE_SCHEMA,
+    temperature: DEFAULT_EVAL_TEMPERATURE,
+  };
+  const body = await withRetry(() => callGemini(prompt, { apiKey, model, fetchImpl, timeoutMs, generationConfig }), {
+    attempts: retryAttempts,
+    delayMs: retryDelayMs,
+    shouldRetry: isRetryableGeminiError,
+  });
+  return parseTranscriptAnalysisResponse(body);
 }

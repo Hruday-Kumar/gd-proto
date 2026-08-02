@@ -2,7 +2,13 @@
 // testable without a live API key or network call -- same DI pattern as
 // getSupabase()'s callers elsewhere in this codebase.
 import { describe, it, expect, vi } from 'vitest';
-import { generateTopic, generateFeedback, DEFAULT_GEMINI_MODEL } from '../src/llm/geminiClient.js';
+import {
+  generateTopic,
+  generateFeedback,
+  generateTranscriptAnalysis,
+  DEFAULT_GEMINI_MODEL,
+  DEFAULT_EVAL_TEMPERATURE,
+} from '../src/llm/geminiClient.js';
 
 function fakeFetchOk(text) {
   return vi.fn().mockResolvedValue({
@@ -166,5 +172,78 @@ describe('generateFeedback', () => {
   it('throws a descriptive error when the API responds with a non-OK status', async () => {
     const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => 'server error' });
     await expect(generateFeedback(prompt, { apiKey: 'test-key', fetchImpl })).rejects.toThrow(/500/);
+  });
+
+  // SPEC-0011 R13: the same transcript scoring differently across runs was
+  // traced to no evaluation call ever pinning `temperature` -- this proves
+  // it's actually set on the request, not just documented as an intent.
+  it('pins a low, fixed temperature so re-scoring the same transcript is not left to default sampling', async () => {
+    const fetchImpl = fakeFetchOk(fakeFeedbackJsonResponse());
+    await generateFeedback(prompt, { apiKey: 'test-key', fetchImpl });
+    const [, options] = fetchImpl.mock.calls[0];
+    expect(JSON.parse(options.body).generationConfig.temperature).toBe(DEFAULT_EVAL_TEMPERATURE);
+  });
+});
+
+// SPEC-0011 state 2: same raw generate(prompt) shape as generateFeedback,
+// for the Transcript Analysis stage's evidence-ledger extraction.
+describe('generateTranscriptAnalysis', () => {
+  const prompt = 'Analyze this transcript, numbered by utterance...';
+
+  function fakeTranscriptAnalysisJsonResponse() {
+    return JSON.stringify({
+      conversation_understanding: {
+        summary: 'Participants discussed remote work tradeoffs.',
+        topic_segments: [{ segment_id: 'TS1', description: 'Opening positions.' }],
+      },
+      evidence_ledger: [
+        {
+          utterance_indexes: [0],
+          evidence_type: 'claim',
+          exact_quote: 'remote work improves productivity',
+          neutral_description: 'States a position.',
+          extraction_confidence: 'high',
+        },
+      ],
+    });
+  }
+
+  it('throws when no API key is configured', async () => {
+    await expect(
+      generateTranscriptAnalysis(prompt, { apiKey: undefined, fetchImpl: fakeFetchOk('x') })
+    ).rejects.toThrow(/GEMINI_API_KEY/);
+  });
+
+  it('calls the configured model endpoint and returns the parsed evidence ledger', async () => {
+    const fetchImpl = fakeFetchOk(fakeTranscriptAnalysisJsonResponse());
+    const result = await generateTranscriptAnalysis(prompt, { apiKey: 'test-key', fetchImpl });
+    expect(result.conversationUnderstanding.summary).toMatch(/remote work tradeoffs/);
+    expect(result.evidenceLedger).toHaveLength(1);
+    const [url, options] = fetchImpl.mock.calls[0];
+    expect(url).toContain(DEFAULT_GEMINI_MODEL);
+    expect(JSON.parse(options.body).contents[0].parts[0].text).toBe(prompt);
+  });
+
+  it('requests Gemini JSON mode with the transcript analysis response schema', async () => {
+    const fetchImpl = fakeFetchOk(fakeTranscriptAnalysisJsonResponse());
+    await generateTranscriptAnalysis(prompt, { apiKey: 'test-key', fetchImpl });
+    const [, options] = fetchImpl.mock.calls[0];
+    const body = JSON.parse(options.body);
+    expect(body.generationConfig.responseMimeType).toBe('application/json');
+    expect(body.generationConfig.responseSchema.required).toEqual(
+      expect.arrayContaining(['conversation_understanding', 'evidence_ledger'])
+    );
+  });
+
+  it('pins a low, fixed temperature, same as generateFeedback', async () => {
+    const fetchImpl = fakeFetchOk(fakeTranscriptAnalysisJsonResponse());
+    await generateTranscriptAnalysis(prompt, { apiKey: 'test-key', fetchImpl });
+    const [, options] = fetchImpl.mock.calls[0];
+    expect(JSON.parse(options.body).generationConfig.temperature).toBe(DEFAULT_EVAL_TEMPERATURE);
+  });
+
+  it('throws a descriptive error when the API responds with a non-OK status', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => 'server error' });
+    await expect(generateTranscriptAnalysis(prompt, { apiKey: 'test-key', fetchImpl })).rejects.toThrow(/500/);
   });
 });
