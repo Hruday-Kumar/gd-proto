@@ -303,10 +303,13 @@ the state-1 migration.
       + `llm/geminiClient.generateCriterionEvaluation`, commit pending;
       40 new tests, including adversarial invented-level, invented-
       subdimension, foreign-evidence-id, and missing-participant cases.)
-- [ ] **AC4 (state 4):** Dimension and overall scores are produced only by
+- [x] **AC4 (state 4):** Dimension and overall scores are produced only by
       deterministic code from subdimension levels/weights; a unit test
       proves the LLM output alone (without the aggregator) never contains
-      a final score.
+      a final score. (`domain/scoreAggregator.js`, commit pending; 13 new
+      tests covering every level/weight/insufficient-evidence combination;
+      `criterionEvaluationPrompt.test.js`'s existing "has no numeric score
+      field" test covers the LLM-output half.)
 - [ ] **AC5 (state 5):** Deterministic validation checks (evidence
       existence, quote match, score range, weight totals) run on every
       evaluation; a flagged criterion is retried at most twice, targeted
@@ -332,7 +335,7 @@ the state-1 migration.
       deterministic evidence verifier.
 - [x] `feat/eval-criterion-scoring` — 5 criterion evaluators + rubric
       module (`domain/evalRubric.js`).
-- [ ] `feat/eval-score-aggregation` — deterministic aggregator (pure
+- [x] `feat/eval-score-aggregation` — deterministic aggregator (pure
       functions, fully unit-testable without any LLM).
 - [ ] `feat/eval-validation-layer` — deterministic validators + bounded
       targeted LLM retry.

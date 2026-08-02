@@ -15,7 +15,7 @@ Verified / Done.
 | 1 | `feat/eval-schema-foundation` | Implemented — PR not yet opened | 2026-08-02 | Migration `0019_evaluation_pipeline_tables.sql` adds `evaluation_runs`, `evaluation_evidence`, `evaluation_criterion_results`, `evaluation_validation_issues`, `evaluation_confidence`, all RLS-enabled with zero client policies (service-role only). No application code changed. Committed (`dc8f3c4`) and pushed. Still needs: manual application to the live Supabase project (per `CLAUDE.md`, migrations are never applied automatically) before state 2 can insert real rows. |
 | 2 | `feat/eval-transcript-analysis` | Implemented — PR not yet opened | 2026-08-02 | `domain/transcriptAnalysisPrompt.js` (prompt/schema/parser) + `domain/evidenceVerifier.js` (deterministic quote/attribution verification) + `llm/geminiClient.generateTranscriptAnalysis`. Also pinned `temperature` on every eval Gemini call, including the still-live `generateFeedback` (R13, done early — small, safe, directly fixes the reported "random scores"). Branched off state 1's tip (stacked, not off `dev`, since it depends on the schema). Not yet wired into `feedbackWorker.js`/persisted to `evaluation_evidence` — pure, injectable, unit-tested domain functions only. |
 | 3 | `feat/eval-criterion-scoring` | Implemented — PR not yet opened | 2026-08-02 | `domain/evalRubric.js` (5 dimensions x 2-3 anchored subdimensions, weights sum to 1.0, `SUBDIMENSION_LEVELS`/`LEVEL_MARK`) + `domain/criterionEvaluationPrompt.js` (one prompt per dimension, evaluates all participants at once from the evidence ledger only, never the raw transcript) + `llm/geminiClient.generateCriterionEvaluation`. Branched off state 2's tip (stacked). Not yet wired into `feedbackWorker.js` -- pure, injectable, unit-tested domain functions only, same as state 2. |
-| 4 | `feat/eval-score-aggregation` | Not started | — | Deterministic aggregator, pure functions, no LLM arithmetic. |
+| 4 | `feat/eval-score-aggregation` | Implemented — PR not yet opened | 2026-08-03 | `domain/scoreAggregator.js`: `aggregateDimensionScore` (weighted average of subdimension marks, excluding not_observed/insufficient_context, renormalizing remaining weights, null if all excluded), `aggregateOverallScore` (equal-weighted average across the five dimensions, same null-exclusion rule), `aggregateScorecard` (composes both per participant across all five criterion-evaluator results into `{participantUserId, dimensions: [{label, score}], overallScore}`). Branched off state 3's tip (stacked). |
 | 5 | `feat/eval-validation-layer` | Not started | — | Deterministic checks + bounded (max 2) targeted LLM rubric-validation retry. |
 | 6 | `feat/eval-confidence-score` | Not started | — | Confidence from measurable components, pure functions. |
 | 7 | `feat/eval-feedback-decoupled` | Not started | — | Cutover point: feedback generation reads validated scorecard/evidence; `feedback` row shape unchanged; requires guardrail #1 human verification before merge to `main`. |
@@ -135,7 +135,36 @@ Verified / Done.
   run lint`: no new warnings (only pre-existing, unrelated `@placeme/web`
   warnings). Not yet wired into `feedbackWorker.js` or persisted to
   `evaluation_criterion_results` -- that orchestration is a later state.
-- Next: state 4 (`feat/eval-score-aggregation`) — the deterministic
-  aggregator (pure functions, no LLM arithmetic) that turns these
-  subdimension levels + `evalRubric.js`'s weights/`LEVEL_MARK` into a
-  dimension score and an overall score.
+- **2026-08-03 (state 4 done):** Fast-forwarded `feat/eval-score-aggregation`
+  onto `feat/eval-criterion-scoring`'s tip (stacked, same lineage as states
+  1-3). Wrote `domain/scoreAggregator.js`, pure functions only, no LLM calls
+  — the only place in the pipeline that computes a score:
+  `aggregateDimensionScore` takes one participant's subdimension levels for
+  one dimension, looks up each subdimension's weight from `evalRubric.js`
+  and mark from `LEVEL_MARK`, excludes `not_observed`/`insufficient_context`
+  from the average (renormalizing remaining weights rather than scoring
+  absence as 0, consistent with R9), returns `null` if every subdimension is
+  excluded; throws on an unknown subdimension id or level rather than
+  silently ignoring a malformed input. `aggregateOverallScore` applies the
+  same null-exclusion weighted-average logic equal-weighted across the five
+  dimensions — SPEC-0011 only fixes subdimension weights *within* a
+  dimension, not cross-dimension weights, so equal weighting is this state's
+  simplest deterministic choice satisfying R4; flagged to user as a decision
+  worth confirming, not hidden. `aggregateScorecard` composes both across
+  one `parseCriterionEvaluationResponse`-shaped result per
+  `FEEDBACK_DIMENSION_LABELS` dimension, producing
+  `{participantUserId, dimensions: [{label, score}], overallScore}` per
+  participant — `note` (feedback text) stays out of scope, that's state 7's
+  Feedback Generation stage. 13 new tests in `test/scoreAggregator.test.js`,
+  covering every level/weight/insufficient-evidence combination plus
+  malformed-input cases; combined with `criterionEvaluationPrompt.test.js`'s
+  pre-existing "schema has no score field" test, satisfies AC4's "unit test
+  proves the LLM output alone never contains a final score." Full suite:
+  `npm test --workspace=@placeme/server` 499/499 passing (same 4
+  pre-existing Node-version-gated RLS test files as states 1-3, confirmed
+  unrelated — this state touched zero files those suites depend on). `npm
+  run lint`: no new warnings (same pre-existing `@placeme/web` ones).
+  Checked off AC4 and the state-4 task row in SPEC-0011. Not committed yet.
+- Next: state 5 (`feat/eval-validation-layer`) — deterministic checks
+  (evidence existence, quote match, score range, weight totals) plus a
+  bounded (max 2 retries) targeted LLM rubric-validation retry.
