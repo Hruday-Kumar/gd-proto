@@ -286,11 +286,16 @@ the state-1 migration.
 
 ## Acceptance Criteria
 
-- [ ] **AC1 (state 1):** New tables exist via a reviewed migration; no
+- [x] **AC1 (state 1):** New tables exist via a reviewed migration; no
       existing behavior changes; `npm test` still passes unmodified.
-- [ ] **AC2 (state 2):** Transcript Analysis stage produces a verified
+      (`0019_evaluation_pipeline_tables.sql`, commit `dc8f3c4`. Still
+      pending: manual application to the live Supabase project.)
+- [x] **AC2 (state 2):** Transcript Analysis stage produces a verified
       evidence ledger for a fixture transcript; fabricated-quote and
       wrong-attribution cases are rejected by the deterministic verifier.
+      (`domain/transcriptAnalysisPrompt.js` + `domain/evidenceVerifier.js`,
+      commit `3b946d9`; 33 tests, including adversarial fabricated-quote
+      and cross-speaker-attribution cases.)
 - [ ] **AC3 (state 3):** Criterion evaluators produce anchored subdimension
       levels with evidence IDs for all participants in one call per
       dimension; unsupported/invented levels are rejected by schema
@@ -319,8 +324,8 @@ the state-1 migration.
 
 ## Implementation Tasks (state = branch, in order)
 
-- [ ] `feat/eval-schema-foundation` — migrations for the 5 new tables.
-- [ ] `feat/eval-transcript-analysis` — Transcript Analysis service +
+- [x] `feat/eval-schema-foundation` — migrations for the 5 new tables.
+- [x] `feat/eval-transcript-analysis` — Transcript Analysis service +
       deterministic evidence verifier.
 - [ ] `feat/eval-criterion-scoring` — 5 criterion evaluators + rubric
       module (`domain/evalRubric.js`).
