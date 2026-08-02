@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useConsentStatus } from '../consent/useConsentStatus.js';
 import { AppShell } from '../components/AppShell.jsx';

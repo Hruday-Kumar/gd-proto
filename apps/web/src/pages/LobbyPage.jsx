@@ -1,5 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
-import { Link, useLocation, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { getRoomStatus, startRoom, getMyFeedback, getRoomTranscript } from '../rooms/roomsApi.js';
 import { AppShell } from '../components/AppShell.jsx';

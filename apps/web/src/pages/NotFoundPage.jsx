@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 
 // Catch-all for any unmatched URL -- a mistyped room link used to render a
 // completely blank page with no way back.

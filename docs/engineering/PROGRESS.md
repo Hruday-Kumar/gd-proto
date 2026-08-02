@@ -26,20 +26,45 @@ comments to all files", which didn't describe the diff — every changed
 file is `apps/server/**`, `docs/**`, or `supabase/migrations/**`; no
 `apps/web` file is touched by this PR.
 
-**`dependency-audit` CI check left failing, deliberately**: it flags
-`react-router` (GHSA-qwww-vcr4-c8h2, high) in the `7.12.0–8.2.0` range.
-Checked the advisory directly — it's a CSRF issue scoped to React
-Router's unstable RSC (Server Components) code paths only; `apps/web` is
-a plain client-side Vite SPA and doesn't use RSC, so this advisory
-doesn't describe a real exposure here. The only fix `npm audit fix
---force` offers is downgrading `react-router-dom` 7.18.1 → 7.11.0 (7
-minor versions back, and there is no react-router-dom release depending
-on a patched `react-router` ≥8.3.0) — a real regression risk for a
-vulnerability class this app can't hit. Left as-is rather than forcing
-that downgrade blind; `package.json`/`package-lock.json` are otherwise
-untouched by this PR. Worth a dedicated look (e.g. migrating off
-`react-router-dom` to import from `react-router` directly, per upstream's
-v7 guidance) as separate, deliberate work — not a promotion blocker.
+**`dependency-audit` CI check — fixed for real, not just documented
+around.** Initially left failing deliberately (see git history on this
+entry): it flags `react-router` (GHSA-qwww-vcr4-c8h2, high) in the
+`7.12.0–8.2.0` range, a CSRF issue scoped to React Router's unstable RSC
+code paths only — `apps/web` is a plain client-side Vite SPA that doesn't
+use RSC, so it wasn't a real exposure, but `npm audit fix --force`'s only
+offer was downgrading `react-router-dom` 7 minor versions (7.18.1 →
+7.11.0), a real regression risk to avoid blind.
+
+Looked closer at the actual fix instead: React Router v8.0.0 removed the
+`react-router-dom` package entirely (its own changelog, "Removed
+`react-router-dom`") — everything except `RouterProvider`/`HydratedRouter`
+moves to importing from `react-router` directly. `apps/web` only ever
+used `BrowserRouter`, `Routes`, `Route`, `Link`, `NavLink`, `Navigate`,
+`useNavigate`, `useParams`, `useLocation`, and `MemoryRouter` (in tests)
+— none of the RSC/data-router APIs v8 actually changed, and none of the
+two APIs that need the separate `react-router/dom` entry point. So the
+fix is a same-behavior import swap, not a real breaking migration:
+`react-router-dom` → `react-router` across all 21 import sites,
+`apps/web/package.json`'s dependency swapped to `react-router@^8.3.0`.
+
+**Verified:** `npm audit --workspace=@placeme/web` now reports 0
+vulnerabilities. `npm run build --workspace=@placeme/web` clean, `npm
+test --workspace=@placeme/web` 104/104 passed (same count as before —
+no behavior change), `npm run lint --workspace=@placeme/web` clean (same
+3 pre-existing, unrelated warnings). React 19.2.8 was already installed,
+satisfying v8's `>=19.2.7` requirement.
+
+**One real constraint surfaced by this**: `react-router@8.3.0` requires
+Node `>=22.22.0`; this repo's root `.npmrc` already sets
+`engine-strict=true` (a deliberate choice from an earlier Supabase-realtime
+lesson), so `npm install` now hard-fails on any dev machine running Node
+22.13–22.21. CI's `actions/setup-node@v4` with `node-version: 22`
+resolves to a current 22.x release (verified >=22.22.0 as of this
+session) so this doesn't affect CI, but **anyone doing local `apps/web`
+work now needs Node >=22.22.0**, tighter than this repo's previous
+`>=22.0.0` floor. Root `package.json`'s `engines.node` bumped to
+`>=22.22.0` in this same PR so the requirement is discoverable up front
+instead of only via a failed `npm install`.
 
 **Residual/open:**
 - Guardrail #1 (human verification) remains outstanding for BE-6/BE-7's

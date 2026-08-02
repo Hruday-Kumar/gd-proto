@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { AuthShell } from '../components/AuthShell.jsx';
 import { ButtonBusyLabel } from '../components/ButtonBusyLabel.jsx';
