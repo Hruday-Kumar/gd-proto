@@ -71,7 +71,22 @@ export async function generateAndPersistFeedbackForRoom(
         return false;
       }
       try {
-        await insertFeedbackFn({ roomId, userId: result.userId, body: result.body, model });
+        // SPEC-0006 (BE-6/BE-7): result.body is now the structured shape
+        // domain/feedbackPrompt.js's parseFeedbackResponse produces (or the
+        // matching transcription-failed stub) -- `body` in the DB row keeps
+        // its existing name/meaning (the prose summary), the rest are new
+        // columns.
+        const { summary, score, dimensions, strengths, improvements } = result.body;
+        await insertFeedbackFn({
+          roomId,
+          userId: result.userId,
+          body: summary,
+          score,
+          dimensions,
+          strengths,
+          improvements,
+          model,
+        });
         return true;
       } catch (err) {
         console.error(`[feedback] failed to persist feedback for user ${result.userId} in room ${roomId}: ${err.message}`);

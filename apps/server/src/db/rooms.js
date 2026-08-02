@@ -8,17 +8,37 @@ export async function roomCodeExists(code, { supabase = getSupabase() } = {}) {
   return Boolean(data);
 }
 
-export async function insertRoom({ code, topicId, durationSeconds, joinMode, createdBy }, { supabase = getSupabase() } = {}) {
+// maxParticipants (BE-2, SPEC-0002) is always provided by the caller
+// (api/routes/rooms.js defaults it to DEFAULT_MAX_ROOM_PARTICIPANTS when
+// the request omits it) -- this function itself has no opinion on what a
+// missing value should mean, same as durationSeconds.
+//
+// visibility (BE-3, SPEC-0003) and level (BE-4, SPEC-0005) are both
+// deliberately *not* always provided -- POST /api/rooms defaults them
+// before calling this, but POST /api/rooms/match never passes either, so
+// they stay undefined here and the insert below omits those keys entirely
+// (JSON.stringify drops undefined-valued keys), letting the columns' own
+// DEFAULTs ('private', 'intermediate') apply. Matched rooms are
+// system-formed, not creator-configured (both specs' Non Goals).
+export async function insertRoom(
+  { code, topicId, durationSeconds, maxParticipants, visibility, level, joinMode, createdBy },
+  { supabase = getSupabase() } = {}
+) {
   const { data, error } = await supabase
     .from('rooms')
     .insert({
       code,
       topic_id: topicId,
       duration_seconds: durationSeconds,
+      max_participants: maxParticipants,
+      visibility,
+      level,
       join_mode: joinMode,
       created_by: createdBy,
     })
-    .select('id, code, status, topic_id, duration_seconds, started_at, ends_at, ended_at, created_by')
+    .select(
+      'id, code, status, topic_id, duration_seconds, max_participants, visibility, level, started_at, ends_at, ended_at, created_by'
+    )
     .single();
   if (error) throw error;
   return data;
@@ -27,7 +47,7 @@ export async function insertRoom({ code, topicId, durationSeconds, joinMode, cre
 export async function getRoomByCode(code, { supabase = getSupabase() } = {}) {
   const { data, error } = await supabase
     .from('rooms')
-    .select('id, code, status, topic_id, duration_seconds, started_at, ends_at, ended_at, created_by')
+    .select('id, code, status, topic_id, duration_seconds, max_participants, started_at, ends_at, ended_at, created_by')
     .eq('code', code)
     .maybeSingle();
   if (error) throw error;
@@ -45,6 +65,29 @@ export async function getRoomById(id, { supabase = getSupabase() } = {}) {
     .maybeSingle();
   if (error) throw error;
   return data;
+}
+
+// BE-1 (place-me-UI/docs/BACKEND_REQUIREMENTS.md, SPEC-0004): defensive
+// ceiling on the open-rooms listing (M9 discipline) -- at pilot scale
+// (5-10 concurrent rooms per CLAUDE.md) this is generous headroom, not
+// expected to bind in practice, same reasoning as MAX_HISTORY_ROOMS below.
+const MAX_OPEN_ROOMS = 50;
+
+// visibility = 'public' rooms a caller could browse into -- the capacity
+// filter (has this room already reached its own max_participants) happens
+// in domain/roomListing.js's buildOpenRoomsList, not here, since that
+// needs a second query's worth of participant counts this function
+// doesn't have. topics(text) embedded the same way getRoomById does.
+export async function listOpenRooms({ supabase = getSupabase() } = {}) {
+  const { data, error } = await supabase
+    .from('rooms')
+    .select('id, code, duration_seconds, max_participants, created_by, created_at, topics(text)')
+    .eq('status', 'waiting')
+    .eq('visibility', 'public')
+    .order('created_at', { ascending: false })
+    .limit(MAX_OPEN_ROOMS);
+  if (error) throw error;
+  return data ?? [];
 }
 
 // M9 (audit 2026-07-28): matches roomParticipants.js's listRoomIdsForUser

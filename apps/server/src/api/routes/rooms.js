@@ -8,11 +8,22 @@ import { createConsentGate } from '../middleware/consentGate.js';
 import { mintToken } from '../../livekit/token.js';
 import { startTranscriptionForRoom } from '../../agent/roomAgent.js';
 import { getFeedbackForRoomAndUser, rateFeedback } from '../../db/feedback.js';
-import { listParticipants, removeParticipant } from '../../db/roomParticipants.js';
+import { listParticipants, removeParticipant, listParticipantsForRooms } from '../../db/roomParticipants.js';
 import { listProfiles } from '../../db/profiles.js';
 import { listTranscriptLinesForRoom } from '../../db/transcriptLines.js';
+import { listOpenRooms } from '../../db/rooms.js';
 import { createLlmRateLimiter, createRoomActionRateLimiter } from '../middleware/rateLimit.js';
-import { isRoomFull, DEFAULT_MAX_ROOM_PARTICIPANTS } from '../../domain/roomCapacity.js';
+import {
+  isRoomFull,
+  isValidMaxParticipants,
+  DEFAULT_MAX_ROOM_PARTICIPANTS,
+  MIN_ROOM_PARTICIPANTS,
+  MAX_ROOM_PARTICIPANTS,
+} from '../../domain/roomCapacity.js';
+import { isValidVisibility, DEFAULT_VISIBILITY } from '../../domain/roomVisibility.js';
+import { isValidLevel, DEFAULT_LEVEL } from '../../domain/roomLevel.js';
+import { buildOpenRoomsList } from '../../domain/roomListing.js';
+import { computeTalkTimeShares } from '../../domain/talkTime.js';
 
 // Interim group-size default for random matching (PHASE1_PLAN.md §8,
 // decided 2026-07-26: anchored to the AI Voice Practice mode's stated
@@ -23,6 +34,9 @@ const DEFAULT_MIN_GROUP_SIZE = 3;
 const DEFAULT_MAX_GROUP_SIZE = 6;
 
 const INVALID_DURATION_ERROR = `durationSeconds must be a whole number of seconds between ${MIN_DURATION_SECONDS} and ${MAX_DURATION_SECONDS}`;
+const INVALID_MAX_PARTICIPANTS_ERROR = `maxParticipants must be a whole number between ${MIN_ROOM_PARTICIPANTS} and ${MAX_ROOM_PARTICIPANTS}`;
+const INVALID_VISIBILITY_ERROR = "visibility must be either 'public' or 'private'";
+const INVALID_LEVEL_ERROR = "level must be one of 'beginner', 'intermediate', or 'advanced'";
 
 // Maps a DB room row (snake_case) to the shape sessionStateMachine.js
 // expects (camelCase, millisecond timestamps).
@@ -44,7 +58,6 @@ export function createRoomsRouter(requireAuth, deps) {
     updateRoomStatus,
     addParticipant,
     removeParticipant: removeParticipantFn = removeParticipant,
-    maxParticipants = DEFAULT_MAX_ROOM_PARTICIPANTS,
     listQueue,
     addToQueue,
     removeFromQueue,
@@ -65,6 +78,8 @@ export function createRoomsRouter(requireAuth, deps) {
     listParticipantsFn = listParticipants,
     listProfilesFn = listProfiles,
     listTranscriptLinesForRoomFn = listTranscriptLinesForRoom,
+    listOpenRoomsFn = listOpenRooms,
+    listParticipantsForRoomsFn = listParticipantsForRooms,
     llmRateLimiter = createLlmRateLimiter(),
     roomActionRateLimiter = createRoomActionRateLimiter(),
   } = deps;
@@ -110,12 +125,28 @@ export function createRoomsRouter(requireAuth, deps) {
     res.status(200).json({ room: room ? { id: room.id, code: room.code, status: room.status } : null });
   });
 
+  // BE-1 (place-me-UI/docs/BACKEND_REQUIREMENTS.md, SPEC-0004): a bounded
+  // list of rooms anyone could browse into and join right now (waiting +
+  // public + not already full). No mutation, no rate limiter -- same
+  // precedent as /api/rooms/mine/active and /api/history/mine, neither of
+  // which is Gemini-backed or write-adjacent.
+  router.get('/api/rooms/open', requireAuth, async (req, res) => {
+    const rooms = await listOpenRoomsFn();
+    const roomIds = rooms.map((room) => room.id);
+    const hostIds = [...new Set(rooms.map((room) => room.created_by))];
+    const [participantRows, profiles] = await Promise.all([
+      listParticipantsForRoomsFn(roomIds),
+      listProfilesFn(hostIds),
+    ]);
+    res.status(200).json({ rooms: buildOpenRoomsList(rooms, participantRows, profiles) });
+  });
+
   // N3 (audit comparison, 2026-07-29): create/join had no rate limiting at
   // all -- a single account could spam-create rooms or spam-join a leaked
   // code with no throttle. Separate limiter from llmRateLimiter (H4) since
   // neither route calls Gemini itself.
   router.post('/api/rooms', requireAuth, roomActionRateLimiter, async (req, res) => {
-    const { topicId, durationSeconds } = req.body || {};
+    const { topicId, durationSeconds, maxParticipants, visibility, level } = req.body || {};
     if (!topicId || !durationSeconds) {
       return res.status(400).json({ error: 'topicId and durationSeconds are required' });
     }
@@ -125,8 +156,37 @@ export function createRoomsRouter(requireAuth, deps) {
     if (!isValidDurationSeconds(durationSeconds)) {
       return res.status(400).json({ error: INVALID_DURATION_ERROR });
     }
+    // BE-2 (SPEC-0002): maxParticipants is optional -- omitting it preserves
+    // the pre-BE-2 behavior of every room getting the same default cap.
+    if (maxParticipants !== undefined && !isValidMaxParticipants(maxParticipants)) {
+      return res.status(400).json({ error: INVALID_MAX_PARTICIPANTS_ERROR });
+    }
+    // BE-3 (SPEC-0003): visibility is optional -- omitting it preserves the
+    // pre-BE-3 behavior of every code-created room behaving like 'private'.
+    if (visibility !== undefined && !isValidVisibility(visibility)) {
+      return res.status(400).json({ error: INVALID_VISIBILITY_ERROR });
+    }
+    // BE-4 (SPEC-0005): level is optional -- omitting it preserves the
+    // pre-BE-4 behavior of every code-created room defaulting to
+    // 'intermediate'. Room-creation half only; POST /api/rooms/match never
+    // passes this (see that route, unchanged).
+    if (level !== undefined && !isValidLevel(level)) {
+      return res.status(400).json({ error: INVALID_LEVEL_ERROR });
+    }
+    const roomMaxParticipants = maxParticipants ?? DEFAULT_MAX_ROOM_PARTICIPANTS;
+    const roomVisibility = visibility ?? DEFAULT_VISIBILITY;
+    const roomLevel = level ?? DEFAULT_LEVEL;
     const code = await generateUniqueRoomCode(roomCodeExists);
-    const room = await insertRoom({ code, topicId, durationSeconds, joinMode: 'code', createdBy: req.userId });
+    const room = await insertRoom({
+      code,
+      topicId,
+      durationSeconds,
+      maxParticipants: roomMaxParticipants,
+      visibility: roomVisibility,
+      level: roomLevel,
+      joinMode: 'code',
+      createdBy: req.userId,
+    });
     await addParticipant(room.id, req.userId, req.userId);
     res.status(201).json({
       id: room.id,
@@ -134,6 +194,9 @@ export function createRoomsRouter(requireAuth, deps) {
       status: room.status,
       topicId: room.topic_id,
       durationSeconds: room.duration_seconds,
+      maxParticipants: room.max_participants,
+      visibility: room.visibility,
+      level: room.level,
     });
   });
 
@@ -153,10 +216,16 @@ export function createRoomsRouter(requireAuth, deps) {
     // room starts, and a Gemini feedback call once it ends. A rejoin by
     // someone already seated is never blocked -- they're one of the
     // counted seats already, not an additional one.
+    //
+    // BE-2 (SPEC-0002): the cap enforced here is the room's own stored
+    // max_participants, not a single global constant -- isRoomFull's
+    // second parameter only falls back to DEFAULT_MAX_ROOM_PARTICIPANTS
+    // when it's undefined (a JS default-parameter, not a `|| `), so this
+    // is exact, not an approximation.
     const alreadySeated = await isParticipant(room.id, req.userId);
     if (!alreadySeated) {
       const before = await listParticipantsFn(room.id);
-      if (isRoomFull(before.length, maxParticipants)) {
+      if (isRoomFull(before.length, room.max_participants)) {
         return res.status(409).json({ error: 'Room is full' });
       }
     }
@@ -174,7 +243,7 @@ export function createRoomsRouter(requireAuth, deps) {
       // insert itself race-safe against duplicates; this only guards
       // against exceeding the participant count.
       const after = await listParticipantsFn(room.id);
-      if (after.length > maxParticipants) {
+      if (after.length > (room.max_participants ?? DEFAULT_MAX_ROOM_PARTICIPANTS)) {
         await removeParticipantFn(room.id, req.userId);
         return res.status(409).json({ error: 'Room is full' });
       }
@@ -317,8 +386,21 @@ export function createRoomsRouter(requireAuth, deps) {
     const participant = await isParticipant(req.params.id, req.userId);
     if (!participant) return res.status(403).json({ error: 'Not a participant of this room' });
 
-    const participants = await resolveParticipantNames(req.params.id);
-    res.status(200).json({ participants });
+    // BE-10 (place-me-UI/docs/BACKEND_REQUIREMENTS.md, SPEC-0007): each
+    // participant's share of the room's total attributed speaking time,
+    // computed post-hoc from the transcript. Live/mid-session speak-time
+    // is BE-17, a separate harder real-time version -- not this.
+    const [participants, transcriptLines] = await Promise.all([
+      resolveParticipantNames(req.params.id),
+      listTranscriptLinesForRoomFn(req.params.id),
+    ]);
+    const talkShareByUserId = computeTalkTimeShares(
+      transcriptLines,
+      participants.map((p) => p.userId)
+    );
+    res.status(200).json({
+      participants: participants.map((p) => ({ ...p, talkShare: talkShareByUserId.get(p.userId) ?? 0 })),
+    });
   });
 
   // Lets a student re-read the attributed transcript of a session they were
@@ -355,6 +437,13 @@ export function createRoomsRouter(requireAuth, deps) {
     if (!feedback) return res.status(200).json({ feedback: null });
     res.status(200).json({
       feedback: feedback.body,
+      // SPEC-0006 (BE-6/BE-7): default to null/[] rather than omitting --
+      // a pre-migration row or the transcription-failed stub has none of
+      // these, and a caller must never render a missing score as 0.
+      score: feedback.score ?? null,
+      dimensions: feedback.dimensions ?? [],
+      strengths: feedback.strengths ?? [],
+      improvements: feedback.improvements ?? [],
       ...(feedback.rating !== undefined ? { rating: feedback.rating, ratingReason: feedback.rating_reason } : {}),
     });
   });

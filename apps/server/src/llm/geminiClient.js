@@ -11,7 +11,7 @@
 // overridable via the `model` option / GEMINI_MODEL env var so the next
 // vendor lineup change is a config edit, not a code change.
 import { buildTopicPrompt, parseTopicResponse } from '../domain/topicPrompt.js';
-import { parseFeedbackResponse } from '../domain/feedbackPrompt.js';
+import { parseFeedbackResponse, FEEDBACK_RESPONSE_SCHEMA } from '../domain/feedbackPrompt.js';
 import { withRetry } from '../domain/retry.js';
 
 export const DEFAULT_GEMINI_MODEL = 'gemini-3.6-flash';
@@ -36,7 +36,7 @@ function isRetryableGeminiError(err) {
   return err.status === undefined;
 }
 
-async function callGemini(prompt, { apiKey, model, fetchImpl, timeoutMs }) {
+async function callGemini(prompt, { apiKey, model, fetchImpl, timeoutMs, generationConfig }) {
   if (!apiKey) {
     throw new Error('Missing GEMINI_API_KEY');
   }
@@ -52,7 +52,10 @@ async function callGemini(prompt, { apiKey, model, fetchImpl, timeoutMs }) {
     response = await fetchImpl(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        ...(generationConfig ? { generationConfig } : {}),
+      }),
       signal: controller.signal,
     });
   } catch (err) {
@@ -108,7 +111,12 @@ export async function generateFeedback(
     retryDelayMs = DEFAULT_GEMINI_RETRY_DELAY_MS,
   } = {}
 ) {
-  const body = await withRetry(() => callGemini(prompt, { apiKey, model, fetchImpl, timeoutMs }), {
+  // SPEC-0006 (BE-6/BE-7): request Gemini's structured-output mode so the
+  // score/dimensions/strengths/improvements shape is enforced by the API
+  // itself, not just prompt wording -- parseFeedbackResponse still
+  // validates defensively on top of this.
+  const generationConfig = { responseMimeType: 'application/json', responseSchema: FEEDBACK_RESPONSE_SCHEMA };
+  const body = await withRetry(() => callGemini(prompt, { apiKey, model, fetchImpl, timeoutMs, generationConfig }), {
     attempts: retryAttempts,
     delayMs: retryDelayMs,
     shouldRetry: isRetryableGeminiError,

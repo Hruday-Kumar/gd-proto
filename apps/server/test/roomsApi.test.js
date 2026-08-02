@@ -11,6 +11,8 @@ import { createRoomsRouter } from '../src/api/routes/rooms.js';
 import { createLlmRateLimiter, createRoomActionRateLimiter } from '../src/api/middleware/rateLimit.js';
 import { CURRENT_CONSENT_VERSION } from '../src/domain/consent.js';
 import { DEFAULT_MAX_ROOM_PARTICIPANTS } from '../src/domain/roomCapacity.js';
+import { DEFAULT_VISIBILITY } from '../src/domain/roomVisibility.js';
+import { DEFAULT_LEVEL } from '../src/domain/roomLevel.js';
 
 function stubAuth(userId) {
   return (req, _res, next) => {
@@ -63,6 +65,8 @@ function baseDeps(overrides = {}) {
     listParticipantsFn: vi.fn().mockResolvedValue([]),
     listProfilesFn: vi.fn().mockResolvedValue([]),
     listTranscriptLinesForRoomFn: vi.fn().mockResolvedValue([]),
+    listOpenRoomsFn: vi.fn().mockResolvedValue([]),
+    listParticipantsForRoomsFn: vi.fn().mockResolvedValue([]),
     ...overrides,
   };
 }
@@ -122,6 +126,225 @@ describe('POST /api/rooms (create by code)', () => {
     await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds: 300 });
     const res = await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds: 300 });
     expect(res.status).toBe(429);
+  });
+
+  // BE-2 (place-me-UI/docs/BACKEND_REQUIREMENTS.md, SPEC-0002): the room
+  // creator's chosen seat cap, stored per room instead of always getting
+  // the global DEFAULT_MAX_ROOM_PARTICIPANTS constant.
+  describe('configurable capacity (BE-2)', () => {
+    it('passes an explicit maxParticipants through to insertRoom and echoes it in the response', async () => {
+      const deps = baseDeps({
+        insertRoom: vi.fn().mockResolvedValue({
+          id: 'r1',
+          code: 'ABCXYZ',
+          status: 'waiting',
+          topic_id: 't1',
+          duration_seconds: 300,
+          max_participants: 4,
+        }),
+      });
+      const app = buildApp(deps);
+      const res = await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds: 300, maxParticipants: 4 });
+      expect(res.status).toBe(201);
+      expect(res.body.maxParticipants).toBe(4);
+      expect(deps.insertRoom).toHaveBeenCalledWith(expect.objectContaining({ maxParticipants: 4 }));
+    });
+
+    it('defaults to DEFAULT_MAX_ROOM_PARTICIPANTS when maxParticipants is omitted', async () => {
+      const deps = baseDeps({
+        insertRoom: vi.fn().mockResolvedValue({
+          id: 'r1',
+          code: 'ABCXYZ',
+          status: 'waiting',
+          topic_id: 't1',
+          duration_seconds: 300,
+          max_participants: DEFAULT_MAX_ROOM_PARTICIPANTS,
+        }),
+      });
+      const app = buildApp(deps);
+      const res = await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds: 300 });
+      expect(res.status).toBe(201);
+      expect(res.body.maxParticipants).toBe(DEFAULT_MAX_ROOM_PARTICIPANTS);
+      expect(deps.insertRoom).toHaveBeenCalledWith(expect.objectContaining({ maxParticipants: DEFAULT_MAX_ROOM_PARTICIPANTS }));
+    });
+
+    it.each([
+      ['below the minimum', 2],
+      ['above the maximum', 13],
+      ['fractional', 4.5],
+      ['a numeric string', '6'],
+    ])('rejects a %s maxParticipants without touching the database', async (_label, maxParticipants) => {
+      const deps = baseDeps();
+      const app = buildApp(deps);
+      const res = await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds: 300, maxParticipants });
+      expect(res.status).toBe(400);
+      expect(deps.insertRoom).not.toHaveBeenCalled();
+    });
+  });
+
+  // BE-3 (place-me-UI/docs/BACKEND_REQUIREMENTS.md, SPEC-0003): the room
+  // creator's chosen visibility, persisted per room. No listing endpoint
+  // reads this yet (that's BE-1) -- this only proves the value round-trips
+  // correctly through creation.
+  describe('room visibility (BE-3)', () => {
+    it('passes an explicit visibility through to insertRoom and echoes it in the response', async () => {
+      const deps = baseDeps({
+        insertRoom: vi.fn().mockResolvedValue({
+          id: 'r1',
+          code: 'ABCXYZ',
+          status: 'waiting',
+          topic_id: 't1',
+          duration_seconds: 300,
+          max_participants: DEFAULT_MAX_ROOM_PARTICIPANTS,
+          visibility: 'public',
+        }),
+      });
+      const app = buildApp(deps);
+      const res = await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds: 300, visibility: 'public' });
+      expect(res.status).toBe(201);
+      expect(res.body.visibility).toBe('public');
+      expect(deps.insertRoom).toHaveBeenCalledWith(expect.objectContaining({ visibility: 'public' }));
+    });
+
+    it('defaults to DEFAULT_VISIBILITY (private) when visibility is omitted', async () => {
+      const deps = baseDeps({
+        insertRoom: vi.fn().mockResolvedValue({
+          id: 'r1',
+          code: 'ABCXYZ',
+          status: 'waiting',
+          topic_id: 't1',
+          duration_seconds: 300,
+          max_participants: DEFAULT_MAX_ROOM_PARTICIPANTS,
+          visibility: DEFAULT_VISIBILITY,
+        }),
+      });
+      const app = buildApp(deps);
+      const res = await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds: 300 });
+      expect(res.status).toBe(201);
+      expect(res.body.visibility).toBe(DEFAULT_VISIBILITY);
+      expect(deps.insertRoom).toHaveBeenCalledWith(expect.objectContaining({ visibility: DEFAULT_VISIBILITY }));
+    });
+
+    it.each([
+      ['an unrelated string', 'secret'],
+      ['wrong case', 'Public'],
+      ['a number', 1],
+      ['a boolean', true],
+    ])('rejects a %s visibility without touching the database', async (_label, visibility) => {
+      const deps = baseDeps();
+      const app = buildApp(deps);
+      const res = await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds: 300, visibility });
+      expect(res.status).toBe(400);
+      expect(deps.insertRoom).not.toHaveBeenCalled();
+    });
+  });
+
+  // BE-4 (place-me-UI/docs/BACKEND_REQUIREMENTS.md, SPEC-0005): the room
+  // creator's chosen level, room-creation half only -- match-side
+  // filtering is deferred (see the /match test below).
+  describe('room level (BE-4)', () => {
+    it('passes an explicit level through to insertRoom and echoes it in the response', async () => {
+      const deps = baseDeps({
+        insertRoom: vi.fn().mockResolvedValue({
+          id: 'r1',
+          code: 'ABCXYZ',
+          status: 'waiting',
+          topic_id: 't1',
+          duration_seconds: 300,
+          max_participants: DEFAULT_MAX_ROOM_PARTICIPANTS,
+          visibility: DEFAULT_VISIBILITY,
+          level: 'advanced',
+        }),
+      });
+      const app = buildApp(deps);
+      const res = await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds: 300, level: 'advanced' });
+      expect(res.status).toBe(201);
+      expect(res.body.level).toBe('advanced');
+      expect(deps.insertRoom).toHaveBeenCalledWith(expect.objectContaining({ level: 'advanced' }));
+    });
+
+    it('defaults to DEFAULT_LEVEL (intermediate) when level is omitted', async () => {
+      const deps = baseDeps({
+        insertRoom: vi.fn().mockResolvedValue({
+          id: 'r1',
+          code: 'ABCXYZ',
+          status: 'waiting',
+          topic_id: 't1',
+          duration_seconds: 300,
+          max_participants: DEFAULT_MAX_ROOM_PARTICIPANTS,
+          visibility: DEFAULT_VISIBILITY,
+          level: DEFAULT_LEVEL,
+        }),
+      });
+      const app = buildApp(deps);
+      const res = await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds: 300 });
+      expect(res.status).toBe(201);
+      expect(res.body.level).toBe(DEFAULT_LEVEL);
+      expect(deps.insertRoom).toHaveBeenCalledWith(expect.objectContaining({ level: DEFAULT_LEVEL }));
+    });
+
+    it.each([
+      ['an unrelated string', 'expert'],
+      ['wrong case', 'Beginner'],
+      ['a number', 1],
+      ['a boolean', true],
+    ])('rejects a %s level without touching the database', async (_label, level) => {
+      const deps = baseDeps();
+      const app = buildApp(deps);
+      const res = await request(app).post('/api/rooms').send({ topicId: 't1', durationSeconds: 300, level });
+      expect(res.status).toBe(400);
+      expect(deps.insertRoom).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('GET /api/rooms/open', () => {
+  it('returns an empty list when there are no open rooms', async () => {
+    const deps = baseDeps();
+    const app = buildApp(deps);
+    const res = await request(app).get('/api/rooms/open');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ rooms: [] });
+  });
+
+  it('shapes open rooms via buildOpenRoomsList, resolving host names from profiles', async () => {
+    const deps = baseDeps({
+      listOpenRoomsFn: vi.fn().mockResolvedValue([
+        {
+          id: 'r1',
+          code: 'ABCXYZ',
+          duration_seconds: 900,
+          max_participants: 6,
+          created_by: 'host-1',
+          created_at: '2026-08-01T00:00:00.000Z',
+          topics: { text: 'Should AI grade exams?' },
+        },
+      ]),
+      listParticipantsForRoomsFn: vi.fn().mockResolvedValue([{ room_id: 'r1', user_id: 'a' }]),
+      listProfilesFn: vi.fn().mockResolvedValue([{ id: 'host-1', display_name: 'Asha' }]),
+    });
+    const app = buildApp(deps);
+    const res = await request(app).get('/api/rooms/open');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      rooms: [
+        {
+          id: 'r1',
+          code: 'ABCXYZ',
+          topicText: 'Should AI grade exams?',
+          durationSeconds: 900,
+          maxParticipants: 6,
+          participantCount: 1,
+          hostDisplayName: 'Asha',
+          createdAt: '2026-08-01T00:00:00.000Z',
+        },
+      ],
+    });
+    // Only the rooms actually returned by listOpenRoomsFn get their
+    // participants/profiles fetched -- confirms the route wires the two
+    // batched queries to the fetched rooms rather than something static.
+    expect(deps.listParticipantsForRoomsFn).toHaveBeenCalledWith(['r1']);
+    expect(deps.listProfilesFn).toHaveBeenCalledWith(['host-1']);
   });
 });
 
@@ -235,6 +458,35 @@ describe('POST /api/rooms/join', () => {
       expect(res.status).toBe(200);
       expect(deps.removeParticipant).not.toHaveBeenCalled();
     });
+
+    // BE-2 (SPEC-0002): before this, every room -- regardless of what its
+    // creator picked -- was capped at the same global constant. This proves
+    // the join check now reads the room's *own* stored value: a room
+    // created with maxParticipants: 3 must reject a 4th joiner even though
+    // that's well below DEFAULT_MAX_ROOM_PARTICIPANTS (6).
+    it("enforces the room's own max_participants, not the global default", async () => {
+      const deps = baseDeps({
+        getRoomByCode: vi.fn().mockResolvedValue({ id: 'r1', code: 'ABCXYZ', status: 'waiting', max_participants: 3 }),
+        isParticipant: vi.fn().mockResolvedValue(false),
+        listParticipantsFn: vi.fn().mockResolvedValue(Array(3).fill({ user_id: 'someone' })),
+      });
+      const app = buildApp(deps);
+      const res = await request(app).post('/api/rooms/join').send({ code: 'ABCXYZ' });
+      expect(res.status).toBe(409);
+      expect(deps.addParticipant).not.toHaveBeenCalled();
+    });
+
+    it('allows joining a room below its own smaller max_participants', async () => {
+      const deps = baseDeps({
+        getRoomByCode: vi.fn().mockResolvedValue({ id: 'r1', code: 'ABCXYZ', status: 'waiting', max_participants: 3 }),
+        isParticipant: vi.fn().mockResolvedValue(false),
+        listParticipantsFn: vi.fn().mockResolvedValue(Array(2).fill({ user_id: 'someone' })),
+      });
+      const app = buildApp(deps);
+      const res = await request(app).post('/api/rooms/join').send({ code: 'ABCXYZ' });
+      expect(res.status).toBe(200);
+      expect(deps.addParticipant).toHaveBeenCalledWith('r1', 'user-1', 'user-1');
+    });
   });
 
   // N3 (audit comparison, 2026-07-29): confirms the limiter is actually
@@ -312,6 +564,38 @@ describe('POST /api/rooms/match', () => {
     // for them; claimMatchOrQueue's atomic claim already handled this.
     expect(deps.claimFromQueue).toHaveBeenCalledWith(expect.arrayContaining(['a', 'b']));
     expect(deps.removeFromQueue).not.toHaveBeenCalled();
+  });
+
+  // BE-3 (SPEC-0003, Non Goal): matched rooms are system-formed, not
+  // creator-configured -- this route must never pass a visibility, so the
+  // column's own DEFAULT 'private' applies at the DB level.
+  it('does not pass visibility to insertRoom -- matched rooms rely on the column default', async () => {
+    const deps = baseDeps({
+      listQueue: vi.fn().mockResolvedValue([{ id: 'a' }, { id: 'b' }]),
+      generateTopicFn: vi.fn().mockResolvedValue('Should AI grade exams?'),
+      insertGeneratedTopic: vi.fn().mockResolvedValue({ id: 'topic-1', text: 'Should AI grade exams?' }),
+      insertRoom: vi.fn().mockResolvedValue({ id: 'r1', code: 'MATCHD', status: 'waiting', topic_id: 'topic-1', duration_seconds: 300 }),
+    });
+    const app = buildApp(deps, 'c');
+    const res = await request(app).post('/api/rooms/match').send({ durationSeconds: 300 });
+    expect(res.status).toBe(201);
+    expect(deps.insertRoom).toHaveBeenCalledWith(expect.not.objectContaining({ visibility: expect.anything() }));
+  });
+
+  // BE-4 (SPEC-0005, Non Goal): match-side level filtering is deferred
+  // (to fold in alongside BE-5) -- this route must never pass a level
+  // either, so the column's own DEFAULT 'intermediate' applies.
+  it('does not pass level to insertRoom -- matched rooms rely on the column default', async () => {
+    const deps = baseDeps({
+      listQueue: vi.fn().mockResolvedValue([{ id: 'a' }, { id: 'b' }]),
+      generateTopicFn: vi.fn().mockResolvedValue('Should AI grade exams?'),
+      insertGeneratedTopic: vi.fn().mockResolvedValue({ id: 'topic-1', text: 'Should AI grade exams?' }),
+      insertRoom: vi.fn().mockResolvedValue({ id: 'r1', code: 'MATCHD', status: 'waiting', topic_id: 'topic-1', duration_seconds: 300 }),
+    });
+    const app = buildApp(deps, 'c');
+    const res = await request(app).post('/api/rooms/match').send({ durationSeconds: 300 });
+    expect(res.status).toBe(201);
+    expect(deps.insertRoom).toHaveBeenCalledWith(expect.not.objectContaining({ level: expect.anything() }));
   });
 
   // H7 (engineering audit, 2026-07-28): two students hitting /match near-
@@ -613,7 +897,39 @@ describe('GET /api/rooms/:id/feedback/mine', () => {
     const app = buildApp(deps);
     const res = await request(app).get('/api/rooms/r1/feedback/mine');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ feedback: 'You stayed on topic throughout.' });
+    // SPEC-0006 (BE-6/BE-7): a pre-migration/pre-structured row has no
+    // score/dimensions/strengths/improvements -- these must default to
+    // null/[] rather than being omitted or crashing the route.
+    expect(res.body).toEqual({
+      feedback: 'You stayed on topic throughout.',
+      score: null,
+      dimensions: [],
+      strengths: [],
+      improvements: [],
+    });
+  });
+
+  it("returns the caller's own structured score/rubric/strengths/improvements once generated", async () => {
+    const dimensions = [{ label: 'Content depth', score: 80, note: 'Backed a claim.' }];
+    const deps = baseDeps({
+      getFeedbackForRoomAndUserFn: vi.fn().mockResolvedValue({
+        body: 'You stayed on topic throughout.',
+        score: 82,
+        dimensions,
+        strengths: ['Clear opening.'],
+        improvements: ['Invite others in more.'],
+      }),
+    });
+    const app = buildApp(deps);
+    const res = await request(app).get('/api/rooms/r1/feedback/mine');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      feedback: 'You stayed on topic throughout.',
+      score: 82,
+      dimensions,
+      strengths: ['Clear opening.'],
+      improvements: ['Invite others in more.'],
+    });
   });
 
   it('looks up feedback scoped to the caller, not just the room', async () => {
@@ -629,7 +945,15 @@ describe('GET /api/rooms/:id/feedback/mine', () => {
     });
     const app = buildApp(deps);
     const res = await request(app).get('/api/rooms/r1/feedback/mine');
-    expect(res.body).toEqual({ feedback: 'Good pacing.', rating: true, ratingReason: 'Specific and kind' });
+    expect(res.body).toEqual({
+      feedback: 'Good pacing.',
+      score: null,
+      dimensions: [],
+      strengths: [],
+      improvements: [],
+      rating: true,
+      ratingReason: 'Specific and kind',
+    });
   });
 });
 
@@ -788,8 +1112,33 @@ describe('GET /api/rooms/:id/participants', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       participants: [
-        { userId: 'u1', displayName: 'Asha' },
-        { userId: 'u2', displayName: 'u2' },
+        { userId: 'u1', displayName: 'Asha', talkShare: 0 },
+        { userId: 'u2', displayName: 'u2', talkShare: 0 },
+      ],
+    });
+  });
+
+  // BE-10 (place-me-UI/docs/BACKEND_REQUIREMENTS.md, SPEC-0007): each
+  // participant's share of the room's total attributed speaking time.
+  it('includes each participant\'s talkShare computed from the room\'s transcript', async () => {
+    const deps = baseDeps({
+      listParticipantsFn: vi.fn().mockResolvedValue([{ user_id: 'u1' }, { user_id: 'u2' }]),
+      listProfilesFn: vi.fn().mockResolvedValue([
+        { id: 'u1', display_name: 'Asha' },
+        { id: 'u2', display_name: 'Karan' },
+      ]),
+      listTranscriptLinesForRoomFn: vi.fn().mockResolvedValue([
+        { user_id: 'u1', started_at_ms: 0, ended_at_ms: 2000 },
+        { user_id: 'u2', started_at_ms: 2000, ended_at_ms: 3000 },
+      ]),
+    });
+    const app = buildApp(deps);
+    const res = await request(app).get('/api/rooms/r1/participants');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      participants: [
+        { userId: 'u1', displayName: 'Asha', talkShare: 67 },
+        { userId: 'u2', displayName: 'Karan', talkShare: 33 },
       ],
     });
   });

@@ -27,7 +27,17 @@ describe('buildSessionHistory', () => {
         topics: { text: 'Is remote work good for productivity?' },
       },
     ];
-    const feedbackRows = [{ room_id: 'r1', body: 'You stayed on topic throughout.' }];
+    const dimensions = [{ label: 'Content depth', score: 80, note: 'Backed a claim.' }];
+    const feedbackRows = [
+      {
+        room_id: 'r1',
+        body: 'You stayed on topic throughout.',
+        score: 82,
+        dimensions,
+        strengths: ['Clear opening.'],
+        improvements: ['Invite others in more.'],
+      },
+    ];
 
     const history = buildSessionHistory(rooms, feedbackRows);
 
@@ -41,6 +51,11 @@ describe('buildSessionHistory', () => {
         startedAt: '2026-07-26T10:00:00.000Z',
         endedAt: '2026-07-26T10:05:00.000Z',
         feedback: null,
+        score: null,
+        dimensions: [],
+        strengths: [],
+        improvements: [],
+        talkShare: null,
       },
       {
         id: 'r1',
@@ -51,8 +66,28 @@ describe('buildSessionHistory', () => {
         startedAt: '2026-07-25T10:00:00.000Z',
         endedAt: '2026-07-25T10:05:00.000Z',
         feedback: 'You stayed on topic throughout.',
+        score: 82,
+        dimensions,
+        strengths: ['Clear opening.'],
+        improvements: ['Invite others in more.'],
+        talkShare: null,
       },
     ]);
+  });
+
+  // BE-9 (place-me-UI/docs/BACKEND_REQUIREMENTS.md, SPEC-0009): the
+  // caller's own per-room talk-time share, threaded through as a third,
+  // optional parameter -- a room absent from the map (no transcript at
+  // all) reports null, never a fabricated 0.
+  it('attaches talkShare from the given map, or null when a room is absent from it', () => {
+    const rooms = [
+      { id: 'r1', code: 'CODE1', status: 'ended', duration_seconds: 300, started_at: null, ended_at: null, topics: null },
+      { id: 'r2', code: 'CODE2', status: 'ended', duration_seconds: 300, started_at: null, ended_at: null, topics: null },
+    ];
+    const talkShareByRoomId = new Map([['r1', 42]]);
+    const history = buildSessionHistory(rooms, [], talkShareByRoomId);
+    expect(history[0].talkShare).toBe(42);
+    expect(history[1].talkShare).toBeNull();
   });
 
   it('reports feedback: null (not a missing key) for a room still awaiting generation', () => {
@@ -60,6 +95,14 @@ describe('buildSessionHistory', () => {
     const history = buildSessionHistory(rooms, []);
     expect(history[0].feedback).toBeNull();
     expect(history[0].topicText).toBeNull();
+    // SPEC-0006 (BE-6/BE-7): same "null/[], never omitted or fabricated"
+    // rule as the API route -- a room with no feedback row yet has no
+    // score to show, not a 0.
+    expect(history[0].score).toBeNull();
+    expect(history[0].dimensions).toEqual([]);
+    expect(history[0].strengths).toEqual([]);
+    expect(history[0].improvements).toEqual([]);
+    expect(history[0].talkShare).toBeNull();
   });
 
   it('returns an empty list for a student with no sessions', () => {

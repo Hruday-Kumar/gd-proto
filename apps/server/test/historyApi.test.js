@@ -27,6 +27,7 @@ function baseDeps(overrides = {}) {
     listRoomIdsForUser: vi.fn().mockResolvedValue([]),
     listRoomsByIds: vi.fn().mockResolvedValue([]),
     listFeedbackForUserAndRooms: vi.fn().mockResolvedValue([]),
+    listTranscriptLinesForRoomsFn: vi.fn().mockResolvedValue([]),
     ...overrides,
   };
 }
@@ -79,9 +80,35 @@ describe('GET /api/history/mine', () => {
           startedAt: '2026-07-26T10:00:00.000Z',
           endedAt: '2026-07-26T10:05:00.000Z',
           feedback: 'You stayed on topic throughout.',
+          score: null,
+          dimensions: [],
+          strengths: [],
+          improvements: [],
+          talkShare: null,
         },
       ],
     });
     expect(deps.listRoomsByIds).toHaveBeenCalledWith(['r1']);
+  });
+
+  // BE-9 (place-me-UI/docs/BACKEND_REQUIREMENTS.md, SPEC-0009): the
+  // caller's own per-room talk share, computed from a batched transcript
+  // fetch across every room in their history.
+  it("includes the caller's talkShare, computed from the batched transcript fetch", async () => {
+    const deps = baseDeps({
+      listRoomIdsForUser: vi.fn().mockResolvedValue(['r1']),
+      listRoomsByIds: vi.fn().mockResolvedValue([
+        { id: 'r1', code: 'CODE1', status: 'ended', duration_seconds: 300, started_at: null, ended_at: null, topics: null },
+      ]),
+      listTranscriptLinesForRoomsFn: vi.fn().mockResolvedValue([
+        { room_id: 'r1', user_id: 'user-1', started_at_ms: 0, ended_at_ms: 3000 },
+        { room_id: 'r1', user_id: 'other', started_at_ms: 3000, ended_at_ms: 4000 },
+      ]),
+    });
+    const app = buildApp(deps);
+    const res = await request(app).get('/api/history/mine');
+    expect(res.status).toBe(200);
+    expect(res.body.sessions[0].talkShare).toBe(75);
+    expect(deps.listTranscriptLinesForRoomsFn).toHaveBeenCalledWith(['r1']);
   });
 });

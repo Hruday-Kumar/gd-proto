@@ -190,8 +190,16 @@ describe('generateFeedbackForRoom', () => {
     expect(results).toHaveLength(3);
     for (const r of results) {
       expect(r.status).toBe('ok');
-      expect(r.body).toMatch(/technical issue/i);
-      expect(r.body).not.toMatch(/speak (up|more)|should have (said|spoken)|next time.*speak/i);
+      expect(r.body.summary).toMatch(/technical issue/i);
+      expect(r.body.summary).not.toMatch(/speak (up|more)|should have (said|spoken)|next time.*speak/i);
+      // SPEC-0006 (BE-6/BE-7): no evidence exists for this session, so no
+      // score/rubric/strengths/improvements may be fabricated -- a null
+      // score (not a real number, not a made-up low one) is what keeps
+      // guardrail #1 true for the new structured fields too.
+      expect(r.body.score).toBeNull();
+      expect(r.body.dimensions).toEqual([]);
+      expect(r.body.strengths).toEqual([]);
+      expect(r.body.improvements).toEqual([]);
     }
   });
 });

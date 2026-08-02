@@ -2,10 +2,781 @@
 
 _Durable state so any session can resume from docs, not conversation memory._
 
-**Last updated:** 2026-07-31 (M5/N8 close-out + BUG-SPEC-0001 E2E test — see
-the entry directly below. Older entries, including BUG-SPEC-0006/5/4/3/2/1
-and the 2026-07-30 doc-sync + pilot-readiness pass, are preserved further
-down, unchanged.)
+**Last updated:** 2026-08-02 (PR #83, `dev` → `main` promotion — see the
+entry directly below. Older entries, including 2026-08-01's BE-1/BE-2/
+BE-3/BE-4/BE-6/BE-7/BE-19/BE-10/BE-14/BE-8/BE-9 work and the 2026-07-31
+M5/N8 close-out + BUG-SPEC-0001 E2E test, are preserved further down,
+unchanged.)
+
+## PR #83 — `dev` → `main` promotion (2026-08-02)
+
+Release PR bundling BE-2/BE-3/BE-1/BE-4/BE-6/BE-7/BE-10/BE-14/BE-9 (PRs
+#72–#82) from `dev` into `main`. Reviewed via this repo's own `pr-review`
+skill.
+
+**Migrations `0014`–`0018`:** all five confirmed applied to the live
+Supabase project by the user, 2026-08-02, clearing `PLAN.md` §3's
+"do not promote before this is live" gate for each — table updated to ✅
+accordingly. Not independently re-verified against the live schema this
+session (no live DB access here) — taken on the user's word, same pattern
+as `0012`'s entry.
+
+**PR title corrected**: was "Frontend changes and route fixes and
+comments to all files", which didn't describe the diff — every changed
+file is `apps/server/**`, `docs/**`, or `supabase/migrations/**`; no
+`apps/web` file is touched by this PR.
+
+**`dependency-audit` CI check — fixed for real, not just documented
+around.** Initially left failing deliberately (see git history on this
+entry): it flags `react-router` (GHSA-qwww-vcr4-c8h2, high) in the
+`7.12.0–8.2.0` range, a CSRF issue scoped to React Router's unstable RSC
+code paths only — `apps/web` is a plain client-side Vite SPA that doesn't
+use RSC, so it wasn't a real exposure, but `npm audit fix --force`'s only
+offer was downgrading `react-router-dom` 7 minor versions (7.18.1 →
+7.11.0), a real regression risk to avoid blind.
+
+Looked closer at the actual fix instead: React Router v8.0.0 removed the
+`react-router-dom` package entirely (its own changelog, "Removed
+`react-router-dom`") — everything except `RouterProvider`/`HydratedRouter`
+moves to importing from `react-router` directly. `apps/web` only ever
+used `BrowserRouter`, `Routes`, `Route`, `Link`, `NavLink`, `Navigate`,
+`useNavigate`, `useParams`, `useLocation`, and `MemoryRouter` (in tests)
+— none of the RSC/data-router APIs v8 actually changed, and none of the
+two APIs that need the separate `react-router/dom` entry point. So the
+fix is a same-behavior import swap, not a real breaking migration:
+`react-router-dom` → `react-router` across all 21 import sites,
+`apps/web/package.json`'s dependency swapped to `react-router@^8.3.0`.
+
+**Verified:** `npm audit --workspace=@placeme/web` now reports 0
+vulnerabilities. `npm run build --workspace=@placeme/web` clean, `npm
+test --workspace=@placeme/web` 104/104 passed (same count as before —
+no behavior change), `npm run lint --workspace=@placeme/web` clean (same
+3 pre-existing, unrelated warnings). React 19.2.8 was already installed,
+satisfying v8's `>=19.2.7` requirement.
+
+**One real constraint surfaced by this**: `react-router@8.3.0` requires
+Node `>=22.22.0`; this repo's root `.npmrc` already sets
+`engine-strict=true` (a deliberate choice from an earlier Supabase-realtime
+lesson), so `npm install` now hard-fails on any dev machine running Node
+22.13–22.21. CI's `actions/setup-node@v4` with `node-version: 22`
+resolves to a current 22.x release (verified >=22.22.0 as of this
+session) so this doesn't affect CI, but **anyone doing local `apps/web`
+work now needs Node >=22.22.0**, tighter than this repo's previous
+`>=22.0.0` floor. Root `package.json`'s `engines.node` bumped to
+`>=22.22.0` in this same PR so the requirement is discoverable up front
+instead of only via a failed `npm install`.
+
+**Residual/open:**
+- Guardrail #1 (human verification) remains outstanding for BE-6/BE-7's
+  feedback-structure change — tracked in the BE-6/BE-7 entry below, not
+  satisfied by the migration being live.
+
+## BE-9 — aggregate stats: streak, avg score, speak-time % (2026-08-01)
+
+Fourth of the planned batch (BE-10 → BE-14 → BE-8 → **BE-9** → BE-5, last).
+Spec at `docs/specs/active/SPEC-0009-be-9-aggregate-stats.md`, branch
+`feat/be-9-aggregate-stats` off `dev`.
+
+**Unlike BE-8 (fully client-side), this one needed a real backend
+addition**: "avg score" and "streak" are computable from data
+`GET /api/history/mine` already returns, but "speak-time %" isn't — BE-10
+only put `talkShare` on `GET /api/rooms/:id/participants` (every
+participant of *one* room), not the caller's own share across *many*
+history rooms.
+
+**Change:** `db/transcriptLines.js`'s new `listTranscriptLinesForRooms` —
+one batched query across every room in a student's history
+(`.in('room_id', roomIds)`), not one query per room, own explicit
+`MAX_HISTORY_TRANSCRIPT_LINES` ceiling (same batch-don't-loop lesson
+BE-1/BE-10 already established, and the same M9 "don't rely solely on an
+upstream caller's bound" lesson from BE-10's own `listParticipantsForRooms`).
+`domain/talkTime.js`'s new `computeMyTalkShareByRoom` groups that flat,
+multi-room line list by `room_id` and reuses BE-10's existing
+`computeTalkTimeShares` per room, with the caller's id explicitly seeded
+into the participant set so a room where they were silent reports a real
+`0` rather than being indistinguishable from a room with no transcript at
+all (which simply has no entry in the returned map — `sessionHistory.js`
+maps that absence to `null`, never a fabricated `0`, same rule already
+governing `score`). `db/feedback.js` untouched; only three files changed
+in `apps/server`'s application code beyond the two new domain/db
+functions: `sessionHistory.js` (third parameter), `history.js` (one more
+parallel fetch), and their tests.
+
+`place-me-UI`: `HistorySession` gains `talkShare`. `history.tsx` and
+`index.tsx` each gained `average()` and `computeStreak()` (duplicated
+per-file, same precedent as `toSessionRow`/`buildScoreTrend` already
+established for small page-local helpers over a shared module) and now
+render real Sessions/Avg. score/Speak time/Streak tiles — no `delta`
+comparison text, since that's a period-over-period feature this item
+doesn't ask for and `StatCard`'s `delta` prop is already optional.
+`index.tsx`'s home-page greeting subtitle ("You're on a 12-day streak. Two
+rooms match your practice level right now.") is now real for the streak
+half; the "level-matched rooms" clause was dropped rather than kept
+fake — no backend item computes that count, and inventing one wasn't in
+scope here. Streak semantics: consecutive calendar days with at least one
+`ended` session, counted as still active through the end of the day after
+the most recent practiced day (standard habit-tracker semantics, not
+reset to 0 just because today hasn't happened yet) — a genuine design
+choice with no prior spec, documented in code and in `SPEC-0009` rather
+than silently picked.
+
+**Tests:** RED confirmed first across three files — 4 new
+`talkTime.test.js` cases (module function didn't exist), 2
+`sessionHistory.test.js` changes (one extended assertion, one new case),
+1 new `historyApi.test.js` case — all failing for the right reasons
+before implementing. GREEN after: full suite fresh under Node 22
+(`npm test --workspace=@placeme/server`) — **421/421 passed**, 2 skipped
+(BE-14's guard, unrelated). `npx oxlint apps/server/src apps/server/test`
+clean (2 pre-existing, unrelated warnings). `place-me-UI`: `npx eslint`
+clean, `npm run build` clean (Node 22).
+
+**Residual/open:**
+- Branch not yet pushed or PR'd at the time of writing.
+- Guardrail #1 does not apply — presentation/aggregation only, no new
+  room/audio/transcription/attribution/feedback behavior.
+- Depends on `gd-proto`'s migration `0017` (BE-6/BE-7) being live for
+  "Avg. score" to show anything but a placeholder; `talkShare` itself
+  needs no migration (transcript_lines already had the needed columns,
+  same as BE-10).
+- No manual click-through against a real multi-session account yet.
+- **Last item in this planned batch is BE-5** (match preferences +
+  BE-4's deferred level-filter) — the riskiest, since it touches
+  `domain/matchmaking.js`'s pure, tested, race-sensitive core. Worth a
+  fresh look at scope/design before starting, not just implementing on
+  autopilot.
+
+## BE-8 — score trend over time (2026-08-01)
+
+Third of the planned batch (BE-10 → BE-14 → **BE-8** → BE-9 → BE-5).
+Entirely `place-me-UI`, no `gd-proto` code or spec — same "frontend-only,
+no dedicated SPEC file" treatment as BE-19, since the item's own suggested
+shape explicitly prefers client-side computation over a new endpoint at
+this scale, and the actual change is small (one component prop + a
+same-shaped helper duplicated in two route files, matching this repo's
+existing `toSessionRow` precedent of small per-page helpers over a shared
+module).
+
+**Change:** `ProgressChart` (`components/pm/blocks.tsx`) gained an
+optional `series` prop, defaulting to the existing fixture
+`progressSeries` so the untouched legacy `/app/history` page (still using
+`<ProgressChart />` with no props) keeps rendering exactly as before.
+`history.tsx` and `index.tsx` each gained a `buildScoreTrend` helper:
+filters their already-fetched `GET /api/history/mine` sessions to ones
+with both a `score` and a `startedAt`, sorts chronologically, and caps at
+the last 8 — a plain "your last N scored sessions" line rather than the
+mock's "Last 6 weeks" framing, since a student may have very few sessions
+at pilot scale and fake weekly buckets would be more misleading than
+honest sparse data. Both pages now show "No scored sessions yet" instead
+of an empty chart when there's nothing to plot. `index.tsx`'s history fetch
+was restructured slightly: it previously only ever stored the sliced
+"recent 3" sessions for its own sidebar list; now it stores the full
+fetched list and derives both `recent` (still sliced to 3) and the trend
+from the same single fetch, rather than needing a second call to the same
+endpoint.
+
+**Tests:** no `apps/server` change, so no server test impact — confirmed
+by re-running the full suite anyway (unchanged: 415/415 passed, 2 skipped
+per BE-14's guard). `place-me-UI`: `npx eslint` clean after a couple of
+auto-fixed formatting nits, `npm run build` clean (Node 22).
+
+**Residual/open:**
+- Depends entirely on `gd-proto`'s migration `0017` (BE-6/BE-7) being
+  applied live — until then `GET /api/history/mine` returns `score: null`
+  for every row, so both trend cards will only ever show the empty state.
+- Guardrail #1 does not apply — presentation-only around data BE-6/BE-7
+  already produces.
+- Next in the planned batch: **BE-9** (aggregate stats).
+
+## BE-14 — signup profile fields: college, graduating year (2026-08-01)
+
+Second of the planned batch (BE-10 → **BE-14** → BE-8 → BE-9 → BE-5). Spec
+at `docs/specs/active/SPEC-0008-be-14-signup-profile-fields.md`, branch
+`feat/be-14-signup-profile-fields` off `dev`.
+
+**This item is structurally different from every other one this
+session**: the entire behavior lives in a Postgres trigger function
+(`handle_new_user()`, fires on `auth.users` insert), not in
+`apps/server`'s Express/domain JS at all. No pure function exists to unit
+test.
+
+**Change:** migration `0018` adds `profiles.college text` and
+`profiles.graduation_year int` (both nullable — signup doesn't mark either
+field required, and unlike `display_name` there's no natural fallback
+value) and extends `handle_new_user()` to read both from
+`raw_user_meta_data`, same pattern already used for `display_name`.
+`nullif(value, '')::int` rather than a bare cast for `graduation_year` — an
+empty-string metadata value would otherwise throw and fail the entire
+signup, the single most safety-critical path a trigger bug here could
+break. `place-me-UI`'s `/signup` "College" and "Graduating year" fields —
+previously entirely uncontrolled, no state, never submitted — now mirror
+the existing `name`/`email`/`password` pattern exactly and are sent
+through `signUp`'s `data`.
+
+**Notably, this migration is the only one so far this session where
+skipping it doesn't break anything already working** — every prior
+migration (`0014`–`0017`) would 500 a real request on its missing column;
+`handle_new_user()` before this change simply never reads the two new
+metadata keys, so signup keeps functioning identically whether or not
+`0018` has been applied.
+
+**Verification approach differs accordingly:** wrote
+`profilesSignupTrigger.test.js` (live-Supabase only, same
+`describe.skipIf(!hasLiveCreds)` pattern as `topicsRlsIsolation.test.js`)
+and **actually ran it against the current live project** rather than only
+reasoning about it: it failed with `column profiles.college does not
+exist`, confirming the test genuinely detects pre-migration state (the
+expected RED, not a defect) — the same "prove it, don't assume it"
+discipline `topicsRlsIsolation.test.js`/`roomParticipantsRlsIsolation.test.js`
+already established for RLS changes, applied here to a trigger change
+instead.
+
+**Caught before merging, not after:** a bare RED like that would leave
+this suite genuinely failing in CI indefinitely, not just locally — this
+repo's CI already has real Supabase secrets configured (`PROGRESS.md`'s
+N8 entry), so every PR's `test` job would go red until a human manually
+applied `0018`, unlike the other live-RLS files (which test something
+already live and green). Added a `beforeAll` schema probe
+(`select college from profiles limit 0`) that sets a `migrationApplied`
+flag; each test calls Vitest's test-context `ctx.skip()` and returns
+immediately when false, and the probe logs a `::warning::` annotation so
+the skip stays visible on a PR rather than becoming a quiet checkmark —
+same spirit as N8's `rls-security` job. Re-ran after adding the guard:
+2 skipped, 0 failed, warning printed. Real test-user accounts created
+during the earlier bare run were cleaned up via the test's own `afterAll`
+(`admin.auth.admin.deleteUser`), same as the existing live-RLS test
+files' convention.
+
+**Tests:** no unit tests (no JS logic exists to test — noted explicitly in
+the spec, not an oversight). `profilesSignupTrigger.test.js`: RED
+confirmed live pre-guard; skips cleanly post-guard (see above); the real
+assertions will only actually run once the user applies migration `0018`.
+`place-me-UI`: `npx eslint` clean after one auto-fixed formatting nit,
+`npm run build` clean (Node 22). Full `apps/server` suite: fresh run under
+Node 22 — **415/415 passed, 2 skipped** (this new file), 49/49 test files
+green.
+
+**Residual/open:**
+- Branch not yet pushed or PR'd at the time of writing.
+- Guardrail #1 does not apply — no room/audio/transcription/attribution/
+  feedback behavior changed.
+- Migration `0018` not yet applied live — unlike other pending migrations,
+  this one is genuinely optional to apply before `main` promotion in the
+  sense that nothing breaks either way, but the feature itself obviously
+  needs it live to actually persist anything.
+- Next in the planned batch: **BE-8** (score trend over time).
+
+## BE-10 — per-participant talk-time share, post-session half (2026-08-01)
+
+Per direct user instruction to work through the remaining backlog item by
+item without stopping between each. First of this batch (planned order:
+BE-10 → BE-14 → BE-8 → BE-9 → BE-5, last because it's the riskiest —
+touches `domain/matchmaking.js`'s core). Spec at
+`docs/specs/active/SPEC-0007-be-10-talk-time-share.md`, branch
+`feat/be-10-talk-time-share` off `dev`.
+
+**Scope correction made before implementing, not after:** `BACKEND_REQUIREMENTS.md`'s
+BE-10 "Where" line lists three UI spots (`ParticipantTile`'s live badge,
+`/ended`'s Talk-time split, `/session`'s live speak-time card), but the
+same entry's own "Suggested shape" text already separates the live ones
+out as BE-17, "a separate, harder real-time version of this same
+computation." Built the post-session half only (`/ended`); live/mid-session
+wiring is explicitly left to BE-17, not silently dropped.
+
+**Change:** `domain/talkTime.js` (new file, pure, no DB, same shape as
+`sessionHistory.js`/`roomListing.js`): `computeTalkTimeShares` sums each
+participant's `ended_at_ms - started_at_ms` across their own
+`transcript_lines` rows, converts to an integer percentage of the room's
+total attributed speaking time, seeds every requested participant at `0`
+first (so a silent participant gets an explicit entry, not an absence),
+and ignores any line attributed to a user outside the given participant
+list (defensive — shouldn't happen given `domain/attribution.js`'s
+existing guarantees, but the aggregation itself doesn't rely on that).
+`GET /api/rooms/:id/participants` now fetches the room's transcript
+alongside participant names (parallel, same `Promise.all` pattern
+`/transcript` already uses) and merges `talkShare` onto each entry. No
+schema change — `transcript_lines` already had both timestamp columns.
+
+`place-me-UI`'s `ended.$roomId.tsx` — still 100% fixture data for
+participants before this (`import { participants } from "@/lib/demo"`,
+never actually fetched anything real) — now calls `getRoomParticipants`
+for the first time on this page. Found and fixed a real latent bug while
+wiring this: the old mock render multiplied `talkShare` by `3` for the bar
+width (`width: ${p.talkShare * 3}%`), presumably because the fixture data
+used small values on some other scale — with real 0–100 percentages that
+would blow past 100% width for anything above ~33%. Removed the
+multiplier; `p.id`/`p.name` (demo shape) corrected to `p.userId`/
+`p.displayName` (real API shape) at the same time. Checked both other
+`RoomParticipant` consumers (`live-room.tsx`, `lobby.$roomId.tsx`) before
+widening the type with a new required `talkShare` field — neither
+constructs one manually, both only ever pass through the real API
+response, so neither needed a change.
+
+**Tests:** RED confirmed first — 6 new `talkTime.test.js` cases (module
+didn't exist) and 2 `roomsApi.test.js` cases (one extended an existing
+assertion to require `talkShare: 0`, one new dedicated computation case)
+failing for the right reasons before implementing. GREEN after: full suite
+fresh under Node 22 (`npm test --workspace=@placeme/server`) — **415/415
+passed, 0 skipped** (live RLS creds present). `npx oxlint apps/server/src
+apps/server/test` clean (2 pre-existing, unrelated warnings). `place-me-UI`:
+`npx eslint` clean, `npm run build` clean (Node 22) — also manually
+checked (no `tsc` step exists in this repo) that widening `RoomParticipant`
+didn't silently break either of its other two consumers.
+
+**Residual/open:**
+- Branch not yet pushed or PR'd at the time of writing — see the
+  immediately following PR for the actual merge record.
+- Guardrail #1 does not apply — no room/audio/transcription/attribution/
+  feedback *content* changed, this only aggregates existing transcript
+  timestamps into a display percentage.
+- No manual click-through against a real multi-person session yet.
+- Live/mid-session speak-time (BE-17) remains fully unbuilt — this item
+  doesn't move it forward beyond sharing the same underlying computation.
+- Next in the planned batch: **BE-14** (signup fields).
+
+## BE-19 — "Analyzed" badge → real score (2026-08-01)
+
+Checked per direct user instruction whether this item, which its own doc
+entry claimed "resolves automatically once BE-6 ships," was actually done
+now that BE-6/BE-7 (immediately above) merged. It wasn't — `GET
+/api/history/mine` returning a real `score` server-side wasn't sufficient
+by itself.
+
+**Change, `place-me-UI` only, no `gd-proto` code:** `src/lib/api.ts`'s
+`HistorySession` type gained `score: number | null`; both `toSessionRow`
+mappers (`history.tsx`, `index.tsx`) now pass `score: s.score ?? undefined`
+through instead of only ever setting `status: "Analyzed" | "Processing"`.
+`components/pm/blocks.tsx`'s `SessionRow` needed **no change** — whoever
+built it already wrote the right fallback logic ahead of time (`s.score !=
+null ? <PmBadge>{s.score}</PmBadge> : ...Analyzed`), anticipating exactly
+this. "Analyzed" is now a genuine fallback (feedback exists, score
+doesn't — e.g. a pre-migration row) rather than the everyday case.
+`BACKEND_REQUIREMENTS.md`'s BE-19 entry corrected to note the "automatic"
+prediction was wrong and explain what actually shipped.
+
+**Verification:** `npx eslint` clean, `npm run build` clean (Node 22). No
+`gd-proto` server tests affected (nothing there changed). **Not visibly
+live yet** — depends on migration `0017` (BE-6/BE-7) being applied to the
+live Supabase project; until then `GET /api/history/mine` still returns
+`score: null` for every row and the fallback path is all that's ever
+seen.
+
+## BE-6/BE-7 — structured feedback (numeric score + per-dimension rubric) (2026-08-01)
+
+Picked up directly per user instruction, ahead of the remaining P1 order
+(BE-5/8/9/10/14/19) — `place-me-UI`'s feedback UI (`ended.$roomId.tsx`)
+already renders a `ScoreRing`, a 5-dimension `ScoreBar` rubric, and
+strengths/improvements lists against hardcoded mock data, while
+`domain/feedbackPrompt.js` explicitly told Gemini to reply with "a single
+plain paragraph. No numeric scores." Spec at
+`docs/specs/active/SPEC-0006-be-6-be-7-feedback-structured-output.md`,
+branch `feat/be-6-be-7-feedback-structured-output` off `dev`.
+
+**Guardrail #1 applies directly to this change** (it's feedback-content
+behavior, not adjacent to it) — flagged to the user before starting, and
+restated here: this cannot be called done on tests alone. A real human
+must read actual generated feedback from a real session, including a
+genuinely low-scoring one, and confirm it still reads as specific and
+non-discouraging, not just that the JSON parses. **That verification has
+not happened yet.**
+
+**Change:** `buildFeedbackPrompt` requests Gemini's structured-output mode
+(`generationConfig.responseMimeType`/`responseSchema`, wired in
+`llm/geminiClient.js`) instead of free prose — an overall 0–100 score, a
+fixed 5-dimension rubric (`FEEDBACK_DIMENSION_LABELS`: Content depth /
+Clarity / Confidence / Listening / Fluency, matching `place-me-UI`'s
+existing mock exactly so the frontend never sees an unknown label), 2–3
+strengths, 2–3 improvements, and a short prose summary. The "never
+discouraging" instruction wasn't just carried over — it's stated more
+strongly for the new numeric fields specifically: *"A low score must still
+read as specific and actionable, not harsh -- explain what to do
+differently, never just that something was bad."* `parseFeedbackResponse`
+validates the full shape defensively (score range, exact dimension count/
+labels/order, non-empty strings, a max list length) before anything
+reaches the DB or a student — a malformed reply fails loudly as that one
+student's generation error (the existing per-student isolation in
+`domain/feedbackGeneration.js`), never a corrupted row.
+
+`domain/feedbackGeneration.js`'s transcription-failed stub was updated to
+match the new shape with `score: null` and empty arrays rather than a
+fabricated `0` — the same guardrail-#1 reasoning that already covered the
+prose case ("this isn't a reflection of your participation") now covers
+the numeric fields too, so a caller can't accidentally render a real-
+looking low score for a session with no evidence behind it.
+`agent/feedbackWorker.js`'s persistence call unpacks the structured result
+into the four new `feedback` columns; `body` keeps its existing name and
+meaning (the prose summary), not renamed. `GET /api/rooms/:id/feedback/mine`
+and `GET /api/history/mine` (`domain/sessionHistory.js`) return the new
+fields additively — `feedback: string|null` is unchanged, so any existing
+caller reading only that key keeps working untouched. `place-me-UI`'s
+`ended.$roomId.tsx` wiring to the real fields (removing its `feedbackScores`/
+`feedbackStrengths`/`feedbackImprovements` mock imports) was done in the
+same pass — see that repo's own history for the frontend side, not
+duplicated here. Migration `0017_feedback_structured_output.sql` adds
+`feedback.score integer` (+ a 0–100 `CHECK`) and
+`dimensions`/`strengths`/`improvements jsonb not null default '[]'` — no
+RLS change, `feedback` has no client-writable policy today and these
+columns don't need one either. **Not yet applied to the live Supabase
+project.**
+
+**A repo-hygiene note from this same session, recorded so it isn't
+repeated:** partway through this work, BE-4's own documentation got left
+stranded uncommitted/stashed while this item's code was started in the
+same working tree, and a `feat/be-4-room-level`/`feat/be-6-be-7-...`
+branch-switching mix-up briefly made it look like work had gone missing
+(it hadn't — `git stash list` and `git reflog` fully accounted for
+everything once checked carefully). BE-4 was finished and merged (PR #76)
+before returning to this branch. This branch itself forked from `dev`
+*before* BE-1 and BE-4 merged, so it needed a rebase onto current `dev`
+(resolving a small, expected conflict in this file's own migration table
+and §5f section) before its own PR — done as part of wrapping this up.
+
+**Tests:** 392/392 passing on this branch's pre-rebase base (full suite
+not yet re-run post-rebase at the time of writing this entry — see the PR
+itself for the final confirmed count). RED/GREEN discipline followed per
+commit message narration (`feedbackPrompt.test.js`/`geminiClient.test.js`/
+`feedbackGeneration.test.js`/`feedbackWorker.test.js`/`sessionHistory.test.js`/
+`historyApi.test.js`/`roomsApi.test.js` all extended).
+
+**Residual/open:**
+- **Guardrail #1's human-verification gate is the main open item** — not
+  optional, not a formality, given this changes what students actually
+  read about their own performance.
+- Migration `0017` not yet applied to the live Supabase project — blocks
+  `main` promotion, not `dev` merges.
+- `BACKEND_REQUIREMENTS.md`'s BE-6/BE-7/BE-19 entries not yet updated to
+  reflect this (BE-19 in particular "resolves automatically once BE-6
+  ships," per its own existing text — worth confirming that's actually
+  true once this is live).
+- `apps/web` (`gd-proto`'s other, currently-shipping frontend) is
+  unaffected by design — same `feedback` string, no visual change there;
+  explicitly flagged in the spec as an open scope question, not decided.
+
+## BE-4 — room level, room-creation half only (2026-08-01)
+
+First P1 after the three P0s. Per direct user instruction, every merge
+target from here on is `dev` only — `dev` → `main` stays entirely the
+user's own call, never proposed or actioned by an agent (this doesn't
+change anything already true per `BRANCHING.md`, just makes it explicit
+again for this new phase of work). Spec at
+`docs/specs/active/SPEC-0005-be-4-room-level.md`, branch
+`feat/be-4-room-level` off `dev`.
+
+**Scope split, per direct user instruction:** `BACKEND_REQUIREMENTS.md`'s
+BE-4 bundles two behaviors of very different risk — (a) a `level` field a
+room creator picks at creation time, and (b) an optional `level` filter on
+`POST /api/rooms/match` that only groups same-level queue members. (b)
+requires a `matchmaking_queue` schema change (currently stores only
+`user_id`) and a change to `domain/matchmaking.js`'s `matchmake()` — the
+pure, tested, race-sensitive core of the whole matching system
+(`matchmakingClaim.js`'s own comment: "matchmake() itself is untouched --
+PLAN.md is explicit that it must stay pure"). Materially bigger and
+riskier than a single-table field, and BE-5 already touches the same
+`/api/rooms/match` request body (group size, topic pool) — so (b) is
+deferred to fold in alongside BE-5 rather than being built twice. This
+session did (a) only.
+
+**Change:** `POST /api/rooms` accepts an optional `level`
+(`'beginner'|'intermediate'|'advanced'`, new
+`domain/roomLevel.js#isValidLevel`, same closed-set shape as
+`roomVisibility.js`), defaults to `'intermediate'`, echoes it in the
+response. `db/rooms.js`'s `insertRoom` persists it — and, matching the
+exact pattern already established for `maxParticipants`/`visibility`,
+`POST /api/rooms/match`'s `insertRoom` call never passes `level` either,
+so the DB's own `DEFAULT 'intermediate'` applies; matched rooms stay
+system-formed, not creator-configured. Migration `0016_rooms_level.sql`
+adds the column + a `CHECK` constraint, same defence-in-depth shape as
+`0014`/`0015`. **Not yet applied to the live Supabase project.**
+
+`place-me-UI`'s `/rooms/new` Level select is now a controlled input (was
+`defaultValue`-only, so it never actually reflected a click, same class of
+bug BE-3's Visibility radio group had before that fix) and sends the
+choice. `BACKEND_REQUIREMENTS.md`'s BE-4 entry updated to record the
+split explicitly (room-creation half done, match-filtering half still
+open, not silently dropped), and BE-5's entry updated to note it now also
+covers the deferred `level` filter.
+
+**Tests:** RED confirmed first — 7 new `roomsApi.test.js` cases
+(create-route validation ×4, defaulting, response echo, `/match`
+non-interference) plus 9 new `roomLevel.test.js` cases, all failing for
+the right reasons before implementing. GREEN after: full suite fresh under
+Node 22 (`npm test --workspace=@placeme/server`) — **397/397 passed, 0
+skipped** (live RLS creds present in this environment). `npx oxlint
+apps/server/src apps/server/test` clean (2 pre-existing, unrelated
+warnings). `place-me-UI`: `npx eslint` clean after one auto-fixed
+formatting nit (same recurring pattern as every prior BE session), `npm
+run build` clean (Node 22).
+
+**A process hiccup this session, recorded for the record:** partway
+through wrapping up BE-4's documentation, work moved on to starting
+BE-6/BE-7 (numeric score + rubric) in the same working tree without this
+file being updated first — leaving BE-4's `PROGRESS.md` entry and some doc
+edits stranded uncommitted/stashed rather than landed. Recovered cleanly
+(nothing was lost — `git stash`/`git reflog` fully accounted for
+everything), but the lesson is explicit: finish and land one item's
+documentation and PR before starting the next item's code, even under
+`/compact` or similar context-window pressure, rather than letting two
+items' in-progress state overlap in the same working tree.
+
+**Residual/open:**
+- Branch not yet pushed or PR'd at the time of writing — see the PR
+  immediately following this entry's commit for the actual merge record.
+- Guardrail #1 does not apply — no room/audio/transcription/attribution/
+  feedback behavior changed.
+- No manual click-through yet against a real deployed environment.
+- Migrations `0014`/`0015`/`0016` are all still unapplied to the live
+  Supabase project — all three block `main` promotion for their own
+  work, though none block merging further BE-item branches into `dev`.
+- Next up: BE-6/BE-7 (numeric score + rubric) is already partway
+  implemented on `feat/be-6-be-7-feedback-structured-output` — to be
+  reviewed with the user before continuing, since it touches the Gemini
+  feedback prompt directly (guardrail #1, "never discouraging" framing).
+
+## BE-1 — room discovery, browsable open rooms (2026-08-01)
+
+Last of the three agreed P0s (BE-2 → BE-3 → BE-1), same session. Spec at
+`docs/specs/active/SPEC-0004-be-1-room-discovery.md`, branch
+`feat/be-1-room-discovery` off `dev` (freshly synced after PR #73/#74 both
+merged). **No migration needed** — both `visibility` (BE-3) and
+`max_participants` (BE-2) already existed, so this is a pure code addition
+with nothing blocking `main` promotion, unlike its two predecessors.
+
+**Process change mid-session, per direct user instruction:** ran a full
+`pr-review` skill pass on PR #74 (BE-3) — triage, deep review, guardrail
+checklist, local verification (which caught a real gap: my first
+`npm test --workspace=@placeme/server` run failed on Node 20's missing
+native `WebSocket`, my own mistake — `PLAN.md` §1 already documents this
+exact footgun and I'd forgotten to `nvm use 22` first; re-ran clean at
+373/373 once I did). Drafted a full APPROVE review, then hit
+`Review Can not approve your own pull request` from GitHub itself when
+trying to post it — this identity can never complete that step, matching
+`BRANCHING.md` 5a's own note about no self-approval being possible here.
+User said directly: **"just merge dont review every pr."** Saved as a
+feedback memory (not repeated in full here) — going forward, PRs in this
+repo get merged directly when asked, not routed through the full
+`pr-review` workflow by default. PR #74 was merged via
+`gh pr merge --squash --delete-branch` without a posted review.
+
+**Change:** new `GET /api/rooms/open` — `status='waiting'` AND
+`visibility='public'` rooms, newest first, bounded (`MAX_OPEN_ROOMS=50`,
+`db/rooms.js`, M9 discipline), excluding any room already at its own
+`max_participants` (a full public room is filtered out, not shown then
+rejected on join). New `db/roomParticipants.js#listParticipantsForRooms` —
+one batched query for every open room's participant rows, not one query
+per room; given its own explicit `.limit()` rather than leaning solely on
+the caller's already-bounded room-id list, per this file's own M9/N5
+lesson about not trusting an upstream bound as the only protection. New
+`domain/roomListing.js#buildOpenRoomsList` (new file, same pure-assembly
+shape as `sessionHistory.js`'s `buildSessionHistory`) does the
+counting/host-name-resolution/capacity-filtering, kept DB-free and unit
+tested without a live database. Joining a discovered room reuses the
+existing, untouched `POST /api/rooms/join` by code — no new join
+mechanism, matching the spec's own Non Goals.
+
+`place-me-UI`: `/join`'s room grid and `/`'s "Rooms open now" now fetch
+real data (`useEffect` + `useState<T|null>`, same pattern
+`HistoryPage`/`Index` already use for `getMyHistory`). `RoomCard`
+(`components/pm/blocks.tsx`) gained an optional `onSelect` prop —
+backward-compatible for its two other existing callers (`app.index.tsx`,
+`app.join.tsx`, both untouched, still using `to=`) — real cards use it
+instead of a dead self-link (`to="/join"` rendered *on* `/join` was
+literally a no-op for the old fixture data, which is why its own removed
+comment said "cards intentionally don't navigate anywhere real"; that
+stops being true once the data is real). Clicking a card on `/join`
+prefills the code field; on `/` it navigates to `/join` (no search-param
+deep-link prefill built — named as a deliberate scope cut, not silently
+missing, to avoid touching route search-param typing this session).
+`demo.ts`'s `Room.level` type widened from a fixed 3-value union to
+`string` (only consumer is a plain text render in `RoomCard`, confirmed by
+grep) so a real room can honestly render "Any level" instead of
+fabricating a fake `Beginner`/`Intermediate`/`Advanced` tier — BE-4 (level)
+isn't built. `BACKEND_REQUIREMENTS.md`'s BE-1 entry updated to
+"code complete, not yet live" and corrected to note `/match`'s aside was
+never actually part of this pass (it shows BE-16 live-telemetry, a
+different unbuilt item, not a room listing).
+
+**Tests:** RED confirmed first in both layers.
+`roomListing.test.js` (new file): 6 cases against a module that didn't
+exist yet. `roomsApi.test.js`: 2 new cases, confirmed failing with a plain
+404 (the route didn't exist) before implementing. GREEN after: full suite
+fresh under Node 22 (`npm test --workspace=@placeme/server`) —
+**381/381 passed, 0 skipped** (live RLS creds present in this
+environment). `npx oxlint apps/server/src apps/server/test` clean (2
+pre-existing, unrelated warnings). `place-me-UI`: `npx eslint` clean after
+one auto-fixed formatting nit (same recurring pattern as BE-2/BE-3's
+sessions), `npm run build` clean (Node 22).
+
+**Residual/open:**
+- Branch not yet pushed or PR'd — held pending the user's go-ahead.
+- Guardrail #1 does not apply — no room/audio/transcription/attribution/
+  feedback behavior changed.
+- No manual click-through yet against a real deployed environment.
+- Migrations `0014` (BE-2) and `0015` (BE-3) are **still** not applied to
+  the live Supabase project — both still block `main` promotion for their
+  own PRs (already merged to `dev`). BE-1 itself has no such blocker.
+- **All three agreed P0s (BE-2, BE-3, BE-1) are now code-complete.** Next
+  session should check with the user on: applying the two outstanding
+  migrations live, promoting `dev` → `main` (user's call per
+  `BRANCHING.md`, never proposed by an agent), or picking up the next
+  `BACKEND_REQUIREMENTS.md` item (P1s: BE-4/5/6/7/8/9/10/14/19).
+
+## BE-3 — room visibility, public/private (2026-08-01)
+
+Second item in the agreed BE-2 → BE-3 → BE-1 order, same session as BE-2
+below. Spec at `docs/specs/active/SPEC-0003-be-3-room-visibility.md`,
+branch `feat/be-3-room-visibility` off `dev`.
+
+**Sequencing note, per direct user instruction:** the user merged PR #73
+(BE-2) and PR #72 (the CORS fix) themselves before this branch existed, so
+`feat/be-3-room-visibility` was created off a freshly fetched `dev` that
+already included both — then rebased once more (`git rebase origin/dev`,
+no conflicts — the only prior commit on this branch was the spec draft,
+which didn't touch any BE-2 file) after the user confirmed the merge.
+Avoided the file-overlap conflict risk (`rooms.js`, `db/rooms.js`,
+`roomsApi.test.js`, `PLAN.md`, `PROGRESS.md` — all touched by both BE-2 and
+BE-3) entirely, rather than resolving it later at PR time.
+
+**Change:** `POST /api/rooms` accepts an optional `visibility`
+(`'public' | 'private'`, new `domain/roomVisibility.js`'s
+`isValidVisibility` — text + closed-set check, matching `rooms.status`/
+`join_mode`'s existing style rather than a new DB enum type), defaults to
+`'private'` when omitted, echoes it in the response. `db/rooms.js`'s
+`insertRoom` persists it. `POST /api/rooms/match` (matched rooms) is
+**unaffected on purpose** — that route never passes `visibility` at all,
+so it stays `undefined`, `JSON.stringify` drops the key entirely, and the
+column's own `DEFAULT 'private'` applies — the exact same mechanism BE-2
+already established for `maxParticipants` on the same route, not a new
+pattern. Matched rooms stay system-formed, not creator-configured, per
+this spec's Non Goals. Migration `0015_rooms_visibility.sql` adds the
+column (backfills existing rows via `NOT NULL DEFAULT 'private'`) plus a
+`CHECK(public/private)` constraint. **Not yet applied to the live Supabase
+project.**
+
+`place-me-UI`'s `/rooms/new` Public/Private radio group is now controlled
+(`checked`/`onChange`, not `defaultChecked`) so the selected-state styling
+actually follows the user's choice instead of always showing "Public" as
+selected regardless of what's picked; sent as `visibility` on create; BE-3
+`MOCK` comment removed.
+
+**Correction made along the way:** `place-me-UI/docs/BACKEND_REQUIREMENTS.md`'s
+BE-3 header read "(P0, depends on BE-1)", but its own "Suggested shape"
+text said the column would be "read by BE-1's listing endpoint" — i.e. the
+dependency runs the other way. Fixed the header to match the content and
+the order already agreed with the user; noted in both the spec and the doc
+itself so it doesn't get re-read backwards later.
+
+**Tests:** RED confirmed first — 6 new `roomsApi.test.js` cases
+(create-route validation ×4, defaulting, response echo) failing for the
+right reasons (undefined response fields, 500s from an unguarded invalid
+value reaching the DB-layer mock) before the route changed. A 7th case (the
+`/match` non-interference guard) is a regression assertion that correctly
+passed both before and after, since that route never touched `visibility`
+either way — not a RED/GREEN pair, deliberately. GREEN after: full suite
+via `npx vitest run --root apps/server` — 365/365 passed, 3 skipped
+(offline live-RLS, expected). `npx oxlint apps/server/src apps/server/test`
+clean (2 pre-existing, unrelated warnings). `place-me-UI`: `npx eslint`
+clean after one auto-fixed formatting nit (same as BE-2's session), `npm
+run build` clean (Node 22).
+
+**Residual/open:**
+- Migration `0015` needs a human to run it against the live Supabase
+  project before this branch can merge to `main` — same constraint as
+  `0014`. If both are still pending when someone applies migrations, apply
+  them together (`PLAN.md` §3 now lists both).
+- Branch not yet pushed or PR'd — held pending the user's go-ahead.
+- Guardrail #1 does not apply — no room/audio/transcription/attribution/
+  feedback behavior changed.
+- No manual click-through yet — blocked on the migration being live, and
+  there's no listing endpoint yet to browse public vs. private rooms by
+  (that's BE-1, next).
+- Next up per the agreed order: **BE-1** (room discovery /
+  `GET /api/rooms/open`), which can now actually filter on `visibility`.
+
+## BE-2 — configurable room capacity (2026-08-01)
+
+Picked up per direct user instruction to start working through
+`place-me-UI/docs/BACKEND_REQUIREMENTS.md`'s gaps one at a time. This is a
+new work stream — `place-me-UI` (TanStack Start) is a second frontend
+already rendering UI for backend capability `apps/server` doesn't have yet;
+every gap is tracked there as `BE-1`…`BE-20`. User picked the order:
+BE-2 → BE-3 → BE-1 (P0s, dependency-ordered — BE-1's listing endpoint needs
+BE-3's `visibility` column first). This session did BE-2 only. Spec at
+`docs/specs/active/SPEC-0002-be-2-configurable-room-capacity.md`, branch
+`feat/be-2-room-capacity` off `dev`.
+
+**Repo-hygiene detour before starting:** the working tree was on `main`
+(not `dev`) with an uncommitted CORS fix from earlier in the same session
+(`place-me-UI` runs on port 8080 in dev, `DEFAULT_DEV_ORIGINS` only listed
+5173) sitting directly in the working tree — a guardrail #12 violation in
+progress (never commit to `main`/`dev` directly). Local `dev` also turned
+out to be 8 commits behind `origin/dev`. Fixed before any BE-2 work:
+stashed the CORS diff, fast-forwarded local `dev` to `origin/dev`
+(confirmed via `git diff origin/dev origin/main --stat` that the two are
+actually tree-identical despite different commit hashes — PR #70 merged
+into `dev`, PR #71 separately synced the same content into `main`, nothing
+was actually lost), gave the CORS fix its own branch
+(`fix/place-me-UI-cors-dev-origin`, committed, not yet pushed/PR'd), then
+branched `feat/be-2-room-capacity` off the now-current `dev`.
+
+**Change:** `POST /api/rooms` accepts an optional `maxParticipants`
+(3–12, `domain/roomCapacity.js`'s new `isValidMaxParticipants` — same
+`Number.isInteger`-based shape as `isValidDurationSeconds`), defaults to
+the existing `DEFAULT_MAX_ROOM_PARTICIPANTS` (6) when omitted, and echoes
+it in the response. `db/rooms.js`'s `insertRoom` persists it;
+`getRoomByCode` selects it. `POST /api/rooms/join`'s capacity check now
+reads `room.max_participants` (the room's own stored value) instead of the
+router-level `maxParticipants` constant, which is removed as dead code —
+`isRoomFull`'s second parameter is a JS default parameter (triggers only
+on `undefined`, not falsy), so every pre-existing join-cap test kept
+passing unchanged without modification, since their room fixtures don't
+set `max_participants` at all. Migration `0014_rooms_max_participants.sql`
+adds the column (`not null default 6`, backfills existing rows
+automatically) plus a `CHECK(3-12)` constraint mirroring the route-level
+bound, same defence-in-depth shape as `0009`/`0010`'s duration bounds.
+**Not yet applied to the live Supabase project** — manual step, tracked in
+`PLAN.md` §3, and the PR must not merge to `main` before it's confirmed
+live (would 500 on the missing column otherwise).
+
+`place-me-UI`'s `/rooms/new` "Seats" select is now wired to state and sent
+as `maxParticipants`; the BE-2 `MOCK` comment is removed.
+`place-me-UI/docs/BACKEND_REQUIREMENTS.md`'s BE-2 entry updated to
+"code complete, not yet live" rather than deleted outright, since neither
+the PR nor the migration has landed yet. Note: `place-me-UI` has no
+`CLAUDE.md`/guardrails of its own and already had substantial unrelated
+uncommitted work in progress on its `main` (file renames, new routes) —
+the BE-2 edits were layered onto that working tree without touching its
+git state, since there's no established branch discipline there to
+follow and disturbing an in-progress unrelated diff wasn't this session's
+call to make.
+
+**Tests:** RED confirmed first in both layers. `roomCapacity.test.js`: 10
+new `isValidMaxParticipants` cases, confirmed failing (`is not a
+function`) before the domain function existed. `roomsApi.test.js`: 7 new
+cases (create-route validation ×4, defaulting, response echo,
+per-room-cap-not-global-default enforcement ×2) confirmed failing for the
+right reasons (500s from an unguarded invalid value reaching the DB-layer
+mock; a false-200 where a room's own lower cap should have rejected the
+joiner) before the route changed. GREEN after: full suite (not just the
+touched files) run fresh via `npx vitest run --root apps/server` —
+348/348 passed, 8 skipped (offline live-RLS, expected, unrelated).
+`npx oxlint apps/server/src
+apps/server/test` clean (2 pre-existing, unrelated warnings). No
+`place-me-UI` test infra exists yet (no test script, no test files) — its
+`npm run build` (TanStack Start/Nitro, Node 22) ran clean instead, and
+`npx eslint` on the two edited files was clean after one auto-fixed
+formatting nit.
+
+**Residual/open:**
+- Migration `0014` needs a human to run it against the live Supabase
+  project (manual SQL Editor step, same as every other migration in this
+  repo) before this branch can merge to `main`.
+- Branch not yet pushed or PR'd — held pending the user's go-ahead, plus
+  the sibling `fix/place-me-UI-cors-dev-origin` branch from the same
+  session's earlier CORS fix.
+- Guardrail #1 does not apply — no room/audio/transcription/attribution/
+  feedback behavior changed, only room-creation capacity.
+- No manual click-through against the real deployed UI yet — the
+  migration isn't live anywhere to test against.
+- Next up per the agreed order: **BE-3** (room visibility).
 
 ## M5/N8 close-out + BUG-SPEC-0001 automated E2E check (2026-07-31)
 

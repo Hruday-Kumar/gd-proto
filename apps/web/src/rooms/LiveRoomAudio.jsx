@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Room, RoomEvent, Track } from 'livekit-client';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { getRoomToken, getRoomParticipants } from './roomsApi.js';
 import { track } from '../lib/analytics.js';

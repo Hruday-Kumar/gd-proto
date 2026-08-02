@@ -14,3 +14,17 @@ export const DEFAULT_MAX_ROOM_PARTICIPANTS = 6;
 export function isRoomFull(currentParticipantCount, maxParticipants = DEFAULT_MAX_ROOM_PARTICIPANTS) {
   return currentParticipantCount >= maxParticipants;
 }
+
+// BE-2 (place-me-UI/docs/BACKEND_REQUIREMENTS.md, SPEC-0002): lets a room
+// creator choose their own seat cap instead of always getting
+// DEFAULT_MAX_ROOM_PARTICIPANTS. Same Number.isInteger-based validation
+// shape as domain/roomDuration.js's isValidDurationSeconds -- rejects NaN,
+// Infinity, non-numbers, fractions, and numeric strings alike, since the
+// request body is attacker-controlled and coercing here would only move
+// the failure later (into the DB's own CHECK constraint, migration 0014).
+export const MIN_ROOM_PARTICIPANTS = 3;
+export const MAX_ROOM_PARTICIPANTS = 12;
+
+export function isValidMaxParticipants(value) {
+  return Number.isInteger(value) && value >= MIN_ROOM_PARTICIPANTS && value <= MAX_ROOM_PARTICIPANTS;
+}
