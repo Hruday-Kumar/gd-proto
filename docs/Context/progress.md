@@ -67,3 +67,16 @@ Verified / Done.
   continue straight into state 2 (`feat/eval-transcript-analysis`) — per
   guardrail #9 (session discipline: one core unit at a time), this is a
   deliberate pause point, not an interruption.
+- **2026-08-02 (unrelated, same session, logged for continuity):** User
+  asked to push `feat/be-20-raise-hand-signal`'s stashed work. Checked out
+  the branch — the concurrent session had already popped its own stash by
+  then (recovery instructions above had been followed). Ran
+  `npm test --workspace=@placeme/server` as a sanity check only (413/413
+  passed, same pre-existing 4-file Node-version gap as state 1, not
+  otherwise evaluated per explicit user instruction — "don't evaluate,
+  just push, don't create any PR"). Committed (`bd3e8fd`: BE-20 raise-hand
+  signal, `canPublishData: true` + `hand_raised` LiveKit data topic, full
+  detail in that commit and `SPEC-0010`) and pushed to `origin`, no PR
+  opened. Returned to `feat/eval-schema-foundation` afterward — this
+  session's own eval-engine state (see table above) is unaffected and
+  still the next thing to pick up.
