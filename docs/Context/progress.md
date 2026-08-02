@@ -13,7 +13,7 @@ Verified / Done.
 |---|---|---|---|---|
 | 0 | Spec + branches created | Done | 2026-08-02 | SPEC-0011 drafted; 9 task branches cut from `dev` (`feat/eval-schema-foundation`, `feat/eval-transcript-analysis`, `feat/eval-criterion-scoring`, `feat/eval-score-aggregation`, `feat/eval-validation-layer`, `feat/eval-confidence-score`, `feat/eval-feedback-decoupled`, `test/eval-golden-suite`, `chore/eval-cutover-cleanup`). |
 | 1 | `feat/eval-schema-foundation` | Implemented — PR not yet opened | 2026-08-02 | Migration `0019_evaluation_pipeline_tables.sql` adds `evaluation_runs`, `evaluation_evidence`, `evaluation_criterion_results`, `evaluation_validation_issues`, `evaluation_confidence`, all RLS-enabled with zero client policies (service-role only). No application code changed. Committed (`dc8f3c4`) and pushed. Still needs: manual application to the live Supabase project (per `CLAUDE.md`, migrations are never applied automatically) before state 2 can insert real rows. |
-| 2 | `feat/eval-transcript-analysis` | Not started | — | Transcript Analysis Service (1 Gemini call/room) + deterministic evidence verifier. |
+| 2 | `feat/eval-transcript-analysis` | Implemented — PR not yet opened | 2026-08-02 | `domain/transcriptAnalysisPrompt.js` (prompt/schema/parser) + `domain/evidenceVerifier.js` (deterministic quote/attribution verification) + `llm/geminiClient.generateTranscriptAnalysis`. Also pinned `temperature` on every eval Gemini call, including the still-live `generateFeedback` (R13, done early — small, safe, directly fixes the reported "random scores"). Branched off state 1's tip (stacked, not off `dev`, since it depends on the schema). Not yet wired into `feedbackWorker.js`/persisted to `evaluation_evidence` — pure, injectable, unit-tested domain functions only. |
 | 3 | `feat/eval-criterion-scoring` | Not started | — | 5 criterion evaluators (all participants at once per dimension) + `domain/evalRubric.js`. |
 | 4 | `feat/eval-score-aggregation` | Not started | — | Deterministic aggregator, pure functions, no LLM arithmetic. |
 | 5 | `feat/eval-validation-layer` | Not started | — | Deterministic checks + bounded (max 2) targeted LLM rubric-validation retry. |
@@ -80,3 +80,27 @@ Verified / Done.
   opened. Returned to `feat/eval-schema-foundation` afterward — this
   session's own eval-engine state (see table above) is unaffected and
   still the next thing to pick up.
+- **2026-08-02 (state 2 done):** User said "back to feedback" — resumed
+  eval-engine work. Fast-forwarded `feat/eval-transcript-analysis` onto
+  `feat/eval-schema-foundation`'s tip (stacked branch; state 2's domain
+  code doesn't strictly need the migration file, but stacking keeps every
+  eval-pipeline branch building on the same lineage, consistent with how
+  `pr-review`'s own docs describe stacked feature branches as normal in
+  this repo). Wrote `transcriptAnalysisPrompt.js` (prompt asks for neutral
+  evidence only, numbers utterances, uses position-stable anonymous tags
+  P1/P2/... instead of real display names so a rename can't affect
+  scoring), `evidenceVerifier.js` (deterministically rejects fabricated
+  quotes and cross-speaker-attributed evidence, derives the true
+  participant from `transcript_lines.user_id` rather than trusting the
+  model), and added `generateTranscriptAnalysis` + `DEFAULT_EVAL_TEMPERATURE`
+  (0.1, pinned on both the new call and the existing `generateFeedback`
+  call) to `geminiClient.js`. 33 new tests, all passing;
+  `npm test --workspace=@placeme/server`: 446/446 tests passed (same 4
+  pre-existing Node-version-gated RLS test files as state 1, confirmed
+  unrelated). `npm run lint`: no new warnings/errors (only pre-existing,
+  unrelated `@placeme/web` warnings). Committed (`3b946d9`) and pushed.
+  Not yet wired into `feedbackWorker.js` or persisted to
+  `evaluation_evidence` — that orchestration is a later state.
+- Next: state 3 (`feat/eval-criterion-scoring`) — the 5 criterion
+  evaluators + `domain/evalRubric.js`, evaluating all participants
+  together per dimension from the evidence ledger (not raw transcript).
