@@ -16,7 +16,7 @@ Verified / Done.
 | 2 | `feat/eval-transcript-analysis` | Implemented — PR not yet opened | 2026-08-02 | `domain/transcriptAnalysisPrompt.js` (prompt/schema/parser) + `domain/evidenceVerifier.js` (deterministic quote/attribution verification) + `llm/geminiClient.generateTranscriptAnalysis`. Also pinned `temperature` on every eval Gemini call, including the still-live `generateFeedback` (R13, done early — small, safe, directly fixes the reported "random scores"). Branched off state 1's tip (stacked, not off `dev`, since it depends on the schema). Not yet wired into `feedbackWorker.js`/persisted to `evaluation_evidence` — pure, injectable, unit-tested domain functions only. |
 | 3 | `feat/eval-criterion-scoring` | Implemented — PR not yet opened | 2026-08-02 | `domain/evalRubric.js` (5 dimensions x 2-3 anchored subdimensions, weights sum to 1.0, `SUBDIMENSION_LEVELS`/`LEVEL_MARK`) + `domain/criterionEvaluationPrompt.js` (one prompt per dimension, evaluates all participants at once from the evidence ledger only, never the raw transcript) + `llm/geminiClient.generateCriterionEvaluation`. Branched off state 2's tip (stacked). Not yet wired into `feedbackWorker.js` -- pure, injectable, unit-tested domain functions only, same as state 2. |
 | 4 | `feat/eval-score-aggregation` | Implemented — PR not yet opened | 2026-08-03 | `domain/scoreAggregator.js`: `aggregateDimensionScore` (weighted average of subdimension marks, excluding not_observed/insufficient_context, renormalizing remaining weights, null if all excluded), `aggregateOverallScore` (equal-weighted average across the five dimensions, same null-exclusion rule), `aggregateScorecard` (composes both per participant across all five criterion-evaluator results into `{participantUserId, dimensions: [{label, score}], overallScore}`). Branched off state 3's tip (stacked). |
-| 5 | `feat/eval-validation-layer` | Not started | — | Deterministic checks + bounded (max 2) targeted LLM rubric-validation retry. |
+| 5 | `feat/eval-validation-layer` | Implemented — PR not yet opened | 2026-08-03 | `domain/validationLayer.js`: `validateWeightTotal`/`validateScoreRange` (deterministic, always) + `evaluateCriterionWithValidation` (bounded max-2 same-criterion retry around a flagged/parse-failing criterion evaluator response, returns a flagged issue instead of throwing once exhausted). Branched off state 4's tip (stacked). Also merged into new consolidated `phase-2` branch per user instruction — every state branch is merged into `phase-2` as it lands, kept in sync going forward. |
 | 6 | `feat/eval-confidence-score` | Not started | — | Confidence from measurable components, pure functions. |
 | 7 | `feat/eval-feedback-decoupled` | Not started | — | Cutover point: feedback generation reads validated scorecard/evidence; `feedback` row shape unchanged; requires guardrail #1 human verification before merge to `main`. |
 | 8 | `test/eval-golden-suite` | Not started | — | Fixture transcripts + determinism/metamorphic/evidence tests in `npm test`. |
@@ -165,6 +165,43 @@ Verified / Done.
   unrelated — this state touched zero files those suites depend on). `npm
   run lint`: no new warnings (same pre-existing `@placeme/web` ones).
   Checked off AC4 and the state-4 task row in SPEC-0011. Not committed yet.
-- Next: state 5 (`feat/eval-validation-layer`) — deterministic checks
-  (evidence existence, quote match, score range, weight totals) plus a
-  bounded (max 2 retries) targeted LLM rubric-validation retry.
+- **2026-08-03 (consolidated `phase-2` branch created, user instruction):**
+  User asked for a consolidated `phase-2` branch containing all SPEC-0011
+  work, and for every state branch to be merged into it going forward.
+  Created `phase-2` off `feat/eval-score-aggregation`'s tip (`11e344a`,
+  states 1-4), pushed to origin. Confirmed all 9 state branches were already
+  ancestors (`git merge --ff-only` against each: "Already up to date") —
+  states 6-9 hadn't started yet, so this was a no-op consolidation, not a
+  real merge. Convention from here: finish a state on its own branch as
+  before (unchanged process/tests/docs), then fast-forward-merge that
+  branch into `phase-2` and push `phase-2` too.
+- **2026-08-03 (state 5 done):** Fast-forwarded `feat/eval-validation-layer`
+  onto `feat/eval-score-aggregation`'s tip (stacked, same lineage as states
+  1-4). Wrote `domain/validationLayer.js`: `validateWeightTotal` (rubric
+  weights sum to 1.0, a code-review defect if not -- checked always, before
+  any Gemini call, since a retry can never fix a rubric bug) and
+  `validateScoreRange` (a score is `null` or a finite number in [0, 100]).
+  R5's other two named checks (evidence existence, quote match) are already
+  enforced as hard closed-world validation inside state 3's
+  `parseCriterionEvaluationResponse` -- this state's new piece is
+  `evaluateCriterionWithValidation`, which builds a criterion-evaluator
+  prompt once (`buildCriterionEvaluationPrompt`) and retries the *same*
+  dimension/evidence/participants up to `maxRetries` (default 2) additional
+  times if a response fails that parse validation, returning
+  `{valid, result, retryCount}` on eventual success or
+  `{valid: false, result: null, retryCount, issue}` once exhausted --- never
+  throws on an exhausted retry, so a caller can record the issue and
+  continue rather than losing the whole room's evaluation to one bad
+  response. `generate` is injected (same `(prompt, parseContext) => parsed`
+  contract as `geminiClient.generateCriterionEvaluation`), so this is fully
+  testable with no live Gemini key. 11 new tests in
+  `test/validationLayer.test.js`. Full suite: `npm test
+  --workspace=@placeme/server` 510/510 passing (same 4 pre-existing
+  Node-version-gated RLS test files as states 1-4, confirmed unrelated).
+  `npm run lint`: no new warnings. Checked off AC5 and the state-5 task row
+  in SPEC-0011. Merged into `phase-2` and pushed, per the new convention
+  above.
+- Next: state 6 (`feat/eval-confidence-score`) — confidence calculated from
+  measurable components (transcript integrity, speaker attribution quality,
+  evidence sufficiency, validation success), pure functions, never asked of
+  the LLM directly.

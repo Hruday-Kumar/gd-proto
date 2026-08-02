@@ -310,10 +310,15 @@ the state-1 migration.
       tests covering every level/weight/insufficient-evidence combination;
       `criterionEvaluationPrompt.test.js`'s existing "has no numeric score
       field" test covers the LLM-output half.)
-- [ ] **AC5 (state 5):** Deterministic validation checks (evidence
+- [x] **AC5 (state 5):** Deterministic validation checks (evidence
       existence, quote match, score range, weight totals) run on every
       evaluation; a flagged criterion is retried at most twice, targeted
-      only at that criterion.
+      only at that criterion. (`domain/validationLayer.js`, commit pending;
+      evidence existence/quote-match closed-world checks already enforced
+      by state 3's `parseCriterionEvaluationResponse` -- this state adds
+      `validateWeightTotal`/`validateScoreRange` plus
+      `evaluateCriterionWithValidation`'s bounded same-criterion retry
+      around a flagged (parse-failing) response; 11 new tests.)
 - [ ] **AC6 (state 6):** Confidence and its component breakdown are stored
       per participant per run, computed only from measurable inputs.
 - [ ] **AC7 (state 7):** Feedback text is generated from the validated
@@ -337,7 +342,7 @@ the state-1 migration.
       module (`domain/evalRubric.js`).
 - [x] `feat/eval-score-aggregation` — deterministic aggregator (pure
       functions, fully unit-testable without any LLM).
-- [ ] `feat/eval-validation-layer` — deterministic validators + bounded
+- [x] `feat/eval-validation-layer` — deterministic validators + bounded
       targeted LLM retry.
 - [ ] `feat/eval-confidence-score` — confidence calculator (pure
       functions).
