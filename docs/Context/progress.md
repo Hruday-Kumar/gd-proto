@@ -12,7 +12,7 @@ Verified / Done.
 | # | State (branch) | Status | Last updated | Notes |
 |---|---|---|---|---|
 | 0 | Spec + branches created | Done | 2026-08-02 | SPEC-0011 drafted; 9 task branches cut from `dev` (`feat/eval-schema-foundation`, `feat/eval-transcript-analysis`, `feat/eval-criterion-scoring`, `feat/eval-score-aggregation`, `feat/eval-validation-layer`, `feat/eval-confidence-score`, `feat/eval-feedback-decoupled`, `test/eval-golden-suite`, `chore/eval-cutover-cleanup`). |
-| 1 | `feat/eval-schema-foundation` | In progress | 2026-08-02 | Additive migration for `evaluation_runs`, `evaluation_evidence`, `evaluation_criterion_results`, `evaluation_validation_issues`, `evaluation_confidence`. No behavior change. |
+| 1 | `feat/eval-schema-foundation` | Implemented — PR not yet opened | 2026-08-02 | Migration `0019_evaluation_pipeline_tables.sql` adds `evaluation_runs`, `evaluation_evidence`, `evaluation_criterion_results`, `evaluation_validation_issues`, `evaluation_confidence`, all RLS-enabled with zero client policies (service-role only). No application code changed. Committed (`dc8f3c4`) and pushed. Still needs: manual application to the live Supabase project (per `CLAUDE.md`, migrations are never applied automatically) before state 2 can insert real rows. |
 | 2 | `feat/eval-transcript-analysis` | Not started | — | Transcript Analysis Service (1 Gemini call/room) + deterministic evidence verifier. |
 | 3 | `feat/eval-criterion-scoring` | Not started | — | 5 criterion evaluators (all participants at once per dimension) + `domain/evalRubric.js`. |
 | 4 | `feat/eval-score-aggregation` | Not started | — | Deterministic aggregator, pure functions, no LLM arithmetic. |
@@ -47,7 +47,23 @@ Verified / Done.
   across branches that share identical committed content with `dev`. Not
   this session's work to resume — flagged here for whoever owns that
   branch.
-- Next: implement state 1 (schema migration) on `feat/eval-schema-foundation`,
-  verify, update this file, then stop for check-in before continuing to
-  state 2 (per guardrail #9 — one core unit at a time, not all 9 states in
-  one unreviewed pass).
+- **2026-08-02 (state 1 done):** Wrote migration `0019_evaluation_pipeline_tables.sql`
+  on `feat/eval-schema-foundation`, matching this repo's existing migration
+  style (plain SQL, manual dashboard apply, RLS enabled). Ran
+  `npm test --workspace=@placeme/server`: 413/413 tests passed; 4 RLS
+  isolation test *files* error at setup (`Node.js detected but native
+  WebSocket not found` — needs Node 22+, this sandbox runs Node v20.20.0).
+  Confirmed this is pre-existing and unrelated: this state added zero
+  JS/test files, only a `.sql` file vitest never loads, so the same 4
+  files would fail identically without this change. No schema-only
+  migration in this repo's history (0007/0009/0012/0014/0015/0016/0018)
+  carries a paired automated test either, since these tables have no
+  client policy to test against (RLS enabled, zero policies — nothing for
+  a client-side test to exercise until an application stage starts
+  writing to them in state 2+). Committed and pushed all 9 branches to
+  `origin` (empty for states 2-9 so far, per user request to create
+  branches for every major task up front).
+- Next: user check-in on whether to open a PR for state 1 now and/or
+  continue straight into state 2 (`feat/eval-transcript-analysis`) — per
+  guardrail #9 (session discipline: one core unit at a time), this is a
+  deliberate pause point, not an interruption.
