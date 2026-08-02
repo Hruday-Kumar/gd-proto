@@ -7,6 +7,7 @@ import {
   generateFeedback,
   generateTranscriptAnalysis,
   generateCriterionEvaluation,
+  generateEvaluationFeedback,
   DEFAULT_GEMINI_MODEL,
   DEFAULT_EVAL_TEMPERATURE,
 } from '../src/llm/geminiClient.js';
@@ -323,5 +324,73 @@ describe('generateCriterionEvaluation', () => {
   it('throws a descriptive error when the API responds with a non-OK status', async () => {
     const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => 'server error' });
     await expect(generateCriterionEvaluation(prompt, parseContext, { apiKey: 'test-key', fetchImpl })).rejects.toThrow(/500/);
+  });
+});
+
+// SPEC-0011 state 7: the last stage in the pipeline, one call per
+// participant, from the already-validated scorecard + this participant's
+// own evidence -- same raw generate(prompt, parseContext) shape as
+// generateCriterionEvaluation, parseContext here is just the ordered
+// dimension label list this call's prompt offered.
+describe('generateEvaluationFeedback', () => {
+  const prompt = "Write feedback for Asha. Her scores are final, do not restate them differently...";
+  const parseContext = { dimensionLabels: ['Content depth', 'Clarity', 'Confidence', 'Listening', 'Fluency'] };
+
+  function fakeEvaluationFeedbackJsonResponse() {
+    return JSON.stringify({
+      summary: 'A constructive summary.',
+      dimension_notes: parseContext.dimensionLabels.map((label) => ({ label, note: `Note about ${label}.` })),
+      strengths: ['Clear opening.'],
+      improvements: ['Invite others in more.'],
+    });
+  }
+
+  it('throws when no API key is configured', async () => {
+    await expect(
+      generateEvaluationFeedback(prompt, parseContext, { apiKey: undefined, fetchImpl: fakeFetchOk('x') })
+    ).rejects.toThrow(/GEMINI_API_KEY/);
+  });
+
+  it('calls the configured model endpoint and returns the parsed feedback text', async () => {
+    const fetchImpl = fakeFetchOk(fakeEvaluationFeedbackJsonResponse());
+    const result = await generateEvaluationFeedback(prompt, parseContext, { apiKey: 'test-key', fetchImpl });
+    expect(result.summary).toBe('A constructive summary.');
+    expect(result.dimensionNotes).toHaveLength(5);
+    const [url, options] = fetchImpl.mock.calls[0];
+    expect(url).toContain(DEFAULT_GEMINI_MODEL);
+    expect(JSON.parse(options.body).contents[0].parts[0].text).toBe(prompt);
+  });
+
+  it('requests Gemini JSON mode with the evaluation feedback response schema, which has no score field', async () => {
+    const fetchImpl = fakeFetchOk(fakeEvaluationFeedbackJsonResponse());
+    await generateEvaluationFeedback(prompt, parseContext, { apiKey: 'test-key', fetchImpl });
+    const [, options] = fetchImpl.mock.calls[0];
+    const body = JSON.parse(options.body);
+    expect(body.generationConfig.responseMimeType).toBe('application/json');
+    expect(body.generationConfig.responseSchema.required).toEqual(
+      expect.arrayContaining(['summary', 'dimension_notes', 'strengths', 'improvements'])
+    );
+    expect(JSON.stringify(body.generationConfig.responseSchema).toLowerCase()).not.toMatch(/score/);
+  });
+
+  it('pins a low, fixed temperature, same as the other evaluation-stage calls', async () => {
+    const fetchImpl = fakeFetchOk(fakeEvaluationFeedbackJsonResponse());
+    await generateEvaluationFeedback(prompt, parseContext, { apiKey: 'test-key', fetchImpl });
+    const [, options] = fetchImpl.mock.calls[0];
+    expect(JSON.parse(options.body).generationConfig.temperature).toBe(DEFAULT_EVAL_TEMPERATURE);
+  });
+
+  it('rejects a response whose dimension_notes labels do not match this call\'s parseContext order', async () => {
+    const badJson = JSON.parse(fakeEvaluationFeedbackJsonResponse());
+    badJson.dimension_notes[0].label = 'Made up dimension';
+    const fetchImpl = fakeFetchOk(JSON.stringify(badJson));
+    await expect(generateEvaluationFeedback(prompt, parseContext, { apiKey: 'test-key', fetchImpl })).rejects.toThrow(
+      /unexpected label/i
+    );
+  });
+
+  it('throws a descriptive error when the API responds with a non-OK status', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => 'server error' });
+    await expect(generateEvaluationFeedback(prompt, parseContext, { apiKey: 'test-key', fetchImpl })).rejects.toThrow(/500/);
   });
 });

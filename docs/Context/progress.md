@@ -18,7 +18,7 @@ Verified / Done.
 | 4 | `feat/eval-score-aggregation` | Implemented — PR not yet opened | 2026-08-03 | `domain/scoreAggregator.js`: `aggregateDimensionScore` (weighted average of subdimension marks, excluding not_observed/insufficient_context, renormalizing remaining weights, null if all excluded), `aggregateOverallScore` (equal-weighted average across the five dimensions, same null-exclusion rule), `aggregateScorecard` (composes both per participant across all five criterion-evaluator results into `{participantUserId, dimensions: [{label, score}], overallScore}`). Branched off state 3's tip (stacked). |
 | 5 | `feat/eval-validation-layer` | Implemented — PR not yet opened | 2026-08-03 | `domain/validationLayer.js`: `validateWeightTotal`/`validateScoreRange` (deterministic, always) + `evaluateCriterionWithValidation` (bounded max-2 same-criterion retry around a flagged/parse-failing criterion evaluator response, returns a flagged issue instead of throwing once exhausted). Branched off state 4's tip (stacked). Also merged into new consolidated `phase-2` branch per user instruction — every state branch is merged into `phase-2` as it lands, kept in sync going forward. |
 | 6 | `feat/eval-confidence-score` | Implemented — PR not yet opened | 2026-08-03 | `domain/confidenceCalculator.js`: `computeTranscriptIntegrityComponent`/`computeSpeakerAttributionComponent` (from state 2's `verifyEvidenceLedger` verified/rejected counts, rejection reasons bucketed via `bucketEvidenceRejections`), `computeEvidenceSufficiencyComponent` (per participant, fraction of subdimension levels that are evidence-backed rather than not_observed/insufficient_context), `computeValidationSuccessComponent` (from state 5's `evaluateCriterionWithValidation` valid/retryCount outcomes, reusing its exported `DEFAULT_MAX_RETRIES`), `aggregateConfidence` (equal-weighted average of the four, rounded to an integer), `computeConfidenceForRun` (composes all of the above into one `{participantUserId, confidence, components}` entry per participant, same participant-extraction/dimension-coverage-check pattern as state 4's `aggregateScorecard`). Branched off state 5's tip (stacked). Persistence to `evaluation_confidence` deferred to state 7's `feedbackWorker.js` wiring, same scope pattern as states 2-5. |
-| 7 | `feat/eval-feedback-decoupled` | Not started | — | Cutover point: feedback generation reads validated scorecard/evidence; `feedback` row shape unchanged; requires guardrail #1 human verification before merge to `main`. |
+| 7 | `feat/eval-feedback-decoupled` | Implemented — human verification pending (guardrail #1) | 2026-08-03 | Full pipeline wired end to end in `agent/feedbackWorker.js`; `feedback` row shape confirmed unchanged by test. New: `domain/evaluationFeedbackPrompt.js`, `domain/evaluationPipeline.js`, `db/evaluationRuns.js`/`evaluationEvidence.js`/`evaluationCriterionResults.js`/`evaluationConfidence.js`, `llm/geminiClient.generateEvaluationFeedback`. 567/567 tests passing. **Not yet done: migration 0019 applied live, a real Gemini-key run, and guardrail #1 human verification** -- see SPEC-0011 AC7 for the full list; none of these are satisfied by automated tests alone, per guardrail #1. |
 | 8 | `test/eval-golden-suite` | Not started | — | Fixture transcripts + determinism/metamorphic/evidence tests in `npm test`. |
 | 9 | `chore/eval-cutover-cleanup` | Not started | — | Remove old single-shot scoring path, update docs, final human-verification checklist. |
 
@@ -246,11 +246,77 @@ Verified / Done.
   did for its own deferred piece, that literal persistence to
   `evaluation_confidence` is state 7's concern, not this state's). Merged
   into `phase-2` and pushed, per the state-5-established convention.
-- Next: state 7 (`feat/eval-feedback-decoupled`) — the cutover point:
-  rewire `feedbackWorker.js` to the new pipeline end to end (Transcript
-  Analysis -> evidence verification -> criterion evaluation -> validation
-  -> score aggregation -> confidence -> feedback generation), persist to
-  `evaluation_runs`/`evaluation_evidence`/`evaluation_criterion_results`/
-  `evaluation_confidence`, retire the old single-shot prompt path, and
-  verify the `feedback` table/API contract stays byte-for-byte unchanged --
-  requires guardrail #1 human verification before merge to `main` per AC7.
+- **2026-08-03 (state 7 implemented, human verification still pending):**
+  Fast-forwarded `feat/eval-feedback-decoupled` onto `feat/eval-confidence-score`'s
+  tip (stacked, same lineage as states 1-6). This is the cutover state:
+  built the missing R7 piece (Feedback Generation stage --
+  `domain/evaluationFeedbackPrompt.js`: response schema has no score field
+  anywhere, same by-construction technique `criterionEvaluationPrompt.js`
+  uses for AC4, plus the prompt explicitly tells the model its scores are
+  already final and not to be restated differently; `llm/geminiClient.generateEvaluationFeedback`,
+  same DI pattern as the other four stage calls), then wrote
+  `domain/evaluationPipeline.js` to compose every prior state into the full
+  per-room pipeline SPEC-0011's Design section describes: Transcript
+  Analysis -> `verifyEvidenceLedger` -> five Criterion Evaluators each
+  through `evaluateCriterionWithValidation`'s bounded retry -> a criterion
+  that still fails after retries falls back to `insufficient_context` on
+  every subdimension (never a fabricated level, R9 applied to a validation
+  failure, not just a genuine evidence gap) -> `aggregateScorecard` ->
+  `computeConfidenceForRun` -> per-participant Feedback Generation, with a
+  small worker pool (same shape as `feedbackGeneration.js`'s own) so one
+  participant's Feedback Generation failure can never lose another's.
+  An empty transcript or a fully-rejected evidence ledger (every extracted
+  item fabricated/malformed) both short-circuit to the exact same
+  `TRANSCRIPTION_FAILED_MESSAGE` stub `feedbackGeneration.js` already used
+  (exported `transcriptionFailedBody` for reuse instead of duplicating it)
+  -- honest per R9/guardrail #1, never judging a session with no usable
+  evidence. Added `RUBRIC_VERSION` (`evalRubric.js`) and
+  `PROMPT_BUNDLE_VERSION` (`evaluationPipeline.js`) code-versioned
+  constants, and a pure `hashTranscript` (sha256 of ordered
+  id/user/text), all three recorded on `evaluation_runs` for lineage.
+  Added four thin `db/evaluation*.js` insert wrappers (no dedicated unit
+  tests, matching this repo's existing convention -- no `db/*.test.js`
+  file exists for any table); `evaluation_criterion_results.weight_applied`
+  is left `null` since a criterion's weight is actually distributed across
+  its subdimensions, not a single per-criterion number -- flagged in that
+  file's own comment rather than fabricating a value, same spirit as state
+  4's equal-weighting note. Rewired `agent/feedbackWorker.js`'s
+  `generateAndPersistFeedbackForRoom` to call the new pipeline and persist
+  its artifacts alongside the unchanged `feedback` row (R8) -- confirmed
+  byte-for-byte by test. Old path
+  (`feedbackGeneration.js`/`feedbackPrompt.js`/`geminiClient.generateFeedback`)
+  deliberately untouched and no longer called, per the Rollback section's
+  "single-file revert" contract; full deletion stays state 9's job.
+  **Caught and fixed one real robustness gap before calling this done:**
+  the initial version opened the `evaluation_runs` row outside any
+  try/catch, so migration 0019 not yet being applied to the live Supabase
+  project (AC1's own still-pending note) would throw on literally every
+  room, permanently exhausting `roomSweeper.js`'s
+  `FEEDBACK_RETRY_MAX_ATTEMPTS` before a single student ever got feedback
+  -- a regression the old pipeline never had. Fixed: opening the run is now
+  its own try/catch, failure just means `runId` stays `null` (skip
+  persisting artifacts, log it), feedback generation proceeds unaffected;
+  added a regression test for exactly this. 57 new tests across
+  `evaluationFeedbackPrompt.test.js`, `evaluationPipeline.test.js`,
+  `geminiClient.test.js`'s new `generateEvaluationFeedback` block, and a
+  fully rewritten `feedbackWorker.test.js` (12 cases, including the new
+  evaluation-run persistence/failure paths). Full suite: `npm test
+  --workspace=@placeme/server` 567/567 passing (same 4 pre-existing
+  Node-version-gated RLS test files as states 1-6, confirmed unrelated).
+  `npm run lint`: no new warnings. Checked off the state-7 task row in
+  SPEC-0011, but **deliberately left AC7 itself unchecked** -- unlike
+  AC1-AC6, AC7's own text requires guardrail #1 real-human verification,
+  which automated tests cannot satisfy; also still pending: applying
+  migration 0019 to the live Supabase project, and a real run against a
+  live Gemini key (this session used only injected fakes, same as every
+  prior state, but state 7 is the first one where that gap actually
+  matters -- states 1-6 never touched the DB or a real model at all).
+  Merged into `phase-2` and pushed, per the state-5-established
+  convention -- `phase-2` is a working-integration branch, not `main`;
+  guardrail #12/CLAUDE.md's `main` merge is separately gated on AC7.
+- Next: state 8 (`test/eval-golden-suite`) — fixture transcripts +
+  determinism/metamorphic (participant rename)/evidence-integrity tests in
+  `npm test`. Note this does not itself satisfy AC7's human-verification
+  gate; that remains open in parallel and must be resolved (migration
+  applied, live-key run, real-human check) before any `dev` -> `main`
+  release PR that includes state 7.

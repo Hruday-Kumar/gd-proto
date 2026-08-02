@@ -20,6 +20,14 @@
 // module only ever describes the rubric, never computes with it.
 import { FEEDBACK_DIMENSION_LABELS } from './feedbackPrompt.js';
 
+// SPEC-0011 state 7 (feat/eval-feedback-decoupled): the rubric is versioned
+// as code, not a runtime registry (this module's own header comment) --
+// `evaluation_runs.rubric_version` records which version of this file
+// produced a given run, so a later rubric edit doesn't silently change how
+// an old run is interpreted. Bump this string whenever a dimension's
+// subdimensions, weights, or anchor text materially change.
+export const RUBRIC_VERSION = '2026-08-03';
+
 // R3/R4: the only levels a criterion evaluator may ever assign. No numeric
 // score is ever a valid level -- that is what schema validation in
 // criterionEvaluationPrompt.js rejects an invented level for.

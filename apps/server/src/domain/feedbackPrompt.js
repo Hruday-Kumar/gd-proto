@@ -22,7 +22,9 @@
 // handle an unknown label because this list is exhaustive.
 export const FEEDBACK_DIMENSION_LABELS = ['Content depth', 'Clarity', 'Confidence', 'Listening', 'Fluency'];
 
-const MAX_LIST_ITEMS = 6;
+// Exported so other stages (state 7's evaluation feedback generation) can
+// reuse the same list-length bound instead of duplicating the number.
+export const MAX_LIST_ITEMS = 6;
 
 export const FEEDBACK_RESPONSE_SCHEMA = {
   type: 'OBJECT',

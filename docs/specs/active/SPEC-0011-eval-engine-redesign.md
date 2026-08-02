@@ -333,6 +333,34 @@ the state-1 migration.
       routes are byte-for-byte compatible in shape with today; real-human
       verification (guardrail #1) confirms feedback still reads as useful
       and non-discouraging.
+      **Code/tests done, guardrail #1 human verification NOT done --
+      deliberately left unchecked per guardrail #1 ("never mark
+      room/audio/transcription/attribution/feedback done on automated
+      tests alone"), unlike AC1-AC6 which had no such requirement in their
+      own text.** `domain/evaluationFeedbackPrompt.js` (Feedback Generation
+      stage: schema has no score field, same by-construction technique as
+      criterionEvaluationPrompt.js) + `llm/geminiClient.generateEvaluationFeedback`
+      + `domain/evaluationPipeline.js` (composes states 2/3/4/5/6/7 into the
+      full per-room pipeline, commit pending) + four new `db/evaluation*.js`
+      modules + `agent/feedbackWorker.js` rewired to call the new pipeline
+      and persist `evaluation_runs`/`evaluation_evidence`/
+      `evaluation_criterion_results`/`evaluation_confidence` alongside the
+      unchanged `feedback` row. 57 new tests (evaluationFeedbackPrompt,
+      evaluationPipeline, geminiClient, feedbackWorker combined); full
+      suite 567/567 passing. `feedback` row shape confirmed unchanged by
+      test (`{summary, score, dimensions: [{label, score, note}], strengths,
+      improvements}` -- identical fields, values now deterministically
+      computed instead of invented). Old path
+      (`domain/feedbackGeneration.js`/`feedbackPrompt.js`/
+      `geminiClient.generateFeedback`) deliberately left intact and
+      untouched, no longer called from `feedbackWorker.js` -- Rollback
+      section's "single-file revert" contract. **Still required before this
+      can be considered done or merged to `main`:** (1) migration 0019
+      applied to the live Supabase project (AC1's own still-pending item --
+      this is the first state that actually writes to those tables); (2) a
+      real room run through the full pipeline against a live Gemini key;
+      (3) guardrail #1 real-human verification that feedback still reads as
+      useful, attributed correctly, and non-discouraging.
 - [ ] **AC8 (state 8):** A golden fixture suite runs determinism,
       metamorphic (participant rename), and evidence-integrity tests in
       `npm test`.
@@ -353,9 +381,11 @@ the state-1 migration.
       targeted LLM retry.
 - [x] `feat/eval-confidence-score` — confidence calculator (pure
       functions).
-- [ ] `feat/eval-feedback-decoupled` — rewire `feedbackWorker.js` to the
+- [x] `feat/eval-feedback-decoupled` — rewire `feedbackWorker.js` to the
       new pipeline; retire the old single-shot prompt; verify contract
-      unchanged.
+      unchanged. ("Retire" = no longer called from the active path, not
+      deleted -- Rollback section reserves deletion for state 9.) Human
+      verification (AC7) still pending before merge to `main`.
 - [ ] `test/eval-golden-suite` — fixture transcripts + determinism /
       metamorphic / evidence tests.
 - [ ] `chore/eval-cutover-cleanup` — remove dead code, update docs, human

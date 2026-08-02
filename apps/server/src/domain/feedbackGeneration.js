@@ -25,7 +25,10 @@ export const TRANSCRIPTION_FAILED_MESSAGE =
 // were a real (and very low) performance score. Guardrail #1 already
 // required this path never judge a session it has no evidence for; the
 // same reasoning now covers the numeric fields too.
-function transcriptionFailedBody() {
+// Exported so other stages (state 7's evaluationPipeline.js) can reuse this
+// exact shape/message for their own "we have no usable evidence, and it's
+// not the student's fault" short-circuit, instead of duplicating it.
+export function transcriptionFailedBody() {
   return { summary: TRANSCRIPTION_FAILED_MESSAGE, score: null, dimensions: [], strengths: [], improvements: [] };
 }
 

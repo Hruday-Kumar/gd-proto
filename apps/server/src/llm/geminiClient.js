@@ -17,6 +17,10 @@ import {
   parseCriterionEvaluationResponse,
   CRITERION_EVALUATION_RESPONSE_SCHEMA,
 } from '../domain/criterionEvaluationPrompt.js';
+import {
+  parseEvaluationFeedbackResponse,
+  EVALUATION_FEEDBACK_RESPONSE_SCHEMA,
+} from '../domain/evaluationFeedbackPrompt.js';
 import { withRetry } from '../domain/retry.js';
 
 export const DEFAULT_GEMINI_MODEL = 'gemini-3.6-flash';
@@ -207,4 +211,34 @@ export async function generateCriterionEvaluation(
     shouldRetry: isRetryableGeminiError,
   });
   return parseCriterionEvaluationResponse(body, parseContext);
+}
+
+// SPEC-0011 state 7: the Feedback Generation stage's Gemini call -- one per
+// participant, sent last, after the scorecard and confidence are already
+// final. Same `(prompt, parseContext)` shape as generateCriterionEvaluation
+// (parseContext here is just the ordered dimension label list this call's
+// prompt offered, for parseEvaluationFeedbackResponse's order check).
+export async function generateEvaluationFeedback(
+  prompt,
+  parseContext,
+  {
+    apiKey = process.env.GEMINI_API_KEY,
+    model = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL,
+    fetchImpl = fetch,
+    timeoutMs = DEFAULT_GEMINI_TIMEOUT_MS,
+    retryAttempts = DEFAULT_GEMINI_RETRY_ATTEMPTS,
+    retryDelayMs = DEFAULT_GEMINI_RETRY_DELAY_MS,
+  } = {}
+) {
+  const generationConfig = {
+    responseMimeType: 'application/json',
+    responseSchema: EVALUATION_FEEDBACK_RESPONSE_SCHEMA,
+    temperature: DEFAULT_EVAL_TEMPERATURE,
+  };
+  const body = await withRetry(() => callGemini(prompt, { apiKey, model, fetchImpl, timeoutMs, generationConfig }), {
+    attempts: retryAttempts,
+    delayMs: retryDelayMs,
+    shouldRetry: isRetryableGeminiError,
+  });
+  return parseEvaluationFeedbackResponse(body, parseContext);
 }
