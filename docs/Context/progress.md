@@ -423,3 +423,56 @@ Verified / Done.
   no behavior change, so guardrail #1's human-verification gate is
   unaffected and remains open from state 7 exactly as before. Next: state 9
   (`chore/eval-cutover-cleanup`).
+
+- **2026-08-03 (state 9, `chore/eval-cutover-cleanup`) — partial, by
+  direct user decision.** Per direct user instruction, asked to complete
+  both remaining SPEC-0011 states in this session; hit a real gate on
+  state 9's own scope before writing any code: AC9 (retiring the old
+  single-shot scoring path) means actually *deleting*
+  `feedbackGeneration.js`/`feedbackPrompt.js`'s scoring instructions/
+  `geminiClient.generateFeedback`, and the spec's own Rollback section
+  makes that deletion conditional on AC7's human verification already
+  having passed -- which it hasn't (migration `0019` not yet confirmed
+  live, no run against a live Gemini key, no real human has read real
+  generated feedback yet). Flagged this conflict directly rather than
+  guessing; **user chose: hold the actual deletion, do the rest of state 9
+  now.**
+
+  **Done this session:** a new, concrete "AC7 Human Verification
+  Checklist" section in `SPEC-0011-eval-engine-redesign.md` -- three
+  specific, human-only steps (apply migration `0019` live; run one real
+  room through the pipeline against a live Gemini key; a real human reads
+  every participant's actual generated feedback for correct attribution
+  and non-discouraging tone) that must all be completed and recorded
+  there before AC7 can be checked and AC9's deletion can proceed. Also
+  confirmed by grep that no OTHER dead code exists outside the
+  deliberately-kept old path -- every remaining non-test reference to
+  `feedbackGeneration.js`/`feedbackPrompt.js` is either `feedbackWorker.js`'s
+  own rollback-path documentation, its two genuinely-reused exports
+  (`transcriptionFailedBody`, `DEFAULT_FEEDBACK_CONCURRENCY`), or shared
+  constants (`FEEDBACK_DIMENSION_LABELS`, `MAX_LIST_ITEMS`) the new
+  pipeline intentionally imports rather than duplicating --
+  `generateFeedbackForRoom`/`geminiClient.generateFeedback` themselves are
+  confirmed called from nowhere in the active path, same as state 7
+  already established.
+
+  **Explicitly NOT done, on purpose:** the old path is not deleted, AC9
+  and its own task-list checkbox stay unchecked, and this spec is not
+  marked done -- all three are the remaining scope of this same
+  `chore/eval-cutover-cleanup` branch, picked back up once a human
+  actually completes the new checklist above.
+
+  **No production code or tests changed this entry** -- docs only
+  (`SPEC-0011-eval-engine-redesign.md` + this file). Full suite not
+  re-run for this reason (nothing it could regress).
+
+  **Residual/open:**
+  - The AC7 Human Verification Checklist itself is the single remaining
+    blocker for closing out SPEC-0011 entirely -- needs a human with live
+    Supabase + Gemini access, not something a future agent session can
+    complete alone.
+  - Once that checklist is done: come back to `chore/eval-cutover-cleanup`,
+    delete the old path, check AC7/AC9, update this spec's own `Status`
+    header from Draft, and move it from `docs/specs/active/` to
+    `docs/specs/completed/` per `ENGINEERING.md`'s specification
+    lifecycle.

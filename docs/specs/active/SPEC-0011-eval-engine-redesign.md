@@ -446,6 +446,64 @@ below.
 - [ ] **AC9 (state 9):** Old single-shot per-student scoring path
       (`feedbackPrompt.js`'s scoring instructions) is retired; docs/specs
       updated; no dead code remains.
+      **Deliberately still unchecked and blocked, not silently
+      incomplete** — this AC's own Rollback section makes its deletion
+      step conditional on AC7's human verification already having
+      passed, and that verification has not happened yet (see the AC7
+      Human Verification Checklist below). Confirmed directly with the
+      user (2026-08-03): hold the actual deletion until that checklist is
+      complete, rather than delete now or silently skip this AC. Verified
+      there is no OTHER dead code to remove in the meantime — every
+      remaining reference to `feedbackGeneration.js`/`feedbackPrompt.js`
+      from non-test code is either (a) `feedbackWorker.js`'s own comments
+      documenting the still-intact rollback path, (b) its two genuinely
+      still-used imports (`transcriptionFailedBody`,
+      `DEFAULT_FEEDBACK_CONCURRENCY`, reused by
+      `domain/evaluationPipeline.js` rather than duplicated), or (c)
+      `FEEDBACK_DIMENSION_LABELS`/`MAX_LIST_ITEMS` — shared constants the
+      new pipeline intentionally imports from `feedbackPrompt.js` rather
+      than forking a second copy. `generateFeedbackForRoom`/
+      `geminiClient.generateFeedback` themselves are confirmed called from
+      nowhere in the active path (grepped `apps/server/src`), exactly as
+      state 7 already documented — nothing further to clean up until the
+      files themselves are deleted.
+
+## AC7 Human Verification Checklist
+
+Concrete, actionable steps to close AC7's still-open guardrail #1 gate —
+until all three are done and recorded here, AC7 stays unchecked and AC9's
+deletion step stays blocked per its own Rollback section. None of these are
+satisfiable by an agent alone; each needs a real human with access to the
+live Supabase project and a live Gemini key.
+
+1. **Apply migration `0019_evaluation_pipeline_tables.sql`** to the live
+   Supabase project (manual SQL Editor step, same process as every other
+   migration in this repo) and confirm the five new tables
+   (`evaluation_runs`, `evaluation_evidence`, `evaluation_criterion_results`,
+   `evaluation_validation_issues`, `evaluation_confidence`) exist with the
+   expected columns.
+2. **Run one real room end-to-end** through the new pipeline against a
+   live Gemini key (not an injected stub) — a real or realistic multi
+   -participant GD session, through to `feedback` rows actually being
+   persisted for every participant. Confirm `evaluation_runs.status`
+   reaches `completed` (not `failed`) and capture the real Gemini
+   token-usage numbers to replace this spec's modeled cost estimate
+   (Risks section) with a measured one.
+3. **A real human reads the actual generated feedback** for every
+   participant in that room, including whichever participant scored
+   lowest, and confirms directly:
+   - scores are correctly attributed to the right person (no cross
+     -participant mixups);
+   - a low score still reads as specific and actionable, never harsh or
+     discouraging (guardrail #1's own standard);
+   - the summary/strengths/improvements text is coherent and genuinely
+     useful, not just schema-valid.
+
+Record the outcome of all three directly in this section (date, verifier,
+what was observed) once done, then check AC7 and proceed with AC9's
+deletion in a follow-up commit on `chore/eval-cutover-cleanup`.
+
+**Status: not yet started.**
 
 ## Implementation Tasks (state = branch, in order)
 
@@ -469,6 +527,15 @@ below.
       metamorphic / evidence tests.
 - [ ] `chore/eval-cutover-cleanup` — remove dead code, update docs, human
       verification checklist, mark this spec done.
+      **Partially done (2026-08-03): the human-verification checklist
+      (see the new AC7 Human Verification Checklist section above) and
+      docs are done; confirmed no dead code exists outside the
+      deliberately-still-present old path. Dead-code removal (deleting
+      `feedbackGeneration.js`/`feedbackPrompt.js`'s scoring
+      instructions/`geminiClient.generateFeedback`) and marking this spec
+      done are both deliberately deferred, per direct user instruction, to
+      a follow-up commit on this same branch once the checklist above is
+      actually completed by a human.**
 
 Each branch: rebased onto latest `dev` before starting, PR'd individually,
 `pr-review` skill run before merge, per `BRANCHING.md`. Progress tracked in
