@@ -314,6 +314,41 @@ Verified / Done.
   Merged into `phase-2` and pushed, per the state-5-established
   convention -- `phase-2` is a working-integration branch, not `main`;
   guardrail #12/CLAUDE.md's `main` merge is separately gated on AC7.
+- **2026-08-03 (same day, self-review before continuing further):** User
+  asked directly whether states 1-7 actually work well -- honest answer
+  given: code health is good (tests, structure, TDD discipline) but real
+  -world validation is zero, and two concrete issues were found on
+  re-reading state 7's own code rather than just trusting green tests.
+  Fixed both, still on `feat/eval-feedback-decoupled` before its prior
+  merge into `phase-2` was built further on: (1) the five criterion
+  -evaluator calls ran sequentially (a real latency risk against the ~2
+  minute lobby-poll budget `feedbackGeneration.js` already documents) --
+  parallelized via `Promise.all` in `evaluationPipeline.js`'s
+  `runCriterionEvaluators`, added a regression test asserting
+  `maxConcurrentCalls > 1`; (2) the Feedback Generation prompt
+  (`evaluationFeedbackPrompt.js`) claimed all evidence shown was the
+  target's "own contributions," but `evidenceFor()` also includes evidence
+  merely connecting them to another participant (needed for
+  Listening/turn-taking notes) -- reworded to be accurate rather than
+  misleading the model about whose words it's looking at. Also did the
+  Gemini cost measurement the spec's own Risks table asked for "before
+  merging state 7" and this session had missed: verified
+  `gemini-3.6-flash` pricing live against `ai.google.dev/gemini-api/docs/pricing`
+  ($1.50/M input, $7.50/M output -- not recalled from training data),
+  modeled token counts for a 6-participant ~18-minute room, got ≈$0.10/room
+  for the new pipeline vs ≈$0.055/room for the old one (~1.9x, in line with
+  the spec's original qualitative estimate) -- at pilot volume this
+  approaches the full <$100/month infra ceiling somewhere between 500 and
+  1,000 rooms/month, before other hosting costs. Recorded both the fixes
+  and the cost model in SPEC-0011 (Risks section + AC7's own note). Full
+  suite re-run after the fixes: 568/568 passing (one single-run flake seen
+  once during this pass, gone on three clean re-runs of the touched files
+  -- attributed to a pre-existing real-timer retry-delay test under system
+  load, not these changes). `npm run lint`: no new warnings. Committed on
+  `feat/eval-feedback-decoupled`, fast-forwarded into `phase-2`, pushed
+  both. AC7's status is unchanged by this entry -- still unchecked,
+  human verification/live migration/live-key run are still the open items,
+  this was a code-quality pass on top of the same unverified state.
 - Next: state 8 (`test/eval-golden-suite`) — fixture transcripts +
   determinism/metamorphic (participant rename)/evidence-integrity tests in
   `npm test`. Note this does not itself satisfy AC7's human-verification

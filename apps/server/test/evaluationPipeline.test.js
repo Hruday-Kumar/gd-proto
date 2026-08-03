@@ -209,6 +209,34 @@ describe('runEvaluationPipeline', () => {
     expect(bilal.error).toMatch(/quota exceeded/);
   });
 
+  // Regression: the five criterion-evaluator calls used to run in a
+  // sequential for-loop, stacking all five dimensions' latency onto every
+  // room -- a real risk against the ~2 minute lobby-poll budget
+  // feedbackGeneration.js's own comment already documents. They are
+  // independent (same evidence, no shared state), so they must overlap.
+  it('runs the five criterion-evaluator calls concurrently, not one after another', async () => {
+    let concurrentCalls = 0;
+    let maxConcurrentCalls = 0;
+    const generateCriterionEvaluationFn = async (_prompt, parseContext) => {
+      concurrentCalls += 1;
+      maxConcurrentCalls = Math.max(maxConcurrentCalls, concurrentCalls);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      concurrentCalls -= 1;
+      return demonstratedResultFor(parseContext);
+    };
+
+    await runEvaluationPipeline(
+      { topic: 'Remote work', transcriptLines, participants },
+      {
+        generateTranscriptAnalysisFn: async () => cleanAnalysisResult(),
+        generateCriterionEvaluationFn,
+        generateEvaluationFeedbackFn: cleanEvaluationFeedbackFn(),
+      }
+    );
+
+    expect(maxConcurrentCalls).toBeGreaterThan(1);
+  });
+
   it('never fabricates a score for a dimension whose criterion evaluator exhausts its validation retries -- falls back to insufficient_context, not a numeric guess', async () => {
     const outcome = await runEvaluationPipeline(
       { topic: 'Remote work', transcriptLines, participants },

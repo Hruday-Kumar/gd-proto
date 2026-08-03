@@ -278,11 +278,49 @@ the state-1 migration.
 
 | Risk | Likelihood/impact | Mitigation | Owner |
 |---|---|---|---|
-| More Gemini calls per room (≈1 + 5 + N vs today's N) raises latency/cost | Medium/Medium | Gemini Flash is cheap; reuse existing concurrency limiter; measure against the <$100/mo budget before merging state 7 | This session |
+| More Gemini calls per room (≈1 + 5 + N vs today's N) raises latency/cost | Medium/Medium | Measured post-state-7 (2026-08-03), see note below: ≈$0.10/room modeled vs ≈$0.055/room old, ~1.9x. Criterion evaluators parallelized (state 7 fix) to bound latency; cost is the residual risk at real volume. | This session |
 | New pipeline stalls mid-way (partial `evaluation_runs` row) | Low/Medium | `status` state machine + existing `roomSweeper`/retry-tracking pattern (`rooms.feedback_attempts`) reused, not reinvented | This session |
 | Rubric subdimension design is itself subjective | Medium/Medium | Anchors documented explicitly in code + spec, reviewed like any PR; golden set catches drift | This session + reviewer |
 | Scope creep back toward the full enterprise doc | Low/High | This spec's Non Goals list is explicit; guardrail #2 applies to every state | This session |
 | Existing frontend/API breaks | Low/High | `feedback` table/route contract is explicitly unchanged (R8); state 7 verified against existing `place-me-UI` before merge | This session |
+
+### Gemini cost estimate (2026-08-03, post-state-7)
+
+Pricing verified live against `ai.google.dev/gemini-api/docs/pricing` (not
+training-data recall, per guardrail #6's spirit): `gemini-3.6-flash` is
+**$1.50 / million input tokens, $7.50 / million output tokens** (cached
+input $0.15/M). Free-tier RPM/RPD limits are account/region-specific and
+not published as a fixed number by Google itself (shown only in each
+project's AI Studio console) -- moot in practice anyway, since even the
+*old* pipeline's call volume would strain a free tier's low RPM the moment
+two rooms end in the same minute (a routine event at 5-10 concurrent
+rooms), so a paid tier is assumed regardless of this pipeline.
+
+Modeled (not measured -- no real transcript or live key used yet) for one
+ended room at `DEFAULT_MAX_ROOM_PARTICIPANTS` (6) and a ~18-minute
+discussion (~3,000-token raw transcript):
+
+| | Calls/room | Input tok | Output tok | Cost/room |
+|---|---|---|---|---|
+| Old (single-shot) | 6 | ~23,400 | ~2,700 | ~$0.055 |
+| New (this pipeline) | 1 + 5 + 6 = 12 | ~22,900 | ~9,200 | ~$0.103 |
+
+**≈1.9x the old per-room Gemini cost** -- close to the spec's own original
+"≈1+5+N vs N" estimate, now with real pricing behind it. At monthly volume:
+100 rooms/mo ≈ $10.33, 500 rooms/mo ≈ $51.67, 1,000 rooms/mo ≈ $103.35 --
+i.e. Gemini spend alone approaches the full <$100/month infrastructure
+ceiling (CLAUDE.md) somewhere between 500 and 1,000 rooms/month, *before*
+Render/Supabase/LiveKit/AssemblyAI hosting costs are added on top of it.
+Not counted here: validation retries (state 5, up to 2 extra criterion
+-evaluator calls when a dimension is flagged) or Gemini's own 429/5xx retry
+(`geminiClient.js`, up to 3 attempts) -- both add cost only in the
+already-uncommon case of a malformed or transiently-failed response, so
+the table above is a typical-case estimate, not a worst case.
+
+**This is a token-count model, not a measurement** -- replace it with real
+numbers (Gemini responses include token-usage metadata) the first time this
+runs against a live key, per the still-open AC7 human-verification gate
+below.
 
 ## Acceptance Criteria
 
@@ -354,8 +392,18 @@ the state-1 migration.
       (`domain/feedbackGeneration.js`/`feedbackPrompt.js`/
       `geminiClient.generateFeedback`) deliberately left intact and
       untouched, no longer called from `feedbackWorker.js` -- Rollback
-      section's "single-file revert" contract. **Still required before this
-      can be considered done or merged to `main`:** (1) migration 0019
+      section's "single-file revert" contract. **Post-review fixes
+      (2026-08-03, same day, before any of this was merged further):**
+      the five criterion-evaluator calls ran sequentially in the first cut
+      (a real latency risk against the ~2 minute lobby-poll budget) --
+      parallelized via `Promise.all`, with a regression test proving
+      concurrency; the Feedback Generation prompt's evidence section
+      claimed all evidence was the target's "own contributions" when it
+      can include evidence merely connecting them to another participant
+      -- reworded to be accurate. Gemini cost modeled against live-verified
+      pricing (see Risks section above): ≈$0.10/room, ~1.9x the old
+      pipeline. **Still required before this can be considered done or
+      merged to `main`:** (1) migration 0019
       applied to the live Supabase project (AC1's own still-pending item --
       this is the first state that actually writes to those tables); (2) a
       real room run through the full pipeline against a live Gemini key;

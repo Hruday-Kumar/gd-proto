@@ -67,25 +67,40 @@ function insufficientContextFallback(dimensionLabel, participants, issue) {
   };
 }
 
+// The five dimensions are fully independent of each other -- same evidence
+// in, no shared state, nothing about Clarity's call depends on Fluency's
+// result -- so they run concurrently, not one after another. This used to
+// be a sequential for-loop, which stacked all five dimensions' latency
+// (each with its own bounded validation retry) onto every single room,
+// eating into the ~2 minute lobby-poll window feedbackGeneration.js's own
+// comment already budgets for.
 async function runCriterionEvaluators({ participants, evidence, generateCriterionEvaluationFn, maxValidationRetries }) {
-  const criterionResults = [];
-  const validationResults = [];
+  const outcomes = await Promise.all(
+    FEEDBACK_DIMENSION_LABELS.map(async (dimensionLabel) => {
+      const outcome = await evaluateCriterionWithValidation({
+        dimensionLabel,
+        evidence,
+        participants,
+        generate: generateCriterionEvaluationFn,
+        ...(maxValidationRetries !== undefined ? { maxRetries: maxValidationRetries } : {}),
+      });
+      return { dimensionLabel, outcome };
+    })
+  );
 
-  for (const dimensionLabel of FEEDBACK_DIMENSION_LABELS) {
-    const outcome = await evaluateCriterionWithValidation({
-      dimensionLabel,
-      evidence,
-      participants,
-      generate: generateCriterionEvaluationFn,
-      ...(maxValidationRetries !== undefined ? { maxRetries: maxValidationRetries } : {}),
-    });
-    validationResults.push({ dimensionLabel, valid: outcome.valid, retryCount: outcome.retryCount });
-    criterionResults.push(
+  return {
+    // Promise.all preserves input order regardless of resolution order, so
+    // this still lines up with FEEDBACK_DIMENSION_LABELS exactly as the old
+    // sequential loop did.
+    criterionResults: outcomes.map(({ dimensionLabel, outcome }) =>
       outcome.valid ? outcome.result : insufficientContextFallback(dimensionLabel, participants, outcome.issue)
-    );
-  }
-
-  return { criterionResults, validationResults };
+    ),
+    validationResults: outcomes.map(({ dimensionLabel, outcome }) => ({
+      dimensionLabel,
+      valid: outcome.valid,
+      retryCount: outcome.retryCount,
+    })),
+  };
 }
 
 // This participant's own evidence, plus any evidence connecting them to

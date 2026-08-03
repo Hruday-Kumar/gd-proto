@@ -83,7 +83,15 @@ export function buildEvaluationFeedbackPrompt({
     ].join(' ')
   );
   parts.push(`Overall score: ${formatScore(overallScore)}\nPer-dimension scores:\n${dimensionLines}`);
-  parts.push(`Neutral evidence extracted from ${targetDisplayName}'s own contributions:\n${evidenceLines}`);
+  // Not all of this evidence is necessarily targetDisplayName's own quote --
+  // evaluationPipeline.js's evidenceFor() deliberately also includes items
+  // owned by another participant that this one is a relatedParticipant of
+  // (e.g. something they responded to), which a Listening/turn-taking note
+  // needs to reference. Claiming all of it is "their own contributions"
+  // would be inaccurate, so this is worded to cover both cases honestly.
+  parts.push(
+    `Neutral evidence involving ${targetDisplayName} (their own statements, plus moments connected to them, such as being responded to or building on someone else's point):\n${evidenceLines}`
+  );
   parts.push(
     `Write feedback only for ${targetDisplayName}. Do not write feedback for any other participant, and do not mention their names except as context for ${targetDisplayName}'s own contribution.`
   );
