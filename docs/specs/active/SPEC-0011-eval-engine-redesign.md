@@ -503,7 +503,85 @@ Record the outcome of all three directly in this section (date, verifier,
 what was observed) once done, then check AC7 and proceed with AC9's
 deletion in a follow-up commit on `chore/eval-cutover-cleanup`.
 
-**Status: not yet started.**
+**Status: not yet started** for the live-key/live-Supabase items above.
+The sandbox groundwork below (self-contained test table + a live-Gemini
+bias/evidence test harness) is done and gave real, though partial,
+signal — see the next section.
+
+## Sandbox Testing and Free-Tier Constraint (2026-08-03)
+
+**Constraint, stated directly by the user:** no runway at this point —
+every provider must stay on its free tier, no paid billing enabled. This
+is tighter than CLAUDE.md's already-frozen `<$100/month` ceiling; that
+figure assumed some willingness to pay, the real current constraint is
+closer to $0. Multi-vendor LLM splitting (e.g. routing some stages
+through a different provider such as OpenRouter) was considered and
+explicitly rejected: it doesn't fix the actual constraint (other
+providers' free tiers are typically just as capped, sometimes tighter),
+adds a real architecture/scope change against CLAUDE.md's fixed
+Gemini-only provider list (guardrail #2, would need its own ADR), and
+doesn't reduce hallucination risk beyond what this pipeline's existing
+schema-constrained-decoding + code-side verification design already
+provides model-agnostically (evidence is checked against the real
+transcript, no LLM output is ever trusted blindly, regardless of vendor).
+
+**A self-contained sandbox environment** was built instead, so rigorous
+bias/evidence testing could proceed against a live Gemini key without
+ever touching real student data or the production `evaluation_*`/
+`feedback`/`transcript_lines`/`rooms` tables:
+- `supabase/migrations/0020_evaluation_sandbox.sql` — a new
+  `eval_sandbox_runs` table with NO foreign key to any production table
+  (every row is synthetic test data by construction, not a real room/
+  student). Same RLS-enabled-zero-policy posture as every other
+  pipeline-internal table.
+- `apps/server/scripts/eval-sandbox.js` + `eval-sandbox-fixtures.js` — 2
+  synthetic 3-participant GD scenarios × 2 identity variants each (same
+  seats, same content, only names/genders swapped between variants,
+  including names participants use to address each other mid-sentence —
+  a real transcript-content leak vector the fully-injected
+  `evaluationGoldenSuite.test.js` unit suite can never probe, since it
+  never calls a real model). Reports a bias comparison (flags any seat
+  whose score shifts more than the spec's own 2-point bounded-variance
+  target across identity variants) and prints every evidence quote for
+  direct human review.
+
+**A real, live-quota finding surfaced immediately**: the project's
+Gemini key is on Google's free tier, capped at **20 requests/day per
+(project, model)** — confirmed directly from a real `429` response's own
+`quotaId` (`GenerateRequestsPerDayPerProjectPerModel-FreeTier`), not
+assumed. A single room's own pipeline run costs 1+5+N calls (9 for a
+3-person room); with every stage defaulting to one model, that one
+20/day bucket capped real usage at roughly **2 rooms/day, total**, for
+every stage combined — nowhere near this spec's own pilot-scale target
+(5–10 concurrent rooms) even before counting dev/test usage.
+
+**Fix, live-verified rather than assumed:** Google's quota is scoped per
+exact model string, not pooled across a project's models (confirmed via
+both the `429` response's own naming and empirical test calls against
+this project's real key — `gemini-2.5-flash`/`gemini-2.5-flash-lite` are
+both `404` "no longer available to new users," but `gemini-3.6-flash`,
+`gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`, and
+`gemini-3-flash-preview` are all live and callable on this key).
+`agent/feedbackWorker.js` now defaults each of the pipeline's three
+stages to its own distinct model instead of one shared model —
+`DEFAULT_TRANSCRIPT_ANALYSIS_MODEL` (`gemini-3.5-flash-lite`),
+`DEFAULT_CRITERION_EVALUATION_MODEL` (`gemini-3.6-flash`, unchanged —
+the actual scoring engine keeps today's flagship, since that stage's
+judgment quality matters most), `DEFAULT_FEEDBACK_MODEL`
+(`gemini-3.1-flash-lite`) — each independently overridable via
+`GEMINI_MODEL_TRANSCRIPT_ANALYSIS`/`GEMINI_MODEL_CRITERION_EVALUATION`/
+`GEMINI_MODEL_FEEDBACK`, falling back to the existing shared
+`GEMINI_MODEL` env var, then to these defaults. `evaluation_runs.model`
+and `feedback.model` now record all three as one composite string
+(`transcript:…,criterion:…,feedback:…`) rather than a single value,
+since no single model name is a complete answer to "what generated this
+row" anymore. This is still a mitigation, not a full fix — the true
+per-room ceiling is now bound by whichever stage's own (calls-per-room /
+20-per-day) ratio is tightest (Criterion Evaluation's 5 calls/room, ≈4
+rooms/day on its own bucket) rather than the old combined bottleneck
+(≈2 rooms/day) — a real, meaningful, zero-cost improvement, but pilot
+scale (5–10 *concurrent* rooms) still genuinely needs a paid tier, which
+remains blocked on runway, not on anything this session could fix.
 
 ## Implementation Tasks (state = branch, in order)
 

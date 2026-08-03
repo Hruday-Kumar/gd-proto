@@ -7,8 +7,35 @@
 // `feedback` row shape as before (R8) -- all dependencies injected, no
 // live DB or Gemini key needed, same DI-everything convention every prior
 // SPEC-0011 state already established.
-import { describe, it, expect, vi } from 'vitest';
-import { generateAndPersistFeedbackForRoom } from '../src/agent/feedbackWorker.js';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+
+// Free-tier survival (2026-08-03): generateAndPersistFeedbackForRoom now
+// defaults each of its three Gemini calls to its OWN stage-specific model
+// (see feedbackWorker.js's own comment) instead of one shared model, so
+// each stage lands in its own separate Google free-tier quota bucket
+// rather than all three competing for one. Every other test in this file
+// injects its own generate*Fn overrides and never exercises this default
+// -resolution path at all -- only the dedicated block at the bottom of
+// this file (which deliberately omits those three overrides) does, and it
+// needs the real llm/geminiClient.js functions mocked to observe what
+// model each default closure actually calls them with.
+vi.mock('../src/llm/geminiClient.js', () => ({
+  generateTranscriptAnalysis: vi.fn(),
+  generateCriterionEvaluation: vi.fn(),
+  generateEvaluationFeedback: vi.fn(),
+}));
+
+import {
+  generateAndPersistFeedbackForRoom,
+  DEFAULT_TRANSCRIPT_ANALYSIS_MODEL,
+  DEFAULT_CRITERION_EVALUATION_MODEL,
+  DEFAULT_FEEDBACK_MODEL,
+} from '../src/agent/feedbackWorker.js';
+import {
+  generateTranscriptAnalysis,
+  generateCriterionEvaluation,
+  generateEvaluationFeedback,
+} from '../src/llm/geminiClient.js';
 import { TRANSCRIPTION_FAILED_MESSAGE } from '../src/domain/feedbackGeneration.js';
 import { FEEDBACK_DIMENSION_LABELS } from '../src/domain/feedbackPrompt.js';
 
@@ -270,5 +297,109 @@ describe('generateAndPersistFeedbackForRoom', () => {
     expect(deps.insertFeedbackFn).toHaveBeenCalledTimes(2);
     expect(deps.failEvaluationRunFn).toHaveBeenCalledWith('run-1', expect.objectContaining({ error: expect.stringMatching(/connection reset/) }));
     expect(result).toEqual({ complete: true });
+  });
+
+  // Free-tier survival: these tests deliberately omit the three
+  // generate*Fn overrides so the REAL default closures run (each calling
+  // the mocked llm/geminiClient.js functions), instead of the injected
+  // mocks every other test in this file uses. That is the only way to
+  // observe which model each stage actually defaults to.
+  describe('per-stage default Gemini model selection (free-tier quota spreading)', () => {
+    function depsWithRealDefaultClosures(overrides = {}) {
+      return cleanDeps({
+        generateTranscriptAnalysisFn: undefined,
+        generateCriterionEvaluationFn: undefined,
+        generateEvaluationFeedbackFn: undefined,
+        ...overrides,
+      });
+    }
+
+    afterEach(() => {
+      delete process.env.GEMINI_MODEL;
+      delete process.env.GEMINI_MODEL_TRANSCRIPT_ANALYSIS;
+      delete process.env.GEMINI_MODEL_CRITERION_EVALUATION;
+      delete process.env.GEMINI_MODEL_FEEDBACK;
+      vi.mocked(generateTranscriptAnalysis).mockReset();
+      vi.mocked(generateCriterionEvaluation).mockReset();
+      vi.mocked(generateEvaluationFeedback).mockReset();
+    });
+
+    it('defaults each stage to its own distinct model, not one shared model', async () => {
+      vi.mocked(generateTranscriptAnalysis).mockResolvedValue(cleanAnalysisResult());
+      vi.mocked(generateCriterionEvaluation).mockImplementation(async (_prompt, parseContext) => demonstratedResultFor(parseContext));
+      vi.mocked(generateEvaluationFeedback).mockImplementation(async (_prompt, { dimensionLabels }) => ({
+        summary: 'Great job staying on topic.',
+        dimensionNotes: dimensionLabels.map((label) => ({ label, note: 'Specific note.' })),
+        strengths: ['Clear opening.'],
+        improvements: ['Invite others in more.'],
+      }));
+
+      await generateAndPersistFeedbackForRoom('room-1', depsWithRealDefaultClosures());
+
+      expect(generateTranscriptAnalysis).toHaveBeenCalledWith(expect.any(String), { model: DEFAULT_TRANSCRIPT_ANALYSIS_MODEL });
+      expect(generateCriterionEvaluation).toHaveBeenCalledWith(expect.any(String), expect.anything(), { model: DEFAULT_CRITERION_EVALUATION_MODEL });
+      expect(generateEvaluationFeedback).toHaveBeenCalledWith(expect.any(String), expect.anything(), { model: DEFAULT_FEEDBACK_MODEL });
+      // The three defaults are genuinely distinct -- the whole point of
+      // this change is separate quota buckets, not the same model three
+      // times over under different variable names.
+      expect(new Set([DEFAULT_TRANSCRIPT_ANALYSIS_MODEL, DEFAULT_CRITERION_EVALUATION_MODEL, DEFAULT_FEEDBACK_MODEL]).size).toBe(3);
+    });
+
+    it('lets a stage-specific env var override just that one stage', async () => {
+      process.env.GEMINI_MODEL_CRITERION_EVALUATION = 'gemini-3-flash-preview';
+      vi.mocked(generateTranscriptAnalysis).mockResolvedValue(cleanAnalysisResult());
+      vi.mocked(generateCriterionEvaluation).mockImplementation(async (_prompt, parseContext) => demonstratedResultFor(parseContext));
+      vi.mocked(generateEvaluationFeedback).mockImplementation(async (_prompt, { dimensionLabels }) => ({
+        summary: 'Great job staying on topic.',
+        dimensionNotes: dimensionLabels.map((label) => ({ label, note: 'Specific note.' })),
+        strengths: ['Clear opening.'],
+        improvements: ['Invite others in more.'],
+      }));
+
+      await generateAndPersistFeedbackForRoom('room-1', depsWithRealDefaultClosures());
+
+      expect(generateCriterionEvaluation).toHaveBeenCalledWith(expect.any(String), expect.anything(), { model: 'gemini-3-flash-preview' });
+      // The other two stages are untouched by a stage-specific override.
+      expect(generateTranscriptAnalysis).toHaveBeenCalledWith(expect.any(String), { model: DEFAULT_TRANSCRIPT_ANALYSIS_MODEL });
+      expect(generateEvaluationFeedback).toHaveBeenCalledWith(expect.any(String), expect.anything(), { model: DEFAULT_FEEDBACK_MODEL });
+    });
+
+    it('falls back to the shared GEMINI_MODEL env var for every stage when no stage-specific var is set', async () => {
+      process.env.GEMINI_MODEL = 'gemini-3.5-flash';
+      vi.mocked(generateTranscriptAnalysis).mockResolvedValue(cleanAnalysisResult());
+      vi.mocked(generateCriterionEvaluation).mockImplementation(async (_prompt, parseContext) => demonstratedResultFor(parseContext));
+      vi.mocked(generateEvaluationFeedback).mockImplementation(async (_prompt, { dimensionLabels }) => ({
+        summary: 'Great job staying on topic.',
+        dimensionNotes: dimensionLabels.map((label) => ({ label, note: 'Specific note.' })),
+        strengths: ['Clear opening.'],
+        improvements: ['Invite others in more.'],
+      }));
+
+      await generateAndPersistFeedbackForRoom('room-1', depsWithRealDefaultClosures());
+
+      expect(generateTranscriptAnalysis).toHaveBeenCalledWith(expect.any(String), { model: 'gemini-3.5-flash' });
+      expect(generateCriterionEvaluation).toHaveBeenCalledWith(expect.any(String), expect.anything(), { model: 'gemini-3.5-flash' });
+      expect(generateEvaluationFeedback).toHaveBeenCalledWith(expect.any(String), expect.anything(), { model: 'gemini-3.5-flash' });
+    });
+
+    it('records all three stage models as one composite, still-greppable string on the persisted evaluation run', async () => {
+      vi.mocked(generateTranscriptAnalysis).mockResolvedValue(cleanAnalysisResult());
+      vi.mocked(generateCriterionEvaluation).mockImplementation(async (_prompt, parseContext) => demonstratedResultFor(parseContext));
+      vi.mocked(generateEvaluationFeedback).mockImplementation(async (_prompt, { dimensionLabels }) => ({
+        summary: 'Great job staying on topic.',
+        dimensionNotes: dimensionLabels.map((label) => ({ label, note: 'Specific note.' })),
+        strengths: ['Clear opening.'],
+        improvements: ['Invite others in more.'],
+      }));
+      const deps = depsWithRealDefaultClosures();
+
+      await generateAndPersistFeedbackForRoom('room-1', deps);
+
+      expect(deps.insertEvaluationRunFn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: `transcript:${DEFAULT_TRANSCRIPT_ANALYSIS_MODEL},criterion:${DEFAULT_CRITERION_EVALUATION_MODEL},feedback:${DEFAULT_FEEDBACK_MODEL}`,
+        })
+      );
+    });
   });
 });

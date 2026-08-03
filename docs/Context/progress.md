@@ -476,3 +476,98 @@ Verified / Done.
     header from Draft, and move it from `docs/specs/active/` to
     `docs/specs/completed/` per `ENGINEERING.md`'s specification
     lifecycle.
+
+- **2026-08-03 (`feat/eval-free-tier-support`) — sandbox harness built,
+  live-quota wall hit and mitigated, per direct user instruction.** User
+  stated directly: no runway right now, every provider must stay on its
+  free tier, no paid billing -- saved as a project memory
+  (`project_gd-proto-no-runway-free-tier-only`) since it's tighter than
+  CLAUDE.md's own `<$100/month` ceiling and should shape future provider
+  -related recommendations project-wide, not just this session's.
+
+  **Built:** `supabase/migrations/0020_evaluation_sandbox.sql`
+  (self-contained `eval_sandbox_runs` table, no FK to any production
+  table -- pending the user's manual apply, same as every migration in
+  this repo) + `apps/server/scripts/eval-sandbox.js`/
+  `eval-sandbox-fixtures.js` (2 synthetic scenarios x 2 identity variants,
+  live-Gemini bias/evidence test harness, writes only to the sandbox
+  table). User's own first proposal (split pipeline stages across
+  different LLM *providers*, e.g. OpenRouter) was pushed back on directly
+  before building anything: doesn't fix the real constraint (other
+  providers' free tiers are typically just as capped), is a real
+  provider/architecture change against CLAUDE.md's fixed Gemini-only list
+  (guardrail #2), and doesn't reduce hallucination risk beyond what this
+  pipeline's existing schema-constrained + code-verified design already
+  gives model-agnostically.
+
+  **Real finding, live-verified not assumed:** first sandbox run hit a
+  hard wall -- this project's Gemini key is capped at **20 requests/day
+  per (project, model)** (confirmed from a real `429`'s own `quotaId`:
+  `GenerateRequestsPerDayPerProjectPerModel-FreeTier`). At 1+5+N calls per
+  room with every stage sharing one model, that is roughly **2 rooms/day,
+  total** -- nowhere near pilot scale, and the actual reason two
+  consecutive sandbox rounds failed mid-run. First live test round (before
+  hitting the cap) still produced real signal from the `attendance-policy`
+  scenario: the two strong, well-evidenced seats scored identically
+  (100/100) across both identity variants; the one weak/quiet, 2-line
+  seat moved 2.7 points (82.7 vs 80) between variants -- over the spec's
+  own 2-point bounded-variance target, but in the direction opposite
+  typical bias concerns (female-coded name scored higher), read as
+  ordinary sampling noise on thin evidence, not a bias pattern.
+
+  **Fix, also live-verified**: Google scopes free-tier quota per exact
+  model string, confirmed both from the `429`'s own quotaId naming and by
+  directly testing candidate models against this real key --
+  `gemini-2.5-flash`/`gemini-2.5-flash-lite` are both dead (`404`, "no
+  longer available to new users," despite third-party aggregator sites
+  quoting rate limits for them that no longer apply here) but
+  `gemini-3.6-flash`/`gemini-3.5-flash`/`gemini-3.5-flash-lite`/
+  `gemini-3.1-flash-lite`/`gemini-3-flash-preview` are all live and
+  callable. `agent/feedbackWorker.js` now defaults each pipeline stage to
+  its own distinct model (`DEFAULT_TRANSCRIPT_ANALYSIS_MODEL`/
+  `DEFAULT_CRITERION_EVALUATION_MODEL`/`DEFAULT_FEEDBACK_MODEL`, each
+  independently overridable via its own `GEMINI_MODEL_*` env var, falling
+  back to the existing shared `GEMINI_MODEL`) instead of one shared
+  model -- still one vendor (Gemini), no ADR needed. The actual scoring
+  engine (5 Criterion Evaluator calls) keeps today's flagship
+  (`gemini-3.6-flash`) unchanged, since that stage's judgment quality
+  matters most; Transcript Analysis (extraction, independently
+  re-verified against the real transcript regardless of model quality)
+  and Feedback Generation (prose only, R7: structurally cannot alter a
+  score) each moved to their own separate, lighter model instead.
+  `evaluation_runs.model`/`feedback.model` now record all three as one
+  composite string rather than a single value. `eval-sandbox.js` reuses
+  these exact same production defaults, so the sandbox round exercises
+  the real split, not a separately-invented one.
+
+  **Tests**: RED confirmed first -- 4 new tests in
+  `feedbackWorker.test.js` (default per-stage model selection, a
+  stage-specific env-var override, the shared `GEMINI_MODEL` fallback,
+  and the composite `evaluation_runs.model` string), deliberately
+  omitting the file's usual `generate*Fn` overrides so the real default
+  closures run against a newly-mocked `llm/geminiClient.js`. Caught and
+  fixed a real bug on the first run: a stray leftover reference to the
+  old single `model` variable in the `insertFeedbackFn` call (removed
+  when the three stage models were introduced) threw `model is not
+  defined` and silently failed every pre-existing test in the file (8
+  failures) until fixed -- full suite fresh under Node 22: **586/586
+  passing**. `npx oxlint apps/server/src apps/server/test`: same 2
+  pre-existing, unrelated warnings, no new ones.
+
+  **Residual/open:**
+  - This is a mitigation, not a fix -- the new per-room ceiling is bound
+    by whichever stage's own (calls-per-room / 20-per-day) ratio is
+    tightest (Criterion Evaluation's 5 calls/room, ≈4 rooms/day), a real
+    improvement over the old combined ≈2 rooms/day but still short of
+    pilot scale (5-10 *concurrent* rooms) -- that gap needs a paid tier,
+    blocked on runway, not on anything fixable in code.
+  - Migration `0020` not yet applied to the live Supabase project --
+    sandbox rounds so far used `--no-db` (console report only); nothing
+    persisted yet.
+  - Second sandbox scenario (`remote-work`) has not yet completed a full
+    round under the new model split -- next step is re-running
+    `eval-sandbox.js` now that the free-tier wall has real headroom
+    again.
+  - Does not touch or resolve the AC7 Human Verification Checklist's own
+    three live-key/live-Supabase items above -- this work only makes
+    rigorous *pre*-verification testing possible within a $0 budget.

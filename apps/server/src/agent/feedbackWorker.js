@@ -39,6 +39,27 @@ import { insertEvaluationEvidence } from '../db/evaluationEvidence.js';
 import { insertEvaluationCriterionResults } from '../db/evaluationCriterionResults.js';
 import { insertEvaluationConfidence } from '../db/evaluationConfidence.js';
 
+// Free-tier survival (2026-08-03): no paid Gemini tier is in reach right
+// now (no runway) -- confirmed live that Google's free-tier quota is
+// scoped per (project, model), not shared across models (a real 429
+// response's own quotaId: "GenerateRequestsPerDayPerProjectPerModel
+// -FreeTier"). Every stage defaulting to one model meant the whole
+// pipeline shared a single ~20-requests/day bucket (1+5+N calls/room --
+// roughly 2 rooms/day, total, for every stage combined). Spreading the
+// three stages across three distinct, empirically-confirmed-available
+// Gemini models gives each its own bucket instead -- still one vendor
+// (Gemini), no new provider/ADR (guardrail #2) -- and keeps the single
+// highest-judgment-stakes stage on today's flagship: the five Criterion
+// Evaluator calls are the actual scoring engine, so that default is
+// unchanged. Transcript Analysis (extraction only, independently
+// re-verified against the real transcript by evidenceVerifier.js
+// regardless of which model extracted it) and Feedback Generation (prose
+// only, R7: structurally cannot alter a score) are the two lower-stakes
+// stages, so those get their own separate, lighter models instead.
+export const DEFAULT_TRANSCRIPT_ANALYSIS_MODEL = 'gemini-3.5-flash-lite';
+export const DEFAULT_CRITERION_EVALUATION_MODEL = 'gemini-3.6-flash';
+export const DEFAULT_FEEDBACK_MODEL = 'gemini-3.1-flash-lite';
+
 // N1 (audit comparison, 2026-07-29): returns { complete }, not void --
 // agent/roomSweeper.js needs to know whether every participant now has
 // persisted feedback so it can mark the room done (and stop retrying it)
@@ -62,10 +83,12 @@ export async function generateAndPersistFeedbackForRoom(
     insertEvaluationEvidenceFn = insertEvaluationEvidence,
     insertEvaluationCriterionResultsFn = insertEvaluationCriterionResults,
     insertEvaluationConfidenceFn = insertEvaluationConfidence,
-    model = process.env.GEMINI_MODEL || 'gemini-3.6-flash',
-    generateTranscriptAnalysisFn = (prompt) => generateTranscriptAnalysis(prompt, { model }),
-    generateCriterionEvaluationFn = (prompt, parseContext) => generateCriterionEvaluation(prompt, parseContext, { model }),
-    generateEvaluationFeedbackFn = (prompt, parseContext) => generateEvaluationFeedback(prompt, parseContext, { model }),
+    transcriptAnalysisModel = process.env.GEMINI_MODEL_TRANSCRIPT_ANALYSIS || process.env.GEMINI_MODEL || DEFAULT_TRANSCRIPT_ANALYSIS_MODEL,
+    criterionEvaluationModel = process.env.GEMINI_MODEL_CRITERION_EVALUATION || process.env.GEMINI_MODEL || DEFAULT_CRITERION_EVALUATION_MODEL,
+    feedbackModel = process.env.GEMINI_MODEL_FEEDBACK || process.env.GEMINI_MODEL || DEFAULT_FEEDBACK_MODEL,
+    generateTranscriptAnalysisFn = (prompt) => generateTranscriptAnalysis(prompt, { model: transcriptAnalysisModel }),
+    generateCriterionEvaluationFn = (prompt, parseContext) => generateCriterionEvaluation(prompt, parseContext, { model: criterionEvaluationModel }),
+    generateEvaluationFeedbackFn = (prompt, parseContext) => generateEvaluationFeedback(prompt, parseContext, { model: feedbackModel }),
   } = {}
 ) {
   const room = await getRoomByIdFn(roomId);
@@ -120,7 +143,12 @@ export async function generateAndPersistFeedbackForRoom(
         transcriptHash: hashTranscript(transcriptLines),
         rubricVersion: RUBRIC_VERSION,
         promptBundleVersion: PROMPT_BUNDLE_VERSION,
-        model,
+        // Three distinct models now, one per stage (see the free-tier
+        // survival comment above) -- `model` stays a single text column
+        // (no migration needed), so this records all three as one
+        // human-readable, still-greppable summary rather than picking
+        // just one and losing the other two.
+        model: `transcript:${transcriptAnalysisModel},criterion:${criterionEvaluationModel},feedback:${feedbackModel}`,
         startedAt: new Date().toISOString(),
       });
     } catch (err) {
@@ -190,7 +218,11 @@ export async function generateAndPersistFeedbackForRoom(
           dimensions,
           strengths,
           improvements,
-          model,
+          // Same composite three-model summary as evaluation_runs.model
+          // above -- this participant's score came from criterionModel,
+          // the prose from feedbackModel, so no single model name would
+          // be a complete answer to "what generated this row" any more.
+          model: `transcript:${transcriptAnalysisModel},criterion:${criterionEvaluationModel},feedback:${feedbackModel}`,
         });
         return true;
       } catch (err) {
