@@ -355,3 +355,71 @@ Verified / Done.
   gate; that remains open in parallel and must be resolved (migration
   applied, live-key run, real-human check) before any `dev` -> `main`
   release PR that includes state 7.
+
+- **2026-08-03 (state 8, `test/eval-golden-suite`) — done.** New
+  `apps/server/test/evaluationGoldenSuite.test.js`, run through the full
+  `runEvaluationPipeline` composition (not a single stage in isolation --
+  every other state's own test file already covers its stage alone). One
+  shared 3-participant/4-line fixture transcript + a position-tag-based
+  criterion-evaluator stub (branches only on the anonymous "P1"/"P2"/"P3"
+  tag a real Gemini call would see, never on the real userId/displayName
+  behind it, so it's a faithful stand-in for the real
+  `criterionEvaluationPrompt.js` contract, not a toy).
+
+  **Determinism**: the same fixture run three times concurrently, with
+  randomized per-call latency jitter on the five criterion-evaluator calls
+  (so completion order differs each run), still produces byte-identical
+  scores/dimensions/confidence -- proves the pipeline's own
+  aggregation/concurrency machinery (the `Promise.all` fan-out state 7's
+  own review pass added) introduces no non-determinism of its own.
+  **Named limitation, stated honestly in the file's own header comment,
+  not glossed over**: every Gemini call here is dependency-injected (no
+  live key, same as every prior state) -- this suite cannot measure real
+  model sampling noise, only a live-key run can (already an open AC7
+  item), so "determinism" here is scoped to what's actually testable
+  without one.
+
+  **Metamorphic**: the same fixture, re-run with every participant's
+  userId/displayName replaced end to end (different ids, different
+  names, same seat order), produces identical per-seat scores and
+  confidence when matched by seat position, not name. **Verified as a
+  real, non-vacuous check, not assumed**: temporarily mutated
+  `transcriptAnalysisPrompt.js`'s `assignParticipantTags` to sort by
+  display name instead of array position before assigning tags, re-ran
+  the suite, watched the metamorphic test fail immediately
+  (`expected null to be 100`), then reverted the mutation and confirmed
+  green again -- the same "prove it, don't assume it" discipline this
+  session's earlier work already applies to RLS/migration changes,
+  applied here to a test-quality claim instead.
+
+  **Evidence integrity**: a ledger mixing two genuine items with a
+  fabricated quote and a cross-speaker-attribution item is verified
+  end-to-end -- both bad items rejected with the exact right reason,
+  every criterion-evaluator call captured and confirmed to only ever see
+  the two surviving verified evidence ids, and the room still scores from
+  what remains (a partially-bad ledger degrades to less evidence, not to
+  a lost room). A second case confirms a fully-fabricated ledger falls
+  back to the same transcription-failed message every participant gets
+  for an empty transcript, per R9 -- never a fabricated score from zero
+  surviving evidence.
+
+  **Tests**: 4 new, all passing. Full suite fresh under Node 22
+  (`npm test --workspace=@placeme/server`): **582/582 passing** (one
+  unrelated single-run flake in `roomsApi.test.js`'s "409s when room is
+  not in a startable state" -- a timeout, confirmed gone on two clean
+  re-runs of that file alone, same pre-existing timing sensitivity
+  state 7's own review entry already noted, not caused by this change).
+  `npx oxlint apps/server/src apps/server/test`: same 2 pre-existing,
+  unrelated warnings, no new ones.
+
+  **Branch note**: `test/eval-golden-suite` (and `chore/eval-cutover-cleanup`,
+  next) already existed as placeholder branches from early in this spec,
+  stale at `bbe1f45` (pre-dating all of `phase-2`'s eval work, no unique
+  commits of their own) -- fast-forwarded to current `phase-2` rather than
+  recreated, since `bbe1f45` is an ancestor of `phase-2` and a clean
+  fast-forward needed no force-push or history rewrite.
+
+  **Residual/open:** none new -- this state adds regression coverage only,
+  no behavior change, so guardrail #1's human-verification gate is
+  unaffected and remains open from state 7 exactly as before. Next: state 9
+  (`chore/eval-cutover-cleanup`).

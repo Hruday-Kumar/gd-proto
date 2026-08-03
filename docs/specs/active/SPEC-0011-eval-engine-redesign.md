@@ -409,9 +409,40 @@ below.
       real room run through the full pipeline against a live Gemini key;
       (3) guardrail #1 real-human verification that feedback still reads as
       useful, attributed correctly, and non-discouraging.
-- [ ] **AC8 (state 8):** A golden fixture suite runs determinism,
+- [x] **AC8 (state 8):** A golden fixture suite runs determinism,
       metamorphic (participant rename), and evidence-integrity tests in
-      `npm test`.
+      `npm test`. (`apps/server/test/evaluationGoldenSuite.test.js`, commit
+      pending; 4 new tests, run through the full `runEvaluationPipeline`
+      composition, not just a single stage in isolation.) **Determinism**:
+      the same fixture transcript run three times concurrently (with
+      randomized per-call latency jitter on the five criterion-evaluator
+      calls, so completion order differs run to run) produces
+      byte-identical scores/dimensions/confidence every time -- proves the
+      pipeline's own aggregation/concurrency machinery introduces no
+      non-determinism of its own. **Metamorphic**: the same fixture,
+      re-run with every participant's userId/displayName replaced end to
+      end, produces identical per-seat scores and confidence when matched
+      by seat position -- verified as a real, non-vacuous check by a
+      temporary mutation test (making `assignParticipantTags` sort by
+      display name instead of position broke this test immediately, then
+      reverted). **Evidence integrity**: a ledger mixing genuine evidence
+      with a fabricated quote and a cross-speaker-attribution item is
+      verified end to end -- both bad items are rejected with the correct
+      reason, every criterion-evaluator call only ever sees the surviving
+      verified evidence ids, and the room still scores from what remains;
+      a fully-fabricated ledger falls back to the same
+      transcription-failed message as an empty transcript, never a
+      fabricated score. **Named limitation, stated in the test file's own
+      header comment**: every Gemini call in this suite is
+      dependency-injected (no live key, same as every prior state), so
+      this cannot measure real model sampling noise -- only a live-key run
+      (already an open AC7 item) can. `npm test --workspace=@placeme/server`:
+      582/582 passing (one unrelated single-run flake in
+      `roomsApi.test.js`'s "409s when room is not in a startable state",
+      confirmed gone on two clean re-runs, same pre-existing timing
+      sensitivity already noted in state 7's own review entry).
+      `npx oxlint apps/server/src apps/server/test`: same 2 pre-existing,
+      unrelated warnings, no new ones.
 - [ ] **AC9 (state 9):** Old single-shot per-student scoring path
       (`feedbackPrompt.js`'s scoring instructions) is retired; docs/specs
       updated; no dead code remains.
@@ -434,7 +465,7 @@ below.
       unchanged. ("Retire" = no longer called from the active path, not
       deleted -- Rollback section reserves deletion for state 9.) Human
       verification (AC7) still pending before merge to `main`.
-- [ ] `test/eval-golden-suite` — fixture transcripts + determinism /
+- [x] `test/eval-golden-suite` — fixture transcripts + determinism /
       metamorphic / evidence tests.
 - [ ] `chore/eval-cutover-cleanup` — remove dead code, update docs, human
       verification checklist, mark this spec done.
