@@ -571,3 +571,46 @@ Verified / Done.
   - Does not touch or resolve the AC7 Human Verification Checklist's own
     three live-key/live-Supabase items above -- this work only makes
     rigorous *pre*-verification testing possible within a $0 budget.
+
+- **2026-08-03 (same day, follow-up) — ran the full 4-scenario round twice
+  after the model split; both times every score came back `null`.**
+  Transcript Analysis (`gemini-3.5-flash-lite`) and Feedback Generation
+  (`gemini-3.1-flash-lite`) both worked cleanly across all 24 real calls
+  (2 rounds x 4 scenarios x 3 participants) -- evidence extraction quality
+  was genuinely good (accurate quotes, sensible neutral descriptions,
+  correct evidence types). Criterion Evaluation was the failure: still
+  defaulted to `gemini-3.6-flash`, whose 20/day quota was already
+  exhausted earlier the same day (confirmed via a direct raw call:
+  `429` again). Retried with `GEMINI_MODEL_CRITERION_EVALUATION` pointed
+  at `gemini-3.5-flash`, then `gemini-3-flash-preview` (env-var override,
+  no code change) -- both hit a *different*, genuinely external failure:
+  `503 UNAVAILABLE "This model is currently experiencing high demand"`,
+  confirmed not a timeout/latency artifact (reproduced even with
+  `timeoutMs: 45000`). `validationLayer.js`'s bounded retry absorbed all
+  of this exactly as designed -- no crash, no fabricated score, every
+  dimension correctly fell back to `insufficient_context` (R9) -- but it
+  means every dimension's LLM call is failing silently from the script's
+  point of view (the underlying `issue.detail` is not currently surfaced
+  in `runEvaluationPipeline`'s returned `validationResults`), which cost
+  real debugging time this session; worth adding to a future state 8/9
+  follow-up (not done here, to avoid scope creep on top of an
+  already-large session).
+
+  **Reading:** the criterion-evaluation call shape (5 dimensions, full
+  rubric anchors, 2-3 participants, structured schema) is heavier than
+  Transcript Analysis/Feedback Generation's prompts, and free-tier
+  capacity for it appears genuinely strained right now, independent of
+  the daily request quota already fixed -- this is external and
+  time-varying (Google's own error text: "spikes in demand are usually
+  temporary"), not a bug in this session's model-split fix or the
+  pipeline itself.
+
+  **Not fixed today, deliberately** -- further probing would have kept
+  burning already-strained free quota for uncertain benefit. Next
+  session: retry `eval-sandbox.js` (no code change needed) later today or
+  tomorrow once demand eases and `gemini-3.6-flash`'s quota resets; if
+  criterion evaluation keeps failing on the flagship specifically,
+  consider whether `DEFAULT_CRITERION_EVALUATION_MODEL` itself should
+  move off `gemini-3.6-flash` to whichever lighter model proves most
+  reliable under real free-tier load, revisiting the quality-vs-reliability
+  tradeoff noted when that default was first chosen.
