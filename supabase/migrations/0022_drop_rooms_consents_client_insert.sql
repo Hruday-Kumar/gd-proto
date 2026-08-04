@@ -1,0 +1,34 @@
+-- Phase 1 security gate (ACTION_PLAN.md, 2026-08-04): drop the two
+-- remaining client-facing INSERT policies that let any authenticated
+-- browser write directly into `rooms` and `consents` via PostgREST,
+-- instead of only through the server's validated API routes. Same
+-- reasoning already applied to room_participants (0011) and topics
+-- (0013):
+--
+-- "rooms_insert_own" (0003) only checked auth.uid() = created_by --
+-- proof of self-identity, not that duration/join_mode/topic_id/etc were
+-- validated. Every real room is written by the server's service-role
+-- client (db/rooms.js's insertRoom, called from POST /api/rooms and
+-- POST /api/rooms/match in api/routes/rooms.js), which bypasses RLS
+-- entirely -- confirmed no apps/web or placeme-UI code inserts into
+-- `rooms` directly. A student calling PostgREST directly with this
+-- policy in place could create rooms bypassing every server-side
+-- validation (duration bounds, participant caps, topic existence).
+--
+-- "consents_insert_own" (0002) has the same shape: real consent events
+-- are written by the server's service-role client (db/consents.js's
+-- recordConsent, called from POST /api/consent in api/routes/consent.js)
+-- after CURRENT_CONSENT_VERSION is resolved server-side -- confirmed no
+-- frontend code inserts into `consents` directly. Consent is the gate
+-- guardrail #3 depends on ("consent before mic, always"); a client able
+-- to insert an arbitrary consent_version directly could forge a consent
+-- record for a version the student never actually saw or agreed to.
+--
+-- Dropping both policies removes an attack surface with zero effect on
+-- the app; with no INSERT policy left for `authenticated`, RLS defaults
+-- to deny on both tables.
+--
+-- Run this in the Supabase dashboard: SQL Editor -> New query -> paste -> Run.
+
+drop policy if exists "rooms_insert_own" on public.rooms;
+drop policy if exists "consents_insert_own" on public.consents;
