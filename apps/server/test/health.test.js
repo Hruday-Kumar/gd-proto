@@ -104,4 +104,24 @@ describe('GET /health/agent', () => {
       expect(res.body.lastFailure).toEqual({ roomId: 'room-1', message: 'boom', at: '2026-07-26T00:00:00.000Z' });
     });
   });
+
+  // Phase 1 security gate (ACTION_PLAN.md, 2026-08-04): M3's open fallback
+  // (above) was deliberate for local dev/CI, but the same fallback in a
+  // real production deploy means a misconfigured Render service (env var
+  // never set) silently ships this endpoint wide open instead of failing
+  // loudly. In production, no token configured is a startup error, not a
+  // quiet degrade.
+  describe('in production', () => {
+    it('refuses to start when HEALTH_CHECK_TOKEN is not configured', () => {
+      expect(() => createApp({ supabaseUrl: TEST_SUPABASE_URL, nodeEnv: 'production', healthCheckToken: undefined })).toThrow(
+        /HEALTH_CHECK_TOKEN/
+      );
+    });
+
+    it('starts normally when HEALTH_CHECK_TOKEN is configured', () => {
+      expect(() =>
+        createApp({ supabaseUrl: TEST_SUPABASE_URL, nodeEnv: 'production', healthCheckToken: 'secret-token' })
+      ).not.toThrow();
+    });
+  });
 });

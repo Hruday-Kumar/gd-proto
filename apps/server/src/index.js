@@ -77,7 +77,7 @@ export function createApp({
   // so there's nothing here for a future error-handling middleware to catch.
   app.use(cors({ origin: (origin, callback) => callback(null, isAllowedOrigin(origin, origins)) }));
   app.use(express.json());
-  app.use(createHealthRouter(agentStatus ?? getAgentWorkerStatus(), { healthCheckToken }));
+  app.use(createHealthRouter(agentStatus ?? getAgentWorkerStatus(), { healthCheckToken, nodeEnv }));
 
   const requireAuth = createAuthMiddleware({ supabaseUrl });
   app.use(createMeRouter(requireAuth));
