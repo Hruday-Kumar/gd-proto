@@ -185,9 +185,23 @@ export async function sweepExpiredRooms({
 // interval left running doesn't hold the process open by itself (see
 // .unref() below), but clearing it is still the honest thing to do rather
 // than leaving a dangling timer past the point the server is shutting down.
-export function startRoomSweeper({ intervalMs = 3000, ...deps } = {}) {
+export function startRoomSweeper({ intervalMs = 3000, sweepFn = sweepExpiredRooms, ...deps } = {}) {
+  // Phase 1 (ACTION_PLAN.md, 2026-08-04): the DB claim inside a single tick
+  // already stops two ticks from double-dispatching the same room's
+  // feedback, but nothing stopped two ticks from running at all -- if one
+  // tick's Gemini calls run longer than intervalMs (routine), setInterval
+  // fires the next tick anyway, doubling every DB read/write in flight for
+  // no benefit. Skip a tick outright while the previous one is still
+  // running instead.
+  let inFlight = false;
   const interval = setInterval(() => {
-    sweepExpiredRooms(deps).catch((e) => console.error(`[sweep] unexpected error: ${e.message}`));
+    if (inFlight) return;
+    inFlight = true;
+    sweepFn(deps)
+      .catch((e) => console.error(`[sweep] unexpected error: ${e.message}`))
+      .finally(() => {
+        inFlight = false;
+      });
   }, intervalMs);
   interval.unref?.();
   return () => clearInterval(interval);

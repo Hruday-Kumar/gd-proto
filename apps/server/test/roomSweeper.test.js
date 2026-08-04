@@ -14,7 +14,7 @@
 // decision, and agent/feedbackWorker.js for the { complete } contract this
 // file reacts to.
 import { describe, it, expect, vi } from 'vitest';
-import { sweepExpiredRooms } from '../src/agent/roomSweeper.js';
+import { sweepExpiredRooms, startRoomSweeper } from '../src/agent/roomSweeper.js';
 import { FEEDBACK_RETRY_MAX_ATTEMPTS, FEEDBACK_FLUSH_MAX_WAIT_MS } from '../src/domain/roomSweep.js';
 
 const NOW = Date.parse('2026-07-29T10:00:00.000Z');
@@ -544,6 +544,38 @@ describe('sweepExpiredRooms', () => {
       });
 
       expect(claimFeedbackAttemptFn).not.toHaveBeenCalled();
+    });
+  });
+
+  // Phase 1 (ACTION_PLAN.md, 2026-08-04): the DB claim inside a single tick
+  // already stops two *ticks* from double-dispatching the same room's
+  // feedback (see the C3 comment above), but nothing stopped two *ticks*
+  // from running concurrently in the first place -- if one tick's Gemini
+  // calls run longer than intervalMs (routine), setInterval fires the next
+  // tick anyway, doubling up every DB read/write in flight. sweepFn is
+  // injectable so this can be proven without a real timer or real I/O.
+  describe('startRoomSweeper in-flight guard', () => {
+    it('skips starting a new tick while the previous tick is still running', async () => {
+      vi.useFakeTimers();
+      let resolveFirstTick;
+      const sweepFn = vi
+        .fn()
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveFirstTick = resolve; }))
+        .mockResolvedValue(undefined);
+
+      const stop = startRoomSweeper({ intervalMs: 1000, sweepFn });
+
+      await vi.advanceTimersByTimeAsync(1000); // tick 1 starts, never resolves yet
+      await vi.advanceTimersByTimeAsync(1000); // tick 2 due, but tick 1 still in flight
+      expect(sweepFn).toHaveBeenCalledTimes(1);
+
+      resolveFirstTick();
+      await Promise.resolve(); // let the in-flight flag clear
+      await vi.advanceTimersByTimeAsync(1000); // tick 3 due, tick 1 is done -- allowed
+      expect(sweepFn).toHaveBeenCalledTimes(2);
+
+      stop();
+      vi.useRealTimers();
     });
   });
 
