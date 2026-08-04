@@ -125,3 +125,46 @@ describe('GET /health/agent', () => {
     });
   });
 });
+
+// Phase 1 (ACTION_PLAN.md, 2026-08-04): /health only ever reports "ok" --
+// useful for liveness (is the process up?) but not readiness (can it
+// actually serve real traffic?). A deploy with a typo'd env var, or a
+// Supabase project missing a migration the code now depends on, looked
+// identical to a healthy one until a real student hit it. /ready checks
+// both explicitly and answers 503 instead.
+describe('GET /ready', () => {
+  it('200s when every required env var is set and the DB check succeeds', async () => {
+    const res = await request(
+      createApp({ supabaseUrl: TEST_SUPABASE_URL, checkDbFn: async () => {} })
+    ).get('/ready');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ status: 'ready' });
+  });
+
+  it('503s and names every missing required env var', async () => {
+    const res = await request(
+      createApp({ supabaseUrl: TEST_SUPABASE_URL, checkDbFn: async () => {}, env: {} })
+    ).get('/ready');
+    expect(res.status).toBe(503);
+    expect(res.body.status).toBe('not_ready');
+    expect(res.body.reason).toBe('missing_config');
+    expect(res.body.missingEnvVars).toEqual(
+      expect.arrayContaining(['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'GEMINI_API_KEY'])
+    );
+  });
+
+  it('503s when the DB check fails, without leaking the underlying error to the client', async () => {
+    const res = await request(
+      createApp({
+        supabaseUrl: TEST_SUPABASE_URL,
+        checkDbFn: async () => {
+          throw new Error('relation "rooms" does not exist');
+        },
+      })
+    ).get('/ready');
+    expect(res.status).toBe(503);
+    expect(res.body.status).toBe('not_ready');
+    expect(res.body.reason).toBe('db_unreachable');
+    expect(res.body).not.toHaveProperty('message');
+  });
+});
