@@ -1,137 +1,405 @@
-// N1 (audit comparison, 2026-07-29): generateAndPersistFeedbackForRoom used
-// to return void and always regenerate every participant's feedback from
-// scratch. Now it skips anyone who already has a persisted row (so a retry
-// after a partial failure doesn't re-spend Gemini calls or hit feedback's
-// unique(room_id, user_id) constraint) and returns { complete } so
-// agent/roomSweeper.js knows whether the room is actually done. All
-// dependencies injected -- no live DB or Gemini key needed.
-//
-// SPEC-0006 (BE-6/BE-7): generateFn now resolves to the structured shape
-// domain/feedbackPrompt.js's parseFeedbackResponse produces (summary,
-// score, dimensions, strengths, improvements) instead of a bare string --
-// insertFeedbackFn must be called with all four new fields, not just body.
-import { describe, it, expect, vi } from 'vitest';
-import { generateAndPersistFeedbackForRoom } from '../src/agent/feedbackWorker.js';
+// SPEC-0011 state 7 (feat/eval-feedback-decoupled) cutover: this used to
+// wire domain/feedbackGeneration.js's single-shot generateFeedbackForRoom
+// to a bare `generateFn`. It now wires domain/evaluationPipeline.js's
+// multi-stage pipeline (three distinct injected Gemini calls) and persists
+// that pipeline's own artifacts (evaluation_runs/evaluation_evidence/
+// evaluation_criterion_results/evaluation_confidence) alongside the same
+// `feedback` row shape as before (R8) -- all dependencies injected, no
+// live DB or Gemini key needed, same DI-everything convention every prior
+// SPEC-0011 state already established.
+import { describe, it, expect, vi, afterEach } from 'vitest';
 
-const participants = [
+// Free-tier survival (2026-08-03): generateAndPersistFeedbackForRoom now
+// defaults each of its three Gemini calls to its OWN stage-specific model
+// (see feedbackWorker.js's own comment) instead of one shared model, so
+// each stage lands in its own separate Google free-tier quota bucket
+// rather than all three competing for one. Every other test in this file
+// injects its own generate*Fn overrides and never exercises this default
+// -resolution path at all -- only the dedicated block at the bottom of
+// this file (which deliberately omits those three overrides) does, and it
+// needs the real llm/geminiClient.js functions mocked to observe what
+// model each default closure actually calls them with.
+vi.mock('../src/llm/geminiClient.js', () => ({
+  generateTranscriptAnalysis: vi.fn(),
+  generateCriterionEvaluation: vi.fn(),
+  generateEvaluationFeedback: vi.fn(),
+}));
+
+import {
+  generateAndPersistFeedbackForRoom,
+  DEFAULT_TRANSCRIPT_ANALYSIS_MODEL,
+  DEFAULT_CRITERION_EVALUATION_MODEL,
+  DEFAULT_FEEDBACK_MODEL,
+} from '../src/agent/feedbackWorker.js';
+import {
+  generateTranscriptAnalysis,
+  generateCriterionEvaluation,
+  generateEvaluationFeedback,
+} from '../src/llm/geminiClient.js';
+import { TRANSCRIPTION_FAILED_MESSAGE } from '../src/domain/feedbackGeneration.js';
+import { FEEDBACK_DIMENSION_LABELS } from '../src/domain/feedbackPrompt.js';
+
+const roomParticipants = [
   { user_id: 'user-a', livekit_identity: 'user-a', joined_at: '2026-07-29T09:00:00.000Z' },
-  { user_id: 'user-b', livekit_identity: 'user-b', joined_at: '2026-07-29T09:00:00.000Z' },
+  { user_id: 'user-b', livekit_identity: 'user-b', joined_at: '2026-07-29T09:00:01.000Z' },
 ];
 
-function structuredFeedback(overrides = {}) {
+const transcriptRows = [
+  {
+    id: 'line-1',
+    user_id: 'user-a',
+    text: 'Remote work improves productivity.',
+    started_at_ms: 0,
+    ended_at_ms: 2000,
+  },
+  {
+    id: 'line-2',
+    user_id: 'user-b',
+    text: 'I disagree, it isolates people.',
+    started_at_ms: 2000,
+    ended_at_ms: 4000,
+  },
+];
+
+function cleanAnalysisResult() {
   return {
-    summary: 'Great job staying on topic.',
-    score: 82,
-    dimensions: ['Content depth', 'Clarity', 'Confidence', 'Listening', 'Fluency'].map((label) => ({
-      label,
-      score: 80,
-      note: 'Specific note.',
-    })),
-    strengths: ['Clear opening.'],
-    improvements: ['Invite others in more.'],
-    ...overrides,
+    conversationUnderstanding: { summary: 'Discussed remote work tradeoffs.', topicSegments: [] },
+    evidenceLedger: [
+      {
+        utteranceIndexes: [0],
+        relatedUtteranceIndexes: [],
+        evidenceType: 'claim',
+        exactQuote: 'Remote work improves productivity.',
+        neutralDescription: 'States a claim about remote work.',
+        topicSegmentId: null,
+        extractionConfidence: 'high',
+      },
+      {
+        utteranceIndexes: [1],
+        relatedUtteranceIndexes: [0],
+        evidenceType: 'disagreement',
+        exactQuote: 'I disagree, it isolates people.',
+        neutralDescription: 'Disagrees with the prior point.',
+        topicSegmentId: null,
+        extractionConfidence: 'high',
+      },
+    ],
   };
 }
 
-function baseDeps(overrides = {}) {
+function demonstratedResultFor(parseContext) {
+  return {
+    dimensionLabel: parseContext.dimensionLabel,
+    participantEvaluations: Object.entries(parseContext.tagToUserId).map(([, userId]) => ({
+      participantUserId: userId,
+      subdimensions: parseContext.subdimensionIds.map((subdimensionId) => ({
+        subdimensionId,
+        level: 'demonstrated',
+        evidenceIds: [parseContext.evidenceIds[0]],
+        reasoning: 'Grounded in the cited evidence.',
+      })),
+    })),
+  };
+}
+
+function cleanDeps(overrides = {}) {
   return {
     getRoomByIdFn: vi.fn().mockResolvedValue({ id: 'room-1', topic_id: 'topic-1' }),
     getTopicByIdFn: vi.fn().mockResolvedValue({ id: 'topic-1', text: 'Remote work' }),
-    listParticipantsFn: vi.fn().mockResolvedValue(participants),
+    listParticipantsFn: vi.fn().mockResolvedValue(roomParticipants),
     listProfilesFn: vi.fn().mockResolvedValue([
       { id: 'user-a', display_name: 'Asha' },
       { id: 'user-b', display_name: 'Bilal' },
     ]),
-    listTranscriptLinesForRoomFn: vi.fn().mockResolvedValue([
-      { user_id: 'user-a', text: 'I think remote work helps.' },
-      { user_id: 'user-b', text: 'I disagree.' },
-    ]),
+    listTranscriptLinesForRoomFn: vi.fn().mockResolvedValue(transcriptRows),
     listFeedbackUserIdsForRoomFn: vi.fn().mockResolvedValue([]),
     insertFeedbackFn: vi.fn().mockResolvedValue(undefined),
-    generateFn: vi.fn().mockResolvedValue(structuredFeedback()),
+    insertEvaluationRunFn: vi.fn().mockResolvedValue('run-1'),
+    completeEvaluationRunFn: vi.fn().mockResolvedValue(undefined),
+    failEvaluationRunFn: vi.fn().mockResolvedValue(undefined),
+    insertEvaluationEvidenceFn: vi.fn().mockResolvedValue(undefined),
+    insertEvaluationCriterionResultsFn: vi.fn().mockResolvedValue(undefined),
+    insertEvaluationConfidenceFn: vi.fn().mockResolvedValue(undefined),
+    generateTranscriptAnalysisFn: vi.fn().mockResolvedValue(cleanAnalysisResult()),
+    generateCriterionEvaluationFn: vi.fn().mockImplementation(async (_prompt, parseContext) => demonstratedResultFor(parseContext)),
+    generateEvaluationFeedbackFn: vi.fn().mockImplementation(async (_prompt, { dimensionLabels }) => ({
+      summary: 'Great job staying on topic.',
+      dimensionNotes: dimensionLabels.map((label) => ({ label, note: 'Specific note.' })),
+      strengths: ['Clear opening.'],
+      improvements: ['Invite others in more.'],
+    })),
     ...overrides,
   };
 }
 
 describe('generateAndPersistFeedbackForRoom', () => {
   it('persists feedback for every participant and reports complete: true', async () => {
-    const deps = baseDeps();
+    const deps = cleanDeps();
     const result = await generateAndPersistFeedbackForRoom('room-1', deps);
     expect(deps.insertFeedbackFn).toHaveBeenCalledTimes(2);
     expect(result).toEqual({ complete: true });
   });
 
-  it('persists the summary as body plus the score/dimensions/strengths/improvements fields', async () => {
-    const deps = baseDeps({
-      listFeedbackUserIdsForRoomFn: vi.fn().mockResolvedValue(['user-b']),
-      generateFn: vi.fn().mockResolvedValue(structuredFeedback()),
-    });
+  it('persists the summary as body plus the deterministic score/dimensions (with generated notes)/strengths/improvements fields', async () => {
+    const deps = cleanDeps();
     await generateAndPersistFeedbackForRoom('room-1', deps);
 
     expect(deps.insertFeedbackFn).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: 'user-a',
         body: 'Great job staying on topic.',
-        score: 82,
+        score: 100,
         strengths: ['Clear opening.'],
         improvements: ['Invite others in more.'],
-        dimensions: expect.arrayContaining([expect.objectContaining({ label: 'Content depth' })]),
+        dimensions: FEEDBACK_DIMENSION_LABELS.map((label) => ({ label, score: 100, note: 'Specific note.' })),
       })
     );
   });
 
-  it('skips participants who already have persisted feedback', async () => {
-    const deps = baseDeps({ listFeedbackUserIdsForRoomFn: vi.fn().mockResolvedValue(['user-a']) });
+  it('skips participants who already have persisted feedback, and only evaluates the pending one', async () => {
+    const deps = cleanDeps({ listFeedbackUserIdsForRoomFn: vi.fn().mockResolvedValue(['user-a']) });
     await generateAndPersistFeedbackForRoom('room-1', deps);
 
-    expect(deps.generateFn).toHaveBeenCalledTimes(1);
     expect(deps.insertFeedbackFn).toHaveBeenCalledTimes(1);
     expect(deps.insertFeedbackFn).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-b' }));
   });
 
   it('returns complete: true without calling Gemini or reading the transcript when everyone already has feedback', async () => {
-    const deps = baseDeps({ listFeedbackUserIdsForRoomFn: vi.fn().mockResolvedValue(['user-a', 'user-b']) });
+    const deps = cleanDeps({ listFeedbackUserIdsForRoomFn: vi.fn().mockResolvedValue(['user-a', 'user-b']) });
     const result = await generateAndPersistFeedbackForRoom('room-1', deps);
 
     expect(deps.listTranscriptLinesForRoomFn).not.toHaveBeenCalled();
-    expect(deps.generateFn).not.toHaveBeenCalled();
+    expect(deps.generateTranscriptAnalysisFn).not.toHaveBeenCalled();
     expect(result).toEqual({ complete: true });
   });
 
   // The real production incident (PROGRESS.md, 2026-07-29 B7): a dead
-  // Gemini service account 401'd every participant's call.
-  it('reports complete: false when every participant fails to generate', async () => {
-    const deps = baseDeps({ generateFn: vi.fn().mockRejectedValue(new Error('401 service account disabled')) });
+  // Gemini service account 401'd every call -- now the very first stage
+  // (Transcript Analysis) fails, which fails the whole room's evaluation
+  // run rather than any single student's.
+  it('reports complete: false and marks the evaluation run failed when the pipeline itself throws', async () => {
+    const deps = cleanDeps({ generateTranscriptAnalysisFn: vi.fn().mockRejectedValue(new Error('401 service account disabled')) });
     const result = await generateAndPersistFeedbackForRoom('room-1', deps);
 
     expect(deps.insertFeedbackFn).not.toHaveBeenCalled();
+    expect(deps.failEvaluationRunFn).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({ error: expect.stringMatching(/401/) })
+    );
+    expect(deps.completeEvaluationRunFn).not.toHaveBeenCalled();
     expect(result).toEqual({ complete: false });
   });
 
-  it('reports complete: false when only some participants succeed', async () => {
-    const generateFn = vi.fn().mockImplementation((prompt) => {
-      if (prompt.includes('only for Bilal')) return Promise.reject(new Error('quota exceeded'));
-      return Promise.resolve('feedback text');
+  it('reports complete: false when only some participants succeed, without losing the other\'s feedback', async () => {
+    const deps = cleanDeps({
+      generateEvaluationFeedbackFn: vi.fn().mockImplementation(async (prompt, ctx) => {
+        if (prompt.includes('Bilal')) return Promise.reject(new Error('quota exceeded'));
+        return {
+          summary: 'Great job staying on topic.',
+          dimensionNotes: ctx.dimensionLabels.map((label) => ({ label, note: 'Specific note.' })),
+          strengths: ['Clear opening.'],
+          improvements: ['Invite others in more.'],
+        };
+      }),
     });
-    const deps = baseDeps({ generateFn });
     const result = await generateAndPersistFeedbackForRoom('room-1', deps);
 
     expect(deps.insertFeedbackFn).toHaveBeenCalledTimes(1);
+    expect(deps.insertFeedbackFn).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-a' }));
     expect(result).toEqual({ complete: false });
   });
 
-  it('reports complete: false when generation succeeds but persisting fails', async () => {
-    const deps = baseDeps({ insertFeedbackFn: vi.fn().mockRejectedValue(new Error('unique constraint violation')) });
+  it('reports complete: false when generation succeeds but persisting the feedback row fails', async () => {
+    const deps = cleanDeps({ insertFeedbackFn: vi.fn().mockRejectedValue(new Error('unique constraint violation')) });
     const result = await generateAndPersistFeedbackForRoom('room-1', deps);
     expect(result).toEqual({ complete: false });
   });
 
-  it('still returns complete: true for the honest technical-issue message when the transcript is empty', async () => {
-    const deps = baseDeps({ listTranscriptLinesForRoomFn: vi.fn().mockResolvedValue([]) });
+  it('still returns complete: true for the honest technical-issue message when the transcript is empty, and never opens an evaluation run', async () => {
+    const deps = cleanDeps({ listTranscriptLinesForRoomFn: vi.fn().mockResolvedValue([]) });
     const result = await generateAndPersistFeedbackForRoom('room-1', deps);
 
-    expect(deps.generateFn).not.toHaveBeenCalled();
+    expect(deps.generateTranscriptAnalysisFn).not.toHaveBeenCalled();
+    expect(deps.insertEvaluationRunFn).not.toHaveBeenCalled();
     expect(deps.insertFeedbackFn).toHaveBeenCalledTimes(2);
+    expect(deps.insertFeedbackFn).toHaveBeenCalledWith(
+      expect.objectContaining({ body: TRANSCRIPTION_FAILED_MESSAGE, score: null, dimensions: [] })
+    );
     expect(result).toEqual({ complete: true });
+  });
+
+  it('opens an evaluation run before the pipeline starts and completes it once every stage succeeds, persisting evidence/criterion-results/confidence', async () => {
+    const deps = cleanDeps();
+    await generateAndPersistFeedbackForRoom('room-1', deps);
+
+    expect(deps.insertEvaluationRunFn).toHaveBeenCalledWith(
+      expect.objectContaining({ roomId: 'room-1', rubricVersion: expect.any(String), promptBundleVersion: expect.any(String), model: expect.any(String) })
+    );
+    expect(deps.insertEvaluationEvidenceFn).toHaveBeenCalledWith('run-1', expect.arrayContaining([expect.objectContaining({ participantUserId: 'user-a' })]));
+    expect(deps.insertEvaluationCriterionResultsFn).toHaveBeenCalledWith(
+      'run-1',
+      expect.arrayContaining([expect.objectContaining({ dimensionLabel: expect.any(String) })])
+    );
+    expect(deps.insertEvaluationConfidenceFn).toHaveBeenCalledWith(
+      'run-1',
+      expect.arrayContaining([expect.objectContaining({ participantUserId: 'user-a', confidence: expect.any(Number) })])
+    );
+    expect(deps.completeEvaluationRunFn).toHaveBeenCalledWith('run-1', expect.objectContaining({ completedAt: expect.any(String) }));
+    expect(deps.failEvaluationRunFn).not.toHaveBeenCalled();
+  });
+
+  it('marks the evaluation run failed (not completed) when no evidence survives verification, but still inserts the honest fallback feedback for every pending participant', async () => {
+    const fabricatedAnalysis = {
+      conversationUnderstanding: { summary: 'Discussed remote work tradeoffs.', topicSegments: [] },
+      evidenceLedger: [
+        {
+          utteranceIndexes: [0],
+          relatedUtteranceIndexes: [],
+          evidenceType: 'claim',
+          exactQuote: 'this was never actually said',
+          neutralDescription: 'States a claim.',
+          topicSegmentId: null,
+          extractionConfidence: 'high',
+        },
+      ],
+    };
+    const deps = cleanDeps({ generateTranscriptAnalysisFn: vi.fn().mockResolvedValue(fabricatedAnalysis) });
+    const result = await generateAndPersistFeedbackForRoom('room-1', deps);
+
+    expect(deps.generateCriterionEvaluationFn).not.toHaveBeenCalled();
+    expect(deps.failEvaluationRunFn).toHaveBeenCalledWith('run-1', expect.objectContaining({ error: 'insufficient_evidence' }));
+    expect(deps.completeEvaluationRunFn).not.toHaveBeenCalled();
+    expect(deps.insertFeedbackFn).toHaveBeenCalledTimes(2);
+    expect(deps.insertFeedbackFn).toHaveBeenCalledWith(expect.objectContaining({ body: TRANSCRIPTION_FAILED_MESSAGE }));
+    expect(result).toEqual({ complete: true });
+  });
+
+  // Regression: migration 0019 not yet applied to the live Supabase
+  // project (AC1's own still-pending note) would make every single room's
+  // insertEvaluationRunFn call throw (table doesn't exist) -- this must
+  // never cost a student their feedback, and must never burn through
+  // roomSweeper.js's retry budget on an unrelated infrastructure gap.
+  it('still generates and persists feedback normally when opening the evaluation run itself fails', async () => {
+    const deps = cleanDeps({ insertEvaluationRunFn: vi.fn().mockRejectedValue(new Error('relation "evaluation_runs" does not exist')) });
+    const result = await generateAndPersistFeedbackForRoom('room-1', deps);
+
+    expect(deps.insertFeedbackFn).toHaveBeenCalledTimes(2);
+    expect(deps.insertEvaluationEvidenceFn).not.toHaveBeenCalled();
+    expect(deps.completeEvaluationRunFn).not.toHaveBeenCalled();
+    expect(deps.failEvaluationRunFn).not.toHaveBeenCalled();
+    expect(result).toEqual({ complete: true });
+  });
+
+  it('still persists every participant\'s feedback row even when persisting the pipeline\'s own artifact tables fails', async () => {
+    const deps = cleanDeps({ insertEvaluationEvidenceFn: vi.fn().mockRejectedValue(new Error('connection reset')) });
+    const result = await generateAndPersistFeedbackForRoom('room-1', deps);
+
+    expect(deps.insertFeedbackFn).toHaveBeenCalledTimes(2);
+    expect(deps.failEvaluationRunFn).toHaveBeenCalledWith('run-1', expect.objectContaining({ error: expect.stringMatching(/connection reset/) }));
+    expect(result).toEqual({ complete: true });
+  });
+
+  // Free-tier survival: these tests deliberately omit the three
+  // generate*Fn overrides so the REAL default closures run (each calling
+  // the mocked llm/geminiClient.js functions), instead of the injected
+  // mocks every other test in this file uses. That is the only way to
+  // observe which model each stage actually defaults to.
+  describe('per-stage default Gemini model selection (free-tier quota spreading)', () => {
+    function depsWithRealDefaultClosures(overrides = {}) {
+      return cleanDeps({
+        generateTranscriptAnalysisFn: undefined,
+        generateCriterionEvaluationFn: undefined,
+        generateEvaluationFeedbackFn: undefined,
+        ...overrides,
+      });
+    }
+
+    afterEach(() => {
+      delete process.env.GEMINI_MODEL;
+      delete process.env.GEMINI_MODEL_TRANSCRIPT_ANALYSIS;
+      delete process.env.GEMINI_MODEL_CRITERION_EVALUATION;
+      delete process.env.GEMINI_MODEL_FEEDBACK;
+      vi.mocked(generateTranscriptAnalysis).mockReset();
+      vi.mocked(generateCriterionEvaluation).mockReset();
+      vi.mocked(generateEvaluationFeedback).mockReset();
+    });
+
+    it('defaults each stage to its own distinct model, not one shared model', async () => {
+      vi.mocked(generateTranscriptAnalysis).mockResolvedValue(cleanAnalysisResult());
+      vi.mocked(generateCriterionEvaluation).mockImplementation(async (_prompt, parseContext) => demonstratedResultFor(parseContext));
+      vi.mocked(generateEvaluationFeedback).mockImplementation(async (_prompt, { dimensionLabels }) => ({
+        summary: 'Great job staying on topic.',
+        dimensionNotes: dimensionLabels.map((label) => ({ label, note: 'Specific note.' })),
+        strengths: ['Clear opening.'],
+        improvements: ['Invite others in more.'],
+      }));
+
+      await generateAndPersistFeedbackForRoom('room-1', depsWithRealDefaultClosures());
+
+      expect(generateTranscriptAnalysis).toHaveBeenCalledWith(expect.any(String), { model: DEFAULT_TRANSCRIPT_ANALYSIS_MODEL });
+      expect(generateCriterionEvaluation).toHaveBeenCalledWith(expect.any(String), expect.anything(), { model: DEFAULT_CRITERION_EVALUATION_MODEL });
+      expect(generateEvaluationFeedback).toHaveBeenCalledWith(expect.any(String), expect.anything(), { model: DEFAULT_FEEDBACK_MODEL });
+      // The three defaults are genuinely distinct -- the whole point of
+      // this change is separate quota buckets, not the same model three
+      // times over under different variable names.
+      expect(new Set([DEFAULT_TRANSCRIPT_ANALYSIS_MODEL, DEFAULT_CRITERION_EVALUATION_MODEL, DEFAULT_FEEDBACK_MODEL]).size).toBe(3);
+    });
+
+    it('lets a stage-specific env var override just that one stage', async () => {
+      process.env.GEMINI_MODEL_CRITERION_EVALUATION = 'gemini-3-flash-preview';
+      vi.mocked(generateTranscriptAnalysis).mockResolvedValue(cleanAnalysisResult());
+      vi.mocked(generateCriterionEvaluation).mockImplementation(async (_prompt, parseContext) => demonstratedResultFor(parseContext));
+      vi.mocked(generateEvaluationFeedback).mockImplementation(async (_prompt, { dimensionLabels }) => ({
+        summary: 'Great job staying on topic.',
+        dimensionNotes: dimensionLabels.map((label) => ({ label, note: 'Specific note.' })),
+        strengths: ['Clear opening.'],
+        improvements: ['Invite others in more.'],
+      }));
+
+      await generateAndPersistFeedbackForRoom('room-1', depsWithRealDefaultClosures());
+
+      expect(generateCriterionEvaluation).toHaveBeenCalledWith(expect.any(String), expect.anything(), { model: 'gemini-3-flash-preview' });
+      // The other two stages are untouched by a stage-specific override.
+      expect(generateTranscriptAnalysis).toHaveBeenCalledWith(expect.any(String), { model: DEFAULT_TRANSCRIPT_ANALYSIS_MODEL });
+      expect(generateEvaluationFeedback).toHaveBeenCalledWith(expect.any(String), expect.anything(), { model: DEFAULT_FEEDBACK_MODEL });
+    });
+
+    it('falls back to the shared GEMINI_MODEL env var for every stage when no stage-specific var is set', async () => {
+      process.env.GEMINI_MODEL = 'gemini-3.5-flash';
+      vi.mocked(generateTranscriptAnalysis).mockResolvedValue(cleanAnalysisResult());
+      vi.mocked(generateCriterionEvaluation).mockImplementation(async (_prompt, parseContext) => demonstratedResultFor(parseContext));
+      vi.mocked(generateEvaluationFeedback).mockImplementation(async (_prompt, { dimensionLabels }) => ({
+        summary: 'Great job staying on topic.',
+        dimensionNotes: dimensionLabels.map((label) => ({ label, note: 'Specific note.' })),
+        strengths: ['Clear opening.'],
+        improvements: ['Invite others in more.'],
+      }));
+
+      await generateAndPersistFeedbackForRoom('room-1', depsWithRealDefaultClosures());
+
+      expect(generateTranscriptAnalysis).toHaveBeenCalledWith(expect.any(String), { model: 'gemini-3.5-flash' });
+      expect(generateCriterionEvaluation).toHaveBeenCalledWith(expect.any(String), expect.anything(), { model: 'gemini-3.5-flash' });
+      expect(generateEvaluationFeedback).toHaveBeenCalledWith(expect.any(String), expect.anything(), { model: 'gemini-3.5-flash' });
+    });
+
+    it('records all three stage models as one composite, still-greppable string on the persisted evaluation run', async () => {
+      vi.mocked(generateTranscriptAnalysis).mockResolvedValue(cleanAnalysisResult());
+      vi.mocked(generateCriterionEvaluation).mockImplementation(async (_prompt, parseContext) => demonstratedResultFor(parseContext));
+      vi.mocked(generateEvaluationFeedback).mockImplementation(async (_prompt, { dimensionLabels }) => ({
+        summary: 'Great job staying on topic.',
+        dimensionNotes: dimensionLabels.map((label) => ({ label, note: 'Specific note.' })),
+        strengths: ['Clear opening.'],
+        improvements: ['Invite others in more.'],
+      }));
+      const deps = depsWithRealDefaultClosures();
+
+      await generateAndPersistFeedbackForRoom('room-1', deps);
+
+      expect(deps.insertEvaluationRunFn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: `transcript:${DEFAULT_TRANSCRIPT_ANALYSIS_MODEL},criterion:${DEFAULT_CRITERION_EVALUATION_MODEL},feedback:${DEFAULT_FEEDBACK_MODEL}`,
+        })
+      );
+    });
   });
 });

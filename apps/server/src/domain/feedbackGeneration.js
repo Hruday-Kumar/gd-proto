@@ -1,11 +1,9 @@
-// Feedback generation orchestration (W6 core unit, PHASE1_PLAN.md §5).
-// Builds one scoped prompt per participant (domain/feedbackPrompt.js) and
-// calls the injected `generate` function for each. Each student's call is
-// isolated -- one student's Gemini error must never lose the shared
-// transcript or block any other student's feedback, and never leaks into
-// another student's result. `generate` is injected so this is testable
-// without a live Gemini key or network call.
-import { buildFeedbackPrompt } from './feedbackPrompt.js';
+// SPEC-0011 AC9 (chore/eval-cutover-cleanup, 2026-08-04): the old single-shot
+// generateFeedbackForRoom orchestration was removed once AC7's human
+// verification passed -- domain/evaluationPipeline.js is now the only
+// feedback-generation path. TRANSCRIPTION_FAILED_MESSAGE/
+// transcriptionFailedBody/DEFAULT_FEEDBACK_CONCURRENCY remain: they're
+// genuinely reused by evaluationPipeline.js/feedbackWorker.js, not dead code.
 
 // Shown instead of ever asking Gemini to judge a session it has no
 // evidence for -- an empty transcript means transcription itself failed
@@ -25,7 +23,10 @@ export const TRANSCRIPTION_FAILED_MESSAGE =
 // were a real (and very low) performance score. Guardrail #1 already
 // required this path never judge a session it has no evidence for; the
 // same reasoning now covers the numeric fields too.
-function transcriptionFailedBody() {
+// Exported so other stages (state 7's evaluationPipeline.js) can reuse this
+// exact shape/message for their own "we have no usable evidence, and it's
+// not the student's fault" short-circuit, instead of duplicating it.
+export function transcriptionFailedBody() {
   return { summary: TRANSCRIPTION_FAILED_MESSAGE, score: null, dimensions: [], strengths: [], improvements: [] };
 }
 
@@ -42,43 +43,3 @@ function transcriptionFailedBody() {
 // feedback. Overridable per call, and worth raising once the project is on a
 // paid Gemini tier with a known quota.
 export const DEFAULT_FEEDBACK_CONCURRENCY = 2;
-
-export async function generateFeedbackForRoom(
-  { topic, transcriptLines, participants },
-  { generate, concurrency = DEFAULT_FEEDBACK_CONCURRENCY }
-) {
-  if (transcriptLines.length === 0) {
-    return participants.map(({ userId }) => ({ userId, status: 'ok', body: transcriptionFailedBody() }));
-  }
-
-  // Never throws: one student's failure becomes that student's result, so it
-  // can't lose the shared transcript, abort the pool, or leak into anyone
-  // else's feedback -- the same isolation the old Promise.all had, preserved
-  // now that the calls are batched.
-  async function generateForParticipant({ userId }) {
-    try {
-      const prompt = buildFeedbackPrompt({ topic, transcriptLines, participants, targetUserId: userId });
-      const body = await generate(prompt);
-      return { userId, status: 'ok', body };
-    } catch (err) {
-      return { userId, status: 'error', error: err.message };
-    }
-  }
-
-  // Fixed-size worker pool over a shared cursor. Results are written back by
-  // index, so the returned order matches `participants` regardless of which
-  // calls finish first -- batching stays invisible to callers.
-  const results = Array.from({ length: participants.length });
-  let nextIndex = 0;
-
-  async function worker() {
-    for (let index = nextIndex++; index < participants.length; index = nextIndex++) {
-      results[index] = await generateForParticipant(participants[index]);
-    }
-  }
-
-  const workerCount = Math.max(1, Math.min(concurrency, participants.length));
-  await Promise.all(Array.from({ length: workerCount }, worker));
-
-  return results;
-}

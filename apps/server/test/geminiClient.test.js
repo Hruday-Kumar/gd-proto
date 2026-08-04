@@ -2,7 +2,14 @@
 // testable without a live API key or network call -- same DI pattern as
 // getSupabase()'s callers elsewhere in this codebase.
 import { describe, it, expect, vi } from 'vitest';
-import { generateTopic, generateFeedback, DEFAULT_GEMINI_MODEL } from '../src/llm/geminiClient.js';
+import {
+  generateTopic,
+  generateTranscriptAnalysis,
+  generateCriterionEvaluation,
+  generateEvaluationFeedback,
+  DEFAULT_GEMINI_MODEL,
+  DEFAULT_EVAL_TEMPERATURE,
+} from '../src/llm/geminiClient.js';
 
 function fakeFetchOk(text) {
   return vi.fn().mockResolvedValue({
@@ -107,64 +114,215 @@ describe('generateTopic', () => {
   });
 });
 
-// W6: unlike generateTopic, this takes an already-built prompt string
-// (domain/feedbackGeneration.js builds it per student) rather than
-// structured filters -- it's the raw `generate(prompt)` shape the
-// orchestrator calls directly.
-//
-// SPEC-0006 (BE-6/BE-7): feedback is now structured JSON, so the fake
-// Gemini response text must itself be a JSON string (parseFeedbackResponse
-// parses+validates it), and the request body must carry generationConfig's
-// responseMimeType/responseSchema so Gemini's structured-output mode is
-// actually requested, not just hoped for via prompt wording.
-describe('generateFeedback', () => {
-  const prompt = 'Write feedback only for Asha based on this transcript...';
+// SPEC-0011 AC9 (chore/eval-cutover-cleanup, 2026-08-04): generateFeedback
+// (the old single-shot W6 path) and its tests were removed once AC7's human
+// verification passed -- generateEvaluationFeedback below is the only
+// feedback-generation call now.
 
-  function fakeFeedbackJsonResponse() {
+// SPEC-0011 state 2: same raw generate(prompt) shape as the old generateFeedback,
+// for the Transcript Analysis stage's evidence-ledger extraction.
+describe('generateTranscriptAnalysis', () => {
+  const prompt = 'Analyze this transcript, numbered by utterance...';
+
+  function fakeTranscriptAnalysisJsonResponse() {
     return JSON.stringify({
-      summary: 'You stayed on topic and let others speak.',
-      score: 82,
-      dimensions: ['Content depth', 'Clarity', 'Confidence', 'Listening', 'Fluency'].map((label) => ({
-        label,
-        score: 80,
-        note: 'Specific note.',
-      })),
+      conversation_understanding: {
+        summary: 'Participants discussed remote work tradeoffs.',
+        topic_segments: [{ segment_id: 'TS1', description: 'Opening positions.' }],
+      },
+      evidence_ledger: [
+        {
+          utterance_indexes: [0],
+          evidence_type: 'claim',
+          exact_quote: 'remote work improves productivity',
+          neutral_description: 'States a position.',
+          extraction_confidence: 'high',
+        },
+      ],
+    });
+  }
+
+  it('throws when no API key is configured', async () => {
+    await expect(
+      generateTranscriptAnalysis(prompt, { apiKey: undefined, fetchImpl: fakeFetchOk('x') })
+    ).rejects.toThrow(/GEMINI_API_KEY/);
+  });
+
+  it('calls the configured model endpoint and returns the parsed evidence ledger', async () => {
+    const fetchImpl = fakeFetchOk(fakeTranscriptAnalysisJsonResponse());
+    const result = await generateTranscriptAnalysis(prompt, { apiKey: 'test-key', fetchImpl });
+    expect(result.conversationUnderstanding.summary).toMatch(/remote work tradeoffs/);
+    expect(result.evidenceLedger).toHaveLength(1);
+    const [url, options] = fetchImpl.mock.calls[0];
+    expect(url).toContain(DEFAULT_GEMINI_MODEL);
+    expect(JSON.parse(options.body).contents[0].parts[0].text).toBe(prompt);
+  });
+
+  it('requests Gemini JSON mode with the transcript analysis response schema', async () => {
+    const fetchImpl = fakeFetchOk(fakeTranscriptAnalysisJsonResponse());
+    await generateTranscriptAnalysis(prompt, { apiKey: 'test-key', fetchImpl });
+    const [, options] = fetchImpl.mock.calls[0];
+    const body = JSON.parse(options.body);
+    expect(body.generationConfig.responseMimeType).toBe('application/json');
+    expect(body.generationConfig.responseSchema.required).toEqual(
+      expect.arrayContaining(['conversation_understanding', 'evidence_ledger'])
+    );
+  });
+
+  it('pins a low, fixed temperature, same as generateFeedback', async () => {
+    const fetchImpl = fakeFetchOk(fakeTranscriptAnalysisJsonResponse());
+    await generateTranscriptAnalysis(prompt, { apiKey: 'test-key', fetchImpl });
+    const [, options] = fetchImpl.mock.calls[0];
+    expect(JSON.parse(options.body).generationConfig.temperature).toBe(DEFAULT_EVAL_TEMPERATURE);
+  });
+
+  it('throws a descriptive error when the API responds with a non-OK status', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => 'server error' });
+    await expect(generateTranscriptAnalysis(prompt, { apiKey: 'test-key', fetchImpl })).rejects.toThrow(/500/);
+  });
+});
+
+// SPEC-0011 state 3: same raw generate(prompt) shape, plus a parseContext
+// (participant tags / subdimension ids / evidence ids this specific call
+// offered) since validating a criterion-evaluation response needs to know
+// what was actually offered, unlike the fixed-schema stages above.
+describe('generateCriterionEvaluation', () => {
+  const prompt = 'Evaluate Clarity for all participants using only this evidence...';
+  const parseContext = {
+    dimensionLabel: 'Clarity',
+    tagToUserId: { P1: 'user-a' },
+    evidenceIds: ['E1'],
+    subdimensionIds: ['structure', 'word_choice', 'conciseness'],
+  };
+
+  function fakeCriterionEvaluationJsonResponse() {
+    return JSON.stringify({
+      participant_evaluations: [
+        {
+          participant_tag: 'P1',
+          subdimensions: ['structure', 'word_choice', 'conciseness'].map((subdimension_id) => ({
+            subdimension_id,
+            level: 'demonstrated',
+            evidence_ids: ['E1'],
+            reasoning: 'Grounded in the cited evidence.',
+          })),
+        },
+      ],
+    });
+  }
+
+  it('throws when no API key is configured', async () => {
+    await expect(
+      generateCriterionEvaluation(prompt, parseContext, { apiKey: undefined, fetchImpl: fakeFetchOk('x') })
+    ).rejects.toThrow(/GEMINI_API_KEY/);
+  });
+
+  it('calls the configured model endpoint and returns the parsed per-participant subdimension levels', async () => {
+    const fetchImpl = fakeFetchOk(fakeCriterionEvaluationJsonResponse());
+    const result = await generateCriterionEvaluation(prompt, parseContext, { apiKey: 'test-key', fetchImpl });
+    expect(result.dimensionLabel).toBe('Clarity');
+    expect(result.participantEvaluations).toHaveLength(1);
+    expect(result.participantEvaluations[0].participantUserId).toBe('user-a');
+    const [url, options] = fetchImpl.mock.calls[0];
+    expect(url).toContain(DEFAULT_GEMINI_MODEL);
+    expect(JSON.parse(options.body).contents[0].parts[0].text).toBe(prompt);
+  });
+
+  it('requests Gemini JSON mode with the criterion evaluation response schema', async () => {
+    const fetchImpl = fakeFetchOk(fakeCriterionEvaluationJsonResponse());
+    await generateCriterionEvaluation(prompt, parseContext, { apiKey: 'test-key', fetchImpl });
+    const [, options] = fetchImpl.mock.calls[0];
+    const body = JSON.parse(options.body);
+    expect(body.generationConfig.responseMimeType).toBe('application/json');
+    expect(body.generationConfig.responseSchema.required).toEqual(['participant_evaluations']);
+  });
+
+  it('pins a low, fixed temperature, same as the other evaluation-stage calls', async () => {
+    const fetchImpl = fakeFetchOk(fakeCriterionEvaluationJsonResponse());
+    await generateCriterionEvaluation(prompt, parseContext, { apiKey: 'test-key', fetchImpl });
+    const [, options] = fetchImpl.mock.calls[0];
+    expect(JSON.parse(options.body).generationConfig.temperature).toBe(DEFAULT_EVAL_TEMPERATURE);
+  });
+
+  it('rejects a response citing an evidence_id outside this call\'s parseContext, even though the shape is otherwise valid', async () => {
+    const badJson = JSON.parse(fakeCriterionEvaluationJsonResponse());
+    badJson.participant_evaluations[0].subdimensions[0].evidence_ids = ['E99'];
+    const fetchImpl = fakeFetchOk(JSON.stringify(badJson));
+    await expect(generateCriterionEvaluation(prompt, parseContext, { apiKey: 'test-key', fetchImpl })).rejects.toThrow(
+      /evidence_id not in the evidence ledger/i
+    );
+  });
+
+  it('throws a descriptive error when the API responds with a non-OK status', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => 'server error' });
+    await expect(generateCriterionEvaluation(prompt, parseContext, { apiKey: 'test-key', fetchImpl })).rejects.toThrow(/500/);
+  });
+});
+
+// SPEC-0011 state 7: the last stage in the pipeline, one call per
+// participant, from the already-validated scorecard + this participant's
+// own evidence -- same raw generate(prompt, parseContext) shape as
+// generateCriterionEvaluation, parseContext here is just the ordered
+// dimension label list this call's prompt offered.
+describe('generateEvaluationFeedback', () => {
+  const prompt = "Write feedback for Asha. Her scores are final, do not restate them differently...";
+  const parseContext = { dimensionLabels: ['Content depth', 'Clarity', 'Confidence', 'Listening', 'Fluency'] };
+
+  function fakeEvaluationFeedbackJsonResponse() {
+    return JSON.stringify({
+      summary: 'A constructive summary.',
+      dimension_notes: parseContext.dimensionLabels.map((label) => ({ label, note: `Note about ${label}.` })),
       strengths: ['Clear opening.'],
       improvements: ['Invite others in more.'],
     });
   }
 
   it('throws when no API key is configured', async () => {
-    await expect(generateFeedback(prompt, { apiKey: undefined, fetchImpl: fakeFetchOk('x') })).rejects.toThrow(
-      /GEMINI_API_KEY/
-    );
+    await expect(
+      generateEvaluationFeedback(prompt, parseContext, { apiKey: undefined, fetchImpl: fakeFetchOk('x') })
+    ).rejects.toThrow(/GEMINI_API_KEY/);
   });
 
-  it('calls the configured model endpoint with the given prompt and returns the parsed structured feedback', async () => {
-    const fetchImpl = fakeFetchOk(fakeFeedbackJsonResponse());
-    const result = await generateFeedback(prompt, { apiKey: 'test-key', fetchImpl });
-    expect(result.summary).toBe('You stayed on topic and let others speak.');
-    expect(result.score).toBe(82);
-    expect(result.dimensions).toHaveLength(5);
+  it('calls the configured model endpoint and returns the parsed feedback text', async () => {
+    const fetchImpl = fakeFetchOk(fakeEvaluationFeedbackJsonResponse());
+    const result = await generateEvaluationFeedback(prompt, parseContext, { apiKey: 'test-key', fetchImpl });
+    expect(result.summary).toBe('A constructive summary.');
+    expect(result.dimensionNotes).toHaveLength(5);
     const [url, options] = fetchImpl.mock.calls[0];
     expect(url).toContain(DEFAULT_GEMINI_MODEL);
     expect(JSON.parse(options.body).contents[0].parts[0].text).toBe(prompt);
   });
 
-  it('requests Gemini JSON mode with the feedback response schema', async () => {
-    const fetchImpl = fakeFetchOk(fakeFeedbackJsonResponse());
-    await generateFeedback(prompt, { apiKey: 'test-key', fetchImpl });
+  it('requests Gemini JSON mode with the evaluation feedback response schema, which has no score field', async () => {
+    const fetchImpl = fakeFetchOk(fakeEvaluationFeedbackJsonResponse());
+    await generateEvaluationFeedback(prompt, parseContext, { apiKey: 'test-key', fetchImpl });
     const [, options] = fetchImpl.mock.calls[0];
     const body = JSON.parse(options.body);
     expect(body.generationConfig.responseMimeType).toBe('application/json');
-    expect(body.generationConfig.responseSchema).toBeTruthy();
     expect(body.generationConfig.responseSchema.required).toEqual(
-      expect.arrayContaining(['summary', 'score', 'dimensions', 'strengths', 'improvements'])
+      expect.arrayContaining(['summary', 'dimension_notes', 'strengths', 'improvements'])
+    );
+    expect(JSON.stringify(body.generationConfig.responseSchema).toLowerCase()).not.toMatch(/score/);
+  });
+
+  it('pins a low, fixed temperature, same as the other evaluation-stage calls', async () => {
+    const fetchImpl = fakeFetchOk(fakeEvaluationFeedbackJsonResponse());
+    await generateEvaluationFeedback(prompt, parseContext, { apiKey: 'test-key', fetchImpl });
+    const [, options] = fetchImpl.mock.calls[0];
+    expect(JSON.parse(options.body).generationConfig.temperature).toBe(DEFAULT_EVAL_TEMPERATURE);
+  });
+
+  it('rejects a response whose dimension_notes labels do not match this call\'s parseContext order', async () => {
+    const badJson = JSON.parse(fakeEvaluationFeedbackJsonResponse());
+    badJson.dimension_notes[0].label = 'Made up dimension';
+    const fetchImpl = fakeFetchOk(JSON.stringify(badJson));
+    await expect(generateEvaluationFeedback(prompt, parseContext, { apiKey: 'test-key', fetchImpl })).rejects.toThrow(
+      /unexpected label/i
     );
   });
 
   it('throws a descriptive error when the API responds with a non-OK status', async () => {
     const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => 'server error' });
-    await expect(generateFeedback(prompt, { apiKey: 'test-key', fetchImpl })).rejects.toThrow(/500/);
+    await expect(generateEvaluationFeedback(prompt, parseContext, { apiKey: 'test-key', fetchImpl })).rejects.toThrow(/500/);
   });
 });
