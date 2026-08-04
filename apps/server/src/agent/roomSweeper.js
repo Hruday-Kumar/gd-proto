@@ -21,6 +21,8 @@ import {
 } from '../domain/roomSweep.js';
 import { generateAndPersistFeedbackForRoom } from './feedbackWorker.js';
 import { getAgentWorkerStatus, isTranscriptionActive } from './roomAgent.js';
+import { MAX_CONCURRENT_FEEDBACK_ROOMS } from '../domain/concurrencyCaps.js';
+import { runWithConcurrencyLimit } from '../domain/concurrency.js';
 
 // N1 (audit comparison, 2026-07-29): one feedback attempt for one room --
 // used both right after a room ends and on a later retry, since a retry is
@@ -103,17 +105,20 @@ export async function sweepExpiredRooms({
   markFeedbackGeneratedFn = markFeedbackGenerated,
   agentStatus = getAgentWorkerStatus(),
   isTranscriptionActiveFn = isTranscriptionActive,
+  feedbackRoomConcurrency = MAX_CONCURRENT_FEEDBACK_ROOMS,
   now = Date.now(),
 } = {}) {
   const feedbackDeps = { generateFeedbackFn, claimFeedbackAttemptFn, markFeedbackGeneratedFn, agentStatus, isTranscriptionActiveFn };
-  // Every feedback attempt this tick dispatches, collected rather than
-  // awaited one at a time -- a slow Gemini call for one room must not
-  // delay ending or retrying any other room in this same tick. Settled
-  // together at the end so this function's own promise reflects "this
-  // tick's work is done" (useful for tests and for anything that ever
-  // wants to observe tick completion) without changing when the *next*
-  // tick fires -- startRoomSweeper's setInterval already doesn't wait on
-  // the previous tick's promise either way.
+  // Every feedback attempt this tick would dispatch, collected as thunks
+  // rather than started immediately -- ending/retrying a room (above) must
+  // never wait on another room's feedback, but actually *generating*
+  // feedback is now capped system-wide (Phase 1 pilot concurrency cap,
+  // ACTION_PLAN.md 2026-08-04) to protect the shared Gemini free-tier
+  // quota. Run through runWithConcurrencyLimit at the end so this
+  // function's own promise still reflects "this tick's work is done"
+  // without changing when the *next* tick fires -- startRoomSweeper's
+  // setInterval already doesn't wait on the previous tick's promise either
+  // way.
   const pendingFeedback = [];
 
   let liveRooms;
@@ -145,7 +150,7 @@ export async function sweepExpiredRooms({
     // Losing the claim is normal, not an error -- someone else already
     // ended this room.
     if (claimed) {
-      pendingFeedback.push(
+      pendingFeedback.push(() =>
         attemptFeedback(room.id, claimed.feedback_attempts ?? 0, claimed.ended_at, now, feedbackDeps).catch((e) =>
           console.error(`[feedback] unexpected error dispatching room ${room.id}: ${e.message}`)
         )
@@ -170,14 +175,14 @@ export async function sweepExpiredRooms({
 
   const dueForRetry = findRoomsReadyForFeedbackRetry(retryCandidates, now);
   for (const room of dueForRetry) {
-    pendingFeedback.push(
+    pendingFeedback.push(() =>
       attemptFeedback(room.id, room.feedback_attempts ?? 0, room.ended_at, now, feedbackDeps).catch((e) =>
         console.error(`[feedback] unexpected error retrying room ${room.id}: ${e.message}`)
       )
     );
   }
 
-  await Promise.allSettled(pendingFeedback);
+  await runWithConcurrencyLimit(pendingFeedback, feedbackRoomConcurrency);
 }
 
 // Runs sweepExpiredRooms on a timer. Returns a stop function so index.js
@@ -185,9 +190,23 @@ export async function sweepExpiredRooms({
 // interval left running doesn't hold the process open by itself (see
 // .unref() below), but clearing it is still the honest thing to do rather
 // than leaving a dangling timer past the point the server is shutting down.
-export function startRoomSweeper({ intervalMs = 3000, ...deps } = {}) {
+export function startRoomSweeper({ intervalMs = 3000, sweepFn = sweepExpiredRooms, ...deps } = {}) {
+  // Phase 1 (ACTION_PLAN.md, 2026-08-04): the DB claim inside a single tick
+  // already stops two ticks from double-dispatching the same room's
+  // feedback, but nothing stopped two ticks from running at all -- if one
+  // tick's Gemini calls run longer than intervalMs (routine), setInterval
+  // fires the next tick anyway, doubling every DB read/write in flight for
+  // no benefit. Skip a tick outright while the previous one is still
+  // running instead.
+  let inFlight = false;
   const interval = setInterval(() => {
-    sweepExpiredRooms(deps).catch((e) => console.error(`[sweep] unexpected error: ${e.message}`));
+    if (inFlight) return;
+    inFlight = true;
+    sweepFn(deps)
+      .catch((e) => console.error(`[sweep] unexpected error: ${e.message}`))
+      .finally(() => {
+        inFlight = false;
+      });
   }, intervalMs);
   interval.unref?.();
   return () => clearInterval(interval);

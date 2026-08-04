@@ -19,5 +19,5 @@ export const CURRENT_CONSENT_VERSION = 2;
 
 export function canEnableMic(latestConsent, currentVersion = CURRENT_CONSENT_VERSION) {
   if (!latestConsent) return false;
-  return latestConsent.consent_version >= currentVersion;
+  return latestConsent.consent_version === currentVersion;
 }

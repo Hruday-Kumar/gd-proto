@@ -11,7 +11,8 @@ import { getFeedbackForRoomAndUser, rateFeedback } from '../../db/feedback.js';
 import { listParticipants, removeParticipant, listParticipantsForRooms } from '../../db/roomParticipants.js';
 import { listProfiles } from '../../db/profiles.js';
 import { listTranscriptLinesForRoom } from '../../db/transcriptLines.js';
-import { listOpenRooms } from '../../db/rooms.js';
+import { listOpenRooms, listLiveRooms } from '../../db/rooms.js';
+import { MAX_CONCURRENT_LIVE_ROOMS } from '../../domain/concurrencyCaps.js';
 import { createLlmRateLimiter, createRoomActionRateLimiter } from '../middleware/rateLimit.js';
 import {
   isRoomFull,
@@ -80,6 +81,7 @@ export function createRoomsRouter(requireAuth, deps) {
     listTranscriptLinesForRoomFn = listTranscriptLinesForRoom,
     listOpenRoomsFn = listOpenRooms,
     listParticipantsForRoomsFn = listParticipantsForRooms,
+    listLiveRoomsFn = listLiveRooms,
     llmRateLimiter = createLlmRateLimiter(),
     roomActionRateLimiter = createRoomActionRateLimiter(),
   } = deps;
@@ -307,6 +309,16 @@ export function createRoomsRouter(requireAuth, deps) {
     if (!room) return res.status(404).json({ error: 'Room not found' });
     if (room.created_by !== req.userId) {
       return res.status(403).json({ error: 'Only the room creator can start it' });
+    }
+
+    // Phase 1 pilot concurrency cap (ACTION_PLAN.md, 2026-08-04): each live
+    // room holds open LiveKit connections, an AssemblyAI stream per
+    // participant, and (at the end) a Gemini feedback call -- all against
+    // a pilot-scale budget (CLAUDE.md's fixed constraint). Checked here,
+    // not at creation, since a 'waiting' room costs nothing yet.
+    const liveRooms = await listLiveRoomsFn();
+    if (liveRooms.length >= MAX_CONCURRENT_LIVE_ROOMS) {
+      return res.status(409).json({ error: 'Too many rooms in session right now -- please try again shortly' });
     }
 
     let started;

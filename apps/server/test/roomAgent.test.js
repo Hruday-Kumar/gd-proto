@@ -18,6 +18,10 @@ import {
   isTranscriptionActive,
 } from '../src/agent/roomAgent.js';
 
+function fakeParticipants(count) {
+  return Array.from({ length: count }, (_, i) => ({ id: `p${i}`, user_id: `p${i}` }));
+}
+
 function deferred() {
   let resolve;
   const promise = new Promise((r) => { resolve = r; });
@@ -109,6 +113,67 @@ describe('startTranscriptionForRoom', () => {
 
     expect(mintTokenFn).toHaveBeenCalledWith('transcriber', roomId, expect.objectContaining({ hidden: false }));
     await stopTranscriptionForRoom(roomId);
+  });
+
+  // Phase 1 pilot concurrency cap (ACTION_PLAN.md, 2026-08-04): each
+  // participant costs one metered, rate-limited AssemblyAI socket
+  // (LESSONS.md) -- system-wide, not just per room. maxConcurrentStreams
+  // is injectable so this is provable with a couple of small fake rooms
+  // instead of the real 60-stream production budget.
+  describe('transcription stream cap', () => {
+    it('refuses to start transcription once the cap would be exceeded, and records a dispatch failure', async () => {
+      const connect = vi.fn().mockResolvedValue(undefined);
+      const roomA = 'room-stream-cap-a';
+      const roomB = 'room-stream-cap-b';
+
+      await startTranscriptionForRoom(
+        { id: roomA, durationSeconds: 0 },
+        { ...baseOpts, listParticipantsFn: async () => fakeParticipants(2), roomFactory: () => fakeRoom({ connect }), maxConcurrentStreams: 2 }
+      );
+
+      const roomBConnect = vi.fn().mockResolvedValue(undefined);
+      await startTranscriptionForRoom(
+        { id: roomB, durationSeconds: 0 },
+        {
+          ...baseOpts,
+          listParticipantsFn: async () => fakeParticipants(1),
+          roomFactory: () => fakeRoom({ connect: roomBConnect }),
+          maxConcurrentStreams: 2,
+        }
+      );
+
+      // roomA's 2 streams already fill the cap of 2 -- roomB must not connect.
+      expect(roomBConnect).not.toHaveBeenCalled();
+      expect(isTranscriptionActive(roomB)).toBe(false);
+      expect(getAgentWorkerStatus().getStatus().lastFailure).toMatchObject({ roomId: roomB });
+
+      await stopTranscriptionForRoom(roomA);
+    });
+
+    it('frees its share of the cap once the room stops, letting a new room start', async () => {
+      const roomA = 'room-stream-cap-free-a';
+      const roomB = 'room-stream-cap-free-b';
+
+      await startTranscriptionForRoom(
+        { id: roomA, durationSeconds: 0 },
+        { ...baseOpts, listParticipantsFn: async () => fakeParticipants(2), roomFactory: () => fakeRoom({ connect: vi.fn().mockResolvedValue(undefined) }), maxConcurrentStreams: 2 }
+      );
+      await stopTranscriptionForRoom(roomA);
+
+      const roomBConnect = vi.fn().mockResolvedValue(undefined);
+      await startTranscriptionForRoom(
+        { id: roomB, durationSeconds: 0 },
+        {
+          ...baseOpts,
+          listParticipantsFn: async () => fakeParticipants(2),
+          roomFactory: () => fakeRoom({ connect: roomBConnect }),
+          maxConcurrentStreams: 2,
+        }
+      );
+
+      expect(roomBConnect).toHaveBeenCalledTimes(1);
+      await stopTranscriptionForRoom(roomB);
+    });
   });
 });
 

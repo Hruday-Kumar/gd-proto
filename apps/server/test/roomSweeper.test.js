@@ -14,7 +14,7 @@
 // decision, and agent/feedbackWorker.js for the { complete } contract this
 // file reacts to.
 import { describe, it, expect, vi } from 'vitest';
-import { sweepExpiredRooms } from '../src/agent/roomSweeper.js';
+import { sweepExpiredRooms, startRoomSweeper } from '../src/agent/roomSweeper.js';
 import { FEEDBACK_RETRY_MAX_ATTEMPTS, FEEDBACK_FLUSH_MAX_WAIT_MS } from '../src/domain/roomSweep.js';
 
 const NOW = Date.parse('2026-07-29T10:00:00.000Z');
@@ -547,6 +547,38 @@ describe('sweepExpiredRooms', () => {
     });
   });
 
+  // Phase 1 (ACTION_PLAN.md, 2026-08-04): the DB claim inside a single tick
+  // already stops two *ticks* from double-dispatching the same room's
+  // feedback (see the C3 comment above), but nothing stopped two *ticks*
+  // from running concurrently in the first place -- if one tick's Gemini
+  // calls run longer than intervalMs (routine), setInterval fires the next
+  // tick anyway, doubling up every DB read/write in flight. sweepFn is
+  // injectable so this can be proven without a real timer or real I/O.
+  describe('startRoomSweeper in-flight guard', () => {
+    it('skips starting a new tick while the previous tick is still running', async () => {
+      vi.useFakeTimers();
+      let resolveFirstTick;
+      const sweepFn = vi
+        .fn()
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveFirstTick = resolve; }))
+        .mockResolvedValue(undefined);
+
+      const stop = startRoomSweeper({ intervalMs: 1000, sweepFn });
+
+      await vi.advanceTimersByTimeAsync(1000); // tick 1 starts, never resolves yet
+      await vi.advanceTimersByTimeAsync(1000); // tick 2 due, but tick 1 still in flight
+      expect(sweepFn).toHaveBeenCalledTimes(1);
+
+      resolveFirstTick();
+      await Promise.resolve(); // let the in-flight flag clear
+      await vi.advanceTimersByTimeAsync(1000); // tick 3 due, tick 1 is done -- allowed
+      expect(sweepFn).toHaveBeenCalledTimes(2);
+
+      stop();
+      vi.useRealTimers();
+    });
+  });
+
   describe('recording the outcome (continued)', () => {
     it('records a feedback success again after a prior failure, once a room completes on retry', async () => {
       const listLiveRoomsFn = vi.fn().mockResolvedValue([]);
@@ -565,6 +597,48 @@ describe('sweepExpiredRooms', () => {
       });
 
       expect(agentStatus.recordFeedbackSuccess).toHaveBeenCalledWith('recovered');
+    });
+  });
+
+  // Phase 1 pilot concurrency cap (ACTION_PLAN.md, 2026-08-04): distinct
+  // from DEFAULT_FEEDBACK_CONCURRENCY (feedbackGeneration.js), which caps
+  // participants *within one room's* feedback in parallel -- this caps how
+  // many *rooms* generate feedback at once, system-wide, to protect the
+  // shared Gemini free-tier quota.
+  describe('feedback room concurrency cap', () => {
+    it('never runs two rooms\' feedback generation at the same time, by default', async () => {
+      const rooms = [expiredRoom({ id: 'a' }), expiredRoom({ id: 'b' }), expiredRoom({ id: 'c' })];
+      const listLiveRoomsFn = vi.fn().mockResolvedValue(rooms);
+      const updateRoomStatusFn = vi.fn().mockImplementation((id) => Promise.resolve({ id, status: 'ended', feedback_attempts: 0 }));
+
+      // Tracks how many generateFeedbackFn calls are simultaneously
+      // in-flight -- a real overlap window (the setTimeout), not a
+      // microtask-ordering assumption, so this is deterministic
+      // regardless of how the runtime happens to schedule promises.
+      let inFlight = 0;
+      let maxInFlight = 0;
+      const generateFeedbackFn = vi.fn().mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            inFlight += 1;
+            maxInFlight = Math.max(maxInFlight, inFlight);
+            setTimeout(() => {
+              inFlight -= 1;
+              resolve({ complete: true });
+            }, 5);
+          })
+      );
+
+      await sweepExpiredRooms({
+        listLiveRoomsFn,
+        updateRoomStatusFn,
+        generateFeedbackFn,
+        ...baseFeedbackDeps(),
+        now: NOW,
+      });
+
+      expect(generateFeedbackFn).toHaveBeenCalledTimes(3);
+      expect(maxInFlight).toBe(1);
     });
   });
 });

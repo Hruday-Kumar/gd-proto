@@ -32,4 +32,16 @@ describe('canEnableMic', () => {
     expect(canEnableMic({ consent_version: 1 })).toBe(false);
     expect(CURRENT_CONSENT_VERSION).toBeGreaterThanOrEqual(2);
   });
+
+  // Phase 1 security gate (ACTION_PLAN.md, 2026-08-04): a `>=` comparison
+  // treats any consent_version above the current constant as valid --
+  // meaning a corrupted row, or a future rollback of CURRENT_CONSENT_VERSION
+  // to fix a bad bump, would silently keep letting a student's mic on
+  // without them ever having agreed to the version now in force. Consent
+  // must match the exact version currently disclosed, not merely be "at
+  // least" it.
+  it('requires an exact version match, not merely a version at or above current', () => {
+    const ahead = { consent_version: CURRENT_CONSENT_VERSION + 1, granted_at: new Date().toISOString() };
+    expect(canEnableMic(ahead)).toBe(false);
+  });
 });

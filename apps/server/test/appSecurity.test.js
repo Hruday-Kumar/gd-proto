@@ -38,7 +38,10 @@ describe('CORS allowlist wiring', () => {
   // NODE_ENV behavior from whatever happens to be in this environment.
   it('does not allow the localhost dev origin in production', async () => {
     vi.stubEnv('ALLOWED_ORIGINS', '');
-    const app = createApp({ supabaseUrl: TEST_SUPABASE_URL, nodeEnv: 'production' });
+    // healthCheckToken required in production since Phase 1 (ACTION_PLAN.md,
+    // 2026-08-04, see health.test.js) -- unrelated to what this test
+    // actually verifies (CORS), so it's just supplied to isolate that.
+    const app = createApp({ supabaseUrl: TEST_SUPABASE_URL, nodeEnv: 'production', healthCheckToken: 'test-token' });
     const res = await request(app).get('/health').set('Origin', 'http://localhost:5173');
     expect(res.headers['access-control-allow-origin']).toBeUndefined();
     vi.unstubAllEnvs();

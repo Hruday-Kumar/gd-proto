@@ -11,6 +11,7 @@ import { createRoomsRouter } from '../src/api/routes/rooms.js';
 import { createLlmRateLimiter, createRoomActionRateLimiter } from '../src/api/middleware/rateLimit.js';
 import { CURRENT_CONSENT_VERSION } from '../src/domain/consent.js';
 import { DEFAULT_MAX_ROOM_PARTICIPANTS } from '../src/domain/roomCapacity.js';
+import { MAX_CONCURRENT_LIVE_ROOMS } from '../src/domain/concurrencyCaps.js';
 import { DEFAULT_VISIBILITY } from '../src/domain/roomVisibility.js';
 import { DEFAULT_LEVEL } from '../src/domain/roomLevel.js';
 
@@ -67,6 +68,7 @@ function baseDeps(overrides = {}) {
     listTranscriptLinesForRoomFn: vi.fn().mockResolvedValue([]),
     listOpenRoomsFn: vi.fn().mockResolvedValue([]),
     listParticipantsForRoomsFn: vi.fn().mockResolvedValue([]),
+    listLiveRoomsFn: vi.fn().mockResolvedValue([]),
     ...overrides,
   };
 }
@@ -738,6 +740,35 @@ describe('POST /api/rooms/:id/start', () => {
     expect(res.status).toBe(403);
     expect(deps.updateRoomStatus).not.toHaveBeenCalled();
     expect(deps.startTranscriptionFn).not.toHaveBeenCalled();
+  });
+
+  // Phase 1 pilot concurrency cap (ACTION_PLAN.md, 2026-08-04): at most
+  // MAX_CONCURRENT_LIVE_ROOMS rooms may be 'live' system-wide at once --
+  // each one holds open LiveKit connections, an AssemblyAI stream per
+  // participant, and (at the end) a Gemini feedback call, all against a
+  // pilot-scale budget (CLAUDE.md's fixed constraint).
+  it('409s and refuses to start a room once MAX_CONCURRENT_LIVE_ROOMS are already live', async () => {
+    const alreadyLive = Array.from({ length: MAX_CONCURRENT_LIVE_ROOMS }, (_, i) => ({ id: `live-${i}` }));
+    const deps = baseDeps({
+      getRoomById: vi.fn().mockResolvedValue({ id: 'r1', status: 'waiting', duration_seconds: 300, created_by: 'user-1' }),
+      listLiveRoomsFn: vi.fn().mockResolvedValue(alreadyLive),
+    });
+    const app = buildApp(deps);
+    const res = await request(app).post('/api/rooms/r1/start').send();
+    expect(res.status).toBe(409);
+    expect(deps.updateRoomStatus).not.toHaveBeenCalled();
+    expect(deps.startTranscriptionFn).not.toHaveBeenCalled();
+  });
+
+  it('still allows starting a room when below the concurrent-room cap', async () => {
+    const belowCap = Array.from({ length: MAX_CONCURRENT_LIVE_ROOMS - 1 }, (_, i) => ({ id: `live-${i}` }));
+    const deps = baseDeps({
+      getRoomById: vi.fn().mockResolvedValue({ id: 'r1', status: 'waiting', duration_seconds: 300, created_by: 'user-1' }),
+      listLiveRoomsFn: vi.fn().mockResolvedValue(belowCap),
+    });
+    const app = buildApp(deps);
+    const res = await request(app).post('/api/rooms/r1/start').send();
+    expect(res.status).toBe(200);
   });
 });
 
