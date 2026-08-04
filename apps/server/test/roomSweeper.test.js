@@ -599,4 +599,46 @@ describe('sweepExpiredRooms', () => {
       expect(agentStatus.recordFeedbackSuccess).toHaveBeenCalledWith('recovered');
     });
   });
+
+  // Phase 1 pilot concurrency cap (ACTION_PLAN.md, 2026-08-04): distinct
+  // from DEFAULT_FEEDBACK_CONCURRENCY (feedbackGeneration.js), which caps
+  // participants *within one room's* feedback in parallel -- this caps how
+  // many *rooms* generate feedback at once, system-wide, to protect the
+  // shared Gemini free-tier quota.
+  describe('feedback room concurrency cap', () => {
+    it('never runs two rooms\' feedback generation at the same time, by default', async () => {
+      const rooms = [expiredRoom({ id: 'a' }), expiredRoom({ id: 'b' }), expiredRoom({ id: 'c' })];
+      const listLiveRoomsFn = vi.fn().mockResolvedValue(rooms);
+      const updateRoomStatusFn = vi.fn().mockImplementation((id) => Promise.resolve({ id, status: 'ended', feedback_attempts: 0 }));
+
+      // Tracks how many generateFeedbackFn calls are simultaneously
+      // in-flight -- a real overlap window (the setTimeout), not a
+      // microtask-ordering assumption, so this is deterministic
+      // regardless of how the runtime happens to schedule promises.
+      let inFlight = 0;
+      let maxInFlight = 0;
+      const generateFeedbackFn = vi.fn().mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            inFlight += 1;
+            maxInFlight = Math.max(maxInFlight, inFlight);
+            setTimeout(() => {
+              inFlight -= 1;
+              resolve({ complete: true });
+            }, 5);
+          })
+      );
+
+      await sweepExpiredRooms({
+        listLiveRoomsFn,
+        updateRoomStatusFn,
+        generateFeedbackFn,
+        ...baseFeedbackDeps(),
+        now: NOW,
+      });
+
+      expect(generateFeedbackFn).toHaveBeenCalledTimes(3);
+      expect(maxInFlight).toBe(1);
+    });
+  });
 });

@@ -22,6 +22,7 @@ import { listLiveRooms } from '../db/rooms.js';
 import { createAgentWorkerStatus } from '../domain/agentWorkerStatus.js';
 import { roomsNeedingAgent } from '../domain/roomRecovery.js';
 import { withRetry } from '../domain/retry.js';
+import { MAX_CONCURRENT_TRANSCRIPTION_STREAMS } from '../domain/concurrencyCaps.js';
 
 // One tracker for the whole process (W8) -- api/health.js reads it at
 // GET /health/agent. Exported via a getter, not the object itself, so
@@ -36,7 +37,11 @@ export function getAgentWorkerStatus() {
 // smoke test used).
 const STOP_GRACE_MS = 4000;
 
-const activeRooms = new Map(); // roomId -> { room, timeout, transcriber, pendingPersists, stopPromise }
+const activeRooms = new Map(); // roomId -> { room, timeout, transcriber, pendingPersists, stopPromise, participantCount }
+// Phase 1 pilot concurrency cap (ACTION_PLAN.md, 2026-08-04): each
+// participant costs one metered, rate-limited AssemblyAI socket
+// (LESSONS.md) -- summed across every active room, not just per room.
+let activeStreamCount = 0;
 // N4 (audit comparison, 2026-07-29): a room moves here the instant its stop
 // begins, and out again only once every persisted write it triggered has
 // actually landed -- see isTranscriptionActive() below.
@@ -68,12 +73,23 @@ export async function startTranscriptionForRoom(
     // failure instead of giving up on the first hiccup.
     connectRetryAttempts = 3,
     connectRetryDelayMs = 1000,
+    maxConcurrentStreams = MAX_CONCURRENT_TRANSCRIPTION_STREAMS,
   } = {}
 ) {
   if (activeRooms.has(roomId)) return; // already transcribing this room
 
   try {
     const participants = await listParticipantsFn(roomId);
+
+    if (activeStreamCount + participants.length > maxConcurrentStreams) {
+      const err = new Error(
+        `transcription stream cap reached (${activeStreamCount}/${maxConcurrentStreams} active, room ${roomId} needs ${participants.length})`
+      );
+      agentStatus.recordDispatchFailure(roomId, err);
+      console.error(`[agent] refusing to start transcription for room ${roomId}: ${err.message}`);
+      return;
+    }
+
     const token = await mintTokenFn('transcriber', roomId, {
       name: 'Transcriber',
       canPublish: false,
@@ -105,7 +121,7 @@ export async function startTranscriptionForRoom(
     // known -- entry.pendingPersists is what lets stop() (N4, audit
     // comparison 2026-07-29) wait for every transcript write this room's
     // agent has issued, not just fire-and-forget them.
-    const entry = { room, timeout: null, transcriber: null, pendingPersists: [], stopPromise: null };
+    const entry = { room, timeout: null, transcriber: null, pendingPersists: [], stopPromise: null, participantCount: participants.length };
 
     const encoder = new TextEncoder();
     const transcriber = attachTranscriberFn(room, {
@@ -150,6 +166,7 @@ export async function startTranscriptionForRoom(
     }, durationSeconds * 1000 + STOP_GRACE_MS);
 
     activeRooms.set(roomId, entry);
+    activeStreamCount += entry.participantCount;
     agentStatus.recordDispatchSuccess(roomId);
   } catch (err) {
     agentStatus.recordDispatchFailure(roomId, err);
@@ -172,6 +189,7 @@ export async function stopTranscriptionForRoom(roomId) {
     // gap where it would wrongly report this room as done (N4, audit
     // comparison 2026-07-29).
     activeRooms.delete(roomId);
+    activeStreamCount = Math.max(0, activeStreamCount - entry.participantCount);
     flushingRooms.add(roomId);
     agentStatus.recordRoomStopped(roomId);
     try {
