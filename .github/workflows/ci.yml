@@ -29,18 +29,27 @@ jobs:
       - run: npm ci
       - run: npx oxlint apps/server/src apps/server/test
 
-  # N8 (audit 2026-07-29): the two RLS isolation tests
-  # (historyRlsIsolation.test.js, roomParticipantsRlsIsolation.test.js)
-  # prove guardrail #4's "own history only" and H8's seating-lockdown are
-  # enforced by Postgres RLS itself, not an app-level filter -- but they
-  # need real Supabase Auth users signed in against a live project, so
-  # they self-skip (describe.skipIf) whenever SUPABASE_URL/
-  # SUPABASE_ANON_KEY/SUPABASE_SERVICE_ROLE_KEY aren't set. The `test` job
-  # above never sets them, so these two files have been silently skipping
-  # in CI since they were written -- this job is what actually executes
-  # them, once the three secrets below exist on the repo (Settings ->
-  # Secrets and variables -> Actions -- same values already in
-  # apps/server/.env, see DEPLOYMENT.md's secrets checklist).
+  # N8 (audit 2026-07-29): the RLS isolation tests (*RlsIsolation.test.js --
+  # historyRlsIsolation, roomParticipantsRlsIsolation, topicsRlsIsolation,
+  # roomsRlsIsolation, consentsRlsIsolation) prove guardrail #4's "own
+  # history only", H8's seating-lockdown, and Phase 1's rooms/consents
+  # write-lockdown (ACTION_PLAN.md, 2026-08-04) are enforced by Postgres RLS
+  # itself, not an app-level filter -- but they need real Supabase Auth
+  # users signed in against a live project, so they self-skip
+  # (describe.skipIf) whenever SUPABASE_URL/SUPABASE_ANON_KEY/
+  # SUPABASE_SERVICE_ROLE_KEY aren't set. The `test` job above never sets
+  # them, so these files silently skipped in CI until this job started
+  # actually executing them (the three secrets below now exist on the repo
+  # -- Settings -> Secrets and variables -> Actions -- same values already
+  # in apps/server/.env, see DEPLOYMENT.md's secrets checklist).
+  #
+  # Matched by substring ("RlsIsolation.test.js"), not listed by name --
+  # vitest's CLI positional args filter by substring against the resolved
+  # file list, not by shell glob (a literal `test/*RlsIsolation.test.js`
+  # string matches nothing, confirmed locally). N8's original two-file list
+  # already went stale once topicsRlsIsolation.test.js was added without
+  # updating this job (2026-08-04 audit finding) -- the substring filter
+  # means a future *RlsIsolation.test.js file is covered automatically.
   #
   # No job-level `if:` gate here deliberately -- GitHub Actions doesn't
   # expose the `secrets` context to a job's `if:` condition at all (only
@@ -48,10 +57,10 @@ jobs:
   # based on whether a secret is set. Instead this relies on the test
   # files' own describe.skipIf: with the secrets unset (a fork PR, or
   # this repo before someone adds them), the env vars below resolve to
-  # empty strings, hasLiveCreds is false, and both files report "skipped"
-  # with exit code 0 -- confirmed locally by running this exact command
-  # with no Supabase env vars present. This satisfies the "never require
-  # production credentials" / deterministic design goal without an
+  # empty strings, hasLiveCreds is false, and every matched file reports
+  # "skipped" with exit code 0 -- confirmed locally by running this exact
+  # command with no Supabase env vars present. This satisfies the "never
+  # require production credentials" / deterministic design goal without an
   # unsupported conditional: the job always runs, but only ever *asserts*
   # anything once real credentials exist.
   rls-security:
@@ -71,9 +80,9 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           if [ -z "$SUPABASE_URL" ]; then
-            echo "::warning::SUPABASE_URL/SUPABASE_ANON_KEY/SUPABASE_SERVICE_ROLE_KEY are not set as repo secrets -- the RLS isolation tests (guardrail #4's own-history-only guarantee, and the H8 regression test) will SKIP, not actually run. This is expected until those secrets are added (Settings -> Secrets and variables -> Actions; see DEPLOYMENT.md's secrets checklist and PLAN.md section 6), but it means this job is not currently providing real security coverage."
+            echo "::warning::SUPABASE_URL/SUPABASE_ANON_KEY/SUPABASE_SERVICE_ROLE_KEY are not set as repo secrets -- the RLS isolation tests (guardrail #4's own-history-only guarantee, H8's seating-lockdown, and Phase 1's rooms/consents write-lockdown) will SKIP, not actually run. This is expected until those secrets are added (Settings -> Secrets and variables -> Actions; see DEPLOYMENT.md's secrets checklist and PLAN.md section 6), but it means this job is not currently providing real security coverage."
           fi
-          npx vitest run test/historyRlsIsolation.test.js test/roomParticipantsRlsIsolation.test.js
+          npx vitest run RlsIsolation.test.js
 
   web:
     runs-on: ubuntu-latest
