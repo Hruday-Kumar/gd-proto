@@ -8,7 +8,7 @@ import WebSocket from 'ws';
 
 const AAI_URL = 'wss://streaming.assemblyai.com/v3/ws';
 
-export function openAssemblyAI({ sampleRate, apiKey, onFinal, onError, chunkMs = 50 }) {
+export function openAssemblyAI({ sampleRate, apiKey, onFinal, onError, chunkMs = 50, connectTimeoutMs = 10_000 }) {
   const params = new URLSearchParams({
     sample_rate: String(sampleRate),
     encoding: 'pcm_s16le',
@@ -36,11 +36,46 @@ export function openAssemblyAI({ sampleRate, apiKey, onFinal, onError, chunkMs =
   });
 
   let open = false;
+  // Phase 1 (ACTION_PLAN.md, 2026-08-04): once true, this stream is dead --
+  // set on a socket error or on the connect deadline firing. send() stops
+  // backlogging and close() resolves immediately instead of running the
+  // full Terminate/wait-for-close handshake against a connection already
+  // known to be broken.
+  let failed = false;
   const backlog = [];
+  let backlogBytes = 0;
+  // Bounds how much audio can queue up before the socket actually opens --
+  // previously unbounded, so a slow/hung connect leaked memory for as long
+  // as the room's transcription ran, per participant stream. Whichever is
+  // smaller: 512KiB, or 10s of this stream's own audio (2 bytes/sample,
+  // PCM16 mono) -- the flat byte cap protects against an unusually high
+  // sample rate; the duration cap is what actually binds at typical voice
+  // sample rates.
+  const maxBacklogBytes = Math.min(512 * 1024, sampleRate * 2 * 10);
+
+  const markFailed = (err) => {
+    if (failed) return;
+    failed = true;
+    backlog.length = 0;
+    backlogBytes = 0;
+    clearTimeout(connectTimer);
+    onError?.(err);
+  };
+
+  const connectTimer = setTimeout(() => {
+    if (open || failed) return;
+    markFailed(new Error(`AssemblyAI connection timed out after ${connectTimeoutMs}ms`));
+    try { ws.close(); } catch { /* noop */ }
+  }, connectTimeoutMs);
+  connectTimer.unref?.();
+
   ws.on('open', () => {
+    if (failed) return; // connect deadline already fired; ignore a late open
+    clearTimeout(connectTimer);
     open = true;
     for (const b of backlog) ws.send(b);
     backlog.length = 0;
+    backlogBytes = 0;
   });
 
   let turnStartedAtMs = null;
@@ -55,7 +90,7 @@ export function openAssemblyAI({ sampleRate, apiKey, onFinal, onError, chunkMs =
       }
     } catch { /* ignore keepalives / non-JSON */ }
   });
-  ws.on('error', (e) => onError?.(e));
+  ws.on('error', (e) => markFailed(e));
 
   // AssemblyAI v3 rejects any single message outside 50-1000ms of audio
   // (error 3007) -- LiveKit hands us ~10ms frames, so buffer up to
@@ -63,8 +98,14 @@ export function openAssemblyAI({ sampleRate, apiKey, onFinal, onError, chunkMs =
   const samplesPerChunk = Math.round((sampleRate * chunkMs) / 1000);
   let pending = new Int16Array(0);
   const flush = (bytes) => {
-    if (open) ws.send(bytes);
-    else backlog.push(bytes);
+    if (failed) return;
+    if (open) {
+      ws.send(bytes);
+      return;
+    }
+    if (backlogBytes + bytes.length > maxBacklogBytes) return; // still connecting -- drop rather than grow forever
+    backlog.push(bytes);
+    backlogBytes += bytes.length;
   };
 
   return {
@@ -90,6 +131,11 @@ export function openAssemblyAI({ sampleRate, apiKey, onFinal, onError, chunkMs =
     // with a bounded safety close only for a socket that never closes on
     // its own.
     close() {
+      if (failed) {
+        try { ws.close(); } catch { /* noop */ }
+        return Promise.resolve();
+      }
+
       const minSamples = Math.round((sampleRate * 50) / 1000);
       if (pending.length >= minSamples) {
         flush(Buffer.from(pending.buffer, pending.byteOffset, pending.byteLength));
