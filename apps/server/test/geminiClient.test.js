@@ -4,7 +4,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   generateTopic,
-  generateFeedback,
   generateTranscriptAnalysis,
   generateCriterionEvaluation,
   generateEvaluationFeedback,
@@ -115,79 +114,12 @@ describe('generateTopic', () => {
   });
 });
 
-// W6: unlike generateTopic, this takes an already-built prompt string
-// (domain/feedbackGeneration.js builds it per student) rather than
-// structured filters -- it's the raw `generate(prompt)` shape the
-// orchestrator calls directly.
-//
-// SPEC-0006 (BE-6/BE-7): feedback is now structured JSON, so the fake
-// Gemini response text must itself be a JSON string (parseFeedbackResponse
-// parses+validates it), and the request body must carry generationConfig's
-// responseMimeType/responseSchema so Gemini's structured-output mode is
-// actually requested, not just hoped for via prompt wording.
-describe('generateFeedback', () => {
-  const prompt = 'Write feedback only for Asha based on this transcript...';
+// SPEC-0011 AC9 (chore/eval-cutover-cleanup, 2026-08-04): generateFeedback
+// (the old single-shot W6 path) and its tests were removed once AC7's human
+// verification passed -- generateEvaluationFeedback below is the only
+// feedback-generation call now.
 
-  function fakeFeedbackJsonResponse() {
-    return JSON.stringify({
-      summary: 'You stayed on topic and let others speak.',
-      score: 82,
-      dimensions: ['Content depth', 'Clarity', 'Confidence', 'Listening', 'Fluency'].map((label) => ({
-        label,
-        score: 80,
-        note: 'Specific note.',
-      })),
-      strengths: ['Clear opening.'],
-      improvements: ['Invite others in more.'],
-    });
-  }
-
-  it('throws when no API key is configured', async () => {
-    await expect(generateFeedback(prompt, { apiKey: undefined, fetchImpl: fakeFetchOk('x') })).rejects.toThrow(
-      /GEMINI_API_KEY/
-    );
-  });
-
-  it('calls the configured model endpoint with the given prompt and returns the parsed structured feedback', async () => {
-    const fetchImpl = fakeFetchOk(fakeFeedbackJsonResponse());
-    const result = await generateFeedback(prompt, { apiKey: 'test-key', fetchImpl });
-    expect(result.summary).toBe('You stayed on topic and let others speak.');
-    expect(result.score).toBe(82);
-    expect(result.dimensions).toHaveLength(5);
-    const [url, options] = fetchImpl.mock.calls[0];
-    expect(url).toContain(DEFAULT_GEMINI_MODEL);
-    expect(JSON.parse(options.body).contents[0].parts[0].text).toBe(prompt);
-  });
-
-  it('requests Gemini JSON mode with the feedback response schema', async () => {
-    const fetchImpl = fakeFetchOk(fakeFeedbackJsonResponse());
-    await generateFeedback(prompt, { apiKey: 'test-key', fetchImpl });
-    const [, options] = fetchImpl.mock.calls[0];
-    const body = JSON.parse(options.body);
-    expect(body.generationConfig.responseMimeType).toBe('application/json');
-    expect(body.generationConfig.responseSchema).toBeTruthy();
-    expect(body.generationConfig.responseSchema.required).toEqual(
-      expect.arrayContaining(['summary', 'score', 'dimensions', 'strengths', 'improvements'])
-    );
-  });
-
-  it('throws a descriptive error when the API responds with a non-OK status', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => 'server error' });
-    await expect(generateFeedback(prompt, { apiKey: 'test-key', fetchImpl })).rejects.toThrow(/500/);
-  });
-
-  // SPEC-0011 R13: the same transcript scoring differently across runs was
-  // traced to no evaluation call ever pinning `temperature` -- this proves
-  // it's actually set on the request, not just documented as an intent.
-  it('pins a low, fixed temperature so re-scoring the same transcript is not left to default sampling', async () => {
-    const fetchImpl = fakeFetchOk(fakeFeedbackJsonResponse());
-    await generateFeedback(prompt, { apiKey: 'test-key', fetchImpl });
-    const [, options] = fetchImpl.mock.calls[0];
-    expect(JSON.parse(options.body).generationConfig.temperature).toBe(DEFAULT_EVAL_TEMPERATURE);
-  });
-});
-
-// SPEC-0011 state 2: same raw generate(prompt) shape as generateFeedback,
+// SPEC-0011 state 2: same raw generate(prompt) shape as the old generateFeedback,
 // for the Transcript Analysis stage's evidence-ledger extraction.
 describe('generateTranscriptAnalysis', () => {
   const prompt = 'Analyze this transcript, numbered by utterance...';

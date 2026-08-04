@@ -11,7 +11,6 @@
 // overridable via the `model` option / GEMINI_MODEL env var so the next
 // vendor lineup change is a config edit, not a code change.
 import { buildTopicPrompt, parseTopicResponse } from '../domain/topicPrompt.js';
-import { parseFeedbackResponse, FEEDBACK_RESPONSE_SCHEMA } from '../domain/feedbackPrompt.js';
 import { parseTranscriptAnalysisResponse, TRANSCRIPT_ANALYSIS_RESPONSE_SCHEMA } from '../domain/transcriptAnalysisPrompt.js';
 import {
   parseCriterionEvaluationResponse,
@@ -113,39 +112,9 @@ export async function generateTopic(
   return parseTopicResponse(body);
 }
 
-// W6: sends an already-built feedback prompt (domain/feedbackPrompt.js's
-// buildFeedbackPrompt) to Gemini and returns the parsed paragraph. Takes a
-// raw prompt string, not structured filters like generateTopic -- this is
-// the exact `generate(prompt)` shape domain/feedbackGeneration.js's
-// orchestrator calls per student (see agent/feedbackWorker.js for the
-// partial application that wires the two together).
-export async function generateFeedback(
-  prompt,
-  {
-    apiKey = process.env.GEMINI_API_KEY,
-    model = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL,
-    fetchImpl = fetch,
-    timeoutMs = DEFAULT_GEMINI_TIMEOUT_MS,
-    retryAttempts = DEFAULT_GEMINI_RETRY_ATTEMPTS,
-    retryDelayMs = DEFAULT_GEMINI_RETRY_DELAY_MS,
-  } = {}
-) {
-  // SPEC-0006 (BE-6/BE-7): request Gemini's structured-output mode so the
-  // score/dimensions/strengths/improvements shape is enforced by the API
-  // itself, not just prompt wording -- parseFeedbackResponse still
-  // validates defensively on top of this.
-  const generationConfig = {
-    responseMimeType: 'application/json',
-    responseSchema: FEEDBACK_RESPONSE_SCHEMA,
-    temperature: DEFAULT_EVAL_TEMPERATURE,
-  };
-  const body = await withRetry(() => callGemini(prompt, { apiKey, model, fetchImpl, timeoutMs, generationConfig }), {
-    attempts: retryAttempts,
-    delayMs: retryDelayMs,
-    shouldRetry: isRetryableGeminiError,
-  });
-  return parseFeedbackResponse(body);
-}
+// SPEC-0011 AC9 (chore/eval-cutover-cleanup, 2026-08-04): the old single-shot
+// generateFeedback (W6) was removed once AC7's human verification passed --
+// generateEvaluationFeedback below is now the only feedback-generation call.
 
 // SPEC-0011 state 2: sends an already-built Transcript Analysis prompt
 // (domain/transcriptAnalysisPrompt.js's buildTranscriptAnalysisPrompt) and

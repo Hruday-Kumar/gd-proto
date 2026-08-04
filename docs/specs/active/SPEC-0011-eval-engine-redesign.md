@@ -366,7 +366,7 @@ below.
       literal persistence to `evaluation_confidence` -- deferred to state 7
       alongside the rest of the pipeline's `feedbackWorker.js` wiring, same
       pattern as states 2-5's pure/injectable-only scope.)
-- [ ] **AC7 (state 7):** Feedback text is generated from the validated
+- [x] **AC7 (state 7):** Feedback text is generated from the validated
       scorecard/evidence only; `feedback` table rows and both existing API
       routes are byte-for-byte compatible in shape with today; real-human
       verification (guardrail #1) confirms feedback still reads as useful
@@ -443,16 +443,16 @@ below.
       sensitivity already noted in state 7's own review entry).
       `npx oxlint apps/server/src apps/server/test`: same 2 pre-existing,
       unrelated warnings, no new ones.
-- [ ] **AC9 (state 9):** Old single-shot per-student scoring path
+- [x] **AC9 (state 9):** Old single-shot per-student scoring path
       (`feedbackPrompt.js`'s scoring instructions) is retired; docs/specs
       updated; no dead code remains.
-      **Deliberately still unchecked and blocked, not silently
-      incomplete** — this AC's own Rollback section makes its deletion
-      step conditional on AC7's human verification already having
-      passed, and that verification has not happened yet (see the AC7
-      Human Verification Checklist below). Confirmed directly with the
-      user (2026-08-03): hold the actual deletion until that checklist is
-      complete, rather than delete now or silently skip this AC. Verified
+      **Unblocked 2026-08-04 by AC7's human verification passing** (see
+      that section above); dead code removed in `chore/eval-cutover-
+      cleanup`: `domain/feedbackGeneration.js` deleted,
+      `geminiClient.generateFeedback` deleted, `feedbackPrompt.js`'s
+      scoring-instruction/schema/parse functions deleted, keeping only
+      `FEEDBACK_DIMENSION_LABELS`/`MAX_LIST_ITEMS` (still imported by the
+      new pipeline). Verified
       there is no OTHER dead code to remove in the meantime — every
       remaining reference to `feedbackGeneration.js`/`feedbackPrompt.js`
       from non-test code is either (a) `feedbackWorker.js`'s own comments
@@ -503,10 +503,33 @@ Record the outcome of all three directly in this section (date, verifier,
 what was observed) once done, then check AC7 and proceed with AC9's
 deletion in a follow-up commit on `chore/eval-cutover-cleanup`.
 
-**Status: not yet started** for the live-key/live-Supabase items above.
-The sandbox groundwork below (self-contained test table + a live-Gemini
-bias/evidence test harness) is done and gave real, though partial,
-signal — see the next section.
+**Status: done, 2026-08-04, verifier hrudaykumarpagadala@gmail.com.**
+1. Migration `0019` (and `0020`) applied to the project's live Supabase
+   instance via SQL Editor; all five `evaluation_*` tables confirmed
+   present with expected columns.
+2. Ran two real 2-participant rooms end-to-end locally (`phase-2`
+   checkout, real LiveKit/AssemblyAI/Gemini keys, `evaluation_runs`
+   reaching `completed`). The first run surfaced two real bugs rather
+   than a clean pass: `evaluation_evidence.timestamp_start_ms`/
+   `timestamp_end_ms` were typed `integer` in 0019 but hold real epoch-ms
+   values, overflowing on every insert since the tables were created; and
+   `domain/scoreAggregator.js`'s `weightedAverage` returned unrounded
+   floats (e.g. `94.28571428571429`) into `integer` columns
+   (`evaluation_criterion_results.score`, `feedback.score`). Both caused
+   silent persistence failures, which surfaced to the student as
+   "insufficient evidence" on 4 of 5 dimensions and added retry latency.
+   Fixed: migration `0021_fix_evaluation_evidence_timestamp_overflow.sql`
+   (int→bigint) applied live; `scoreAggregator.js` now rounds at the
+   aggregator's output boundary, with a regression test reproducing the
+   exact repeating-decimal shape (`scoreAggregator.test.js`). Full suite
+   587/587 passing after the fix.
+3. Re-ran a real room after both fixes: evidence persisted correctly,
+   dimension scores backed by real transcript evidence (no more spurious
+   "insufficient evidence" fallback), feedback text specific and
+   non-discouraging, attribution correct. Confirmed directly by the
+   verifier as working well.
+
+AC7 and AC9 checked below; proceeding to `chore/eval-cutover-cleanup`.
 
 ## Sandbox Testing and Free-Tier Constraint (2026-08-03)
 

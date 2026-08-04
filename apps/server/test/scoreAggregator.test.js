@@ -101,6 +101,22 @@ describe('aggregateDimensionScore', () => {
     expect(score).toBeNull();
   });
 
+  it('rounds to a whole number even when weighted-average arithmetic produces a repeating decimal (regression: live run 2026-08-04 hit "invalid input syntax for type integer" writing a raw 94.28571428571429 to evaluation_criterion_results.score/feedback.score, both integer columns)', () => {
+    // 'Clarity' weights are structure=0.4, word_choice=0.3, conciseness=0.3.
+    // Excluding conciseness renormalizes over 0.4+0.3=0.7, a denominator that
+    // does not divide evenly: (0.4*100 + 0.3*60) / 0.7 = 58/0.7 = 82.857142...
+    const score = aggregateDimensionScore({
+      dimensionLabel: 'Clarity',
+      subdimensions: subdimensions({
+        structure: 'demonstrated',
+        word_choice: 'partially_demonstrated',
+        conciseness: 'not_observed',
+      }),
+    });
+    expect(Number.isInteger(score)).toBe(true);
+    expect(score).toBe(83);
+  });
+
   it('throws on a subdimension id not defined in evalRubric.js for that dimension, rather than silently ignoring it', () => {
     expect(() =>
       aggregateDimensionScore({

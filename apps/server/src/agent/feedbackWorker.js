@@ -16,11 +16,11 @@
 // alongside the same `feedback` row shape as before -- R8: the `feedback`
 // table/API contract is byte-for-byte unchanged.
 //
-// Rollback (SPEC-0011): the old path is untouched --
-// domain/feedbackGeneration.js, domain/feedbackPrompt.js, and
-// llm/geminiClient.generateFeedback still exist and are still tested.
-// Reverting this cutover is a single-file revert of this module back to
-// its pre-state-7 version, not a data migration.
+// AC9 (chore/eval-cutover-cleanup, 2026-08-04): the old single-shot path
+// (generateFeedbackForRoom, buildFeedbackPrompt/parseFeedbackResponse,
+// geminiClient.generateFeedback) was deleted once AC7's human verification
+// passed. Reverting now means restoring those from git history, not a
+// single-file revert.
 import { runEvaluationPipeline, hashTranscript, PROMPT_BUNDLE_VERSION } from '../domain/evaluationPipeline.js';
 import { RUBRIC_VERSION } from '../domain/evalRubric.js';
 import {

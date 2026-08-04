@@ -19,7 +19,13 @@ function weightedAverage(items) {
   }
   const totalWeight = scored.reduce((sum, item) => sum + item.weight, 0);
   const weightedSum = scored.reduce((sum, item) => sum + item.weight * item.mark, 0);
-  return weightedSum / totalWeight;
+  // Rounded here, the only place a dimension/overall score is computed
+  // (module header), because both storage columns this feeds -- feedback.score
+  // and evaluation_criterion_results.score -- are integer, but weight ratios
+  // like 0.4/0.7 (renormalized after excluding a subdimension) routinely
+  // produce repeating decimals. Regression: a live 2026-08-04 run failed to
+  // persist with "invalid input syntax for type integer: 94.28571428571429".
+  return Math.round(weightedSum / totalWeight);
 }
 
 // subdimensions: [{ subdimensionId, level }], one entry per subdimension a
