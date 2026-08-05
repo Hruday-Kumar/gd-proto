@@ -73,7 +73,8 @@ Do not re-litigate these constraints without an explicit request and an ADR.
 ## Start-of-work protocol
 
 1. Read `.claude/rules/guardrails.md`.
-2. Read `docs/engineering/PROGRESS.md` and `docs/engineering/PLAN.md`.
+2. Read `docs/engineering/STATUS.md` (current state) and `PROJECT.md`
+   (durable reference, if unfamiliar with the repo).
 3. Read the issue and approved specification in `docs/specs/active/`.
 4. Read applicable ADRs under `docs/engineering/adr/` and `docs/adr/`.
 5. Confirm acceptance criteria, non-goals, risks, rollout, and rollback.
@@ -152,11 +153,12 @@ Include:
 
 ## Durable project context
 
+- Project reference (what this is, architecture, commands, doc map): `PROJECT.md`
 - Handbook: `ENGINEERING.md`
 - Codex verification contract: `CODEX.md`
 - Non-negotiable guardrails: `.claude/rules/guardrails.md`
-- Current status: `docs/engineering/PROGRESS.md`
-- Shared plan: `docs/engineering/PLAN.md`
+- Current status: `docs/engineering/STATUS.md`
+- Live cross-repo task tracker: `ACTION_PLAN.md` (outside this repo — see `PROJECT.md`'s doc map)
 - Team context: `docs/engineering/TEAM.md`
 - Branching: `docs/engineering/BRANCHING.md`
 - Deployment: `docs/engineering/DEPLOYMENT.md`

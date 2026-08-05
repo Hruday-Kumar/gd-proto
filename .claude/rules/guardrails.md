@@ -18,7 +18,7 @@ These are hard rules for any agent working on PlaceMe. If a task seems to requir
 
 8. **Don't re-litigate fixed constraints.** Scale, budget, retention, compliance, timeline, TDD, cloud-agnostic/containerized, and the MVP boundary are decided (see CLAUDE.md). Build within them.
 
-9. **Session discipline.** Do Phase 0a, Phase 0b, and Phase 1 as separate sessions. Within 0b, one category (research + ADR) at a time. Within Phase 1, one feature's core units at a time. Update docs/engineering/PROGRESS.md at the end of every session.
+9. **Session discipline.** Do Phase 0a, Phase 0b, and Phase 1 as separate sessions. Within 0b, one category (research + ADR) at a time. Within Phase 1, one feature's core units at a time. Update docs/engineering/STATUS.md at the end of every session.
 
 10. **Justify, don't invent.** Every non-trivial decision must trace to the vision doc or a fixed constraint. Never invent requirements. When ambiguous or blocked, ask.
 

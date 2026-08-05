@@ -139,7 +139,7 @@ Each significant change updates, as applicable:
 - API, schema, environment-variable, and provider contracts;
 - operator runbooks and monitoring;
 - user/support documentation;
-- `docs/engineering/PROGRESS.md` and `LESSONS.md`;
+- `docs/engineering/STATUS.md` and `LESSONS.md`;
 - a concise implementation summary and verification record.
 
 Documentation describes actual behavior. Never ship undocumented behavior or
