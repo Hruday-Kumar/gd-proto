@@ -127,7 +127,7 @@ had never been updated — this is the first record of the real state):
 | `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | LiveKit Cloud project → Settings → Keys |
 | `ASSEMBLYAI_API_KEY` | AssemblyAI dashboard |
 | `GEMINI_API_KEY` | Google AI Studio |
-| `ALLOWED_ORIGINS` | **⚠️ Not yet set on the live service as of 2026-07-29 — this is the one thing currently broken.** The deployed frontend's real origin(s) (M6, audit 2026-07-28) — comma-separated if there's more than one. No trailing slash, scheme required. Current value needed: `https://placeme.study,https://gd-proto-web.vercel.app`. Without this set, only the local Vite dev origins (`localhost:5173`) are allowed — the deployed frontend's requests are silently missing CORS headers right now. Render dashboard → `gd-proto-1` service → Environment → add it → save (auto-redeploys). |
+| `ALLOWED_ORIGINS` | The deployed frontend's real origin(s) (M6, audit 2026-07-28) — comma-separated if there's more than one. No trailing slash, scheme required. Current value needed: `https://placeme.study,https://gd-proto-web.vercel.app,https://gdarena.placeme.study`. **⚠️ `https://gdarena.placeme.study` added to this list 2026-08-02 (new subdomain for the app itself, kept separate from the root domain, which stays the waitlist page — see "Status" above) — not yet applied to the live Render env var, still needs to be added there.** Without it set, only the local Vite dev origins (`localhost:5173`) are allowed — the deployed frontend's requests are silently missing CORS headers right now. Render dashboard → `gd-proto-1` service → Environment → add it → save (auto-redeploys). |
 | `HEALTH_CHECK_TOKEN` | **New (M3, audit 2026-07-28).** Any long random string you generate yourself (e.g. `openssl rand -hex 32`) — not from a vendor dashboard. Gates `GET /health/agent` behind a shared-secret header so `lastFailure`'s roomId and raw error text aren't public to anyone who finds the URL. Must be set in **two** places with the same value: this Render env var, and a GitHub Actions **secret** (not variable) of the same name on the repo, so `keepalive.yml` can send it. Optional — the endpoint stays open (previous behavior) until this is set. |
 
 Same values already sitting in `apps/server/.env` locally — this is
@@ -212,6 +212,10 @@ it'll start getting 401s once the token is set on Render but not here.
 
 - [x] **Set `ALLOWED_ORIGINS` on the live Render service.** **Done and
       re-verified live, 2026-07-29.**
+- [ ] **New (2026-08-02):** add `https://gdarena.placeme.study` to the live
+      `ALLOWED_ORIGINS` value on the `gd-proto-1` Render service (see the
+      secrets checklist above) — documented here, not yet applied to the
+      dashboard.
 - [x] **Turn Supabase "Confirm email" back ON.** **Done and re-verified
       live, 2026-07-29** — `mailer_autoconfirm: false`.
 - [x] **Pre-flight P4 — verify the keep-alive pattern actually works.**

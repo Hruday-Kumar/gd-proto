@@ -57,7 +57,7 @@ gh pr checks <N>
 - **Base branch check — do this every time.** `baseRefName` may be `dev` or another feature branch (stacked PR, per `BRANCHING.md`'s workstream pattern). Reviewing against the wrong base will show a huge, misleading diff.
 - **Fork check (defensive):** if `headRepositoryOwner.login` isn't the repo owner, treat it as a fork PR and use the fork-fetch form in Phase 1/7. Nothing in this repo's history has been a fork so far, but don't assume that never changes.
 - **CI reality:** two checks run — `test` (`npm test --workspace=@placeme/server`, Vitest) and `docker-build`. **There is no test/lint job for `apps/web` in CI at all** (`.github/workflows/ci.yml` only runs the server workspace's tests) — a web-only PR can be fully green on CI with zero automated coverage. Don't report this as a defect in the PR; it's a pre-existing repo gap. Run `npm run lint`/`npm run build` for web yourself in Phase 3 since CI won't.
-- **The `.github/PULL_REQUEST_TEMPLATE.md` is known-stale** — it references `For_Developers/CONTRIBUTING.md`, `design.md §14`, and `npm run audit:rls`, none of which exist in this repo (flagged in `docs/engineering/PROGRESS.md`, never cleaned up). Don't hold a PR to those specific checklist items; check what's actually real (see Phase 3).
+- **The `.github/PULL_REQUEST_TEMPLATE.md` is known-stale** — it references `For_Developers/CONTRIBUTING.md`, `design.md §14`, and `npm run audit:rls`, none of which exist in this repo (flagged in `docs/engineering/archive/PROGRESS.md`, never cleaned up). Don't hold a PR to those specific checklist items; check what's actually real (see Phase 3).
 
 ## Phase 1 — Reconcile the branch against its real base
 

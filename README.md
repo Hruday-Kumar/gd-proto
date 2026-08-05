@@ -48,10 +48,16 @@ automatically**; paste each new one into the Supabase SQL Editor yourself.
 
 ## Where to look next
 
-- [`docs/engineering/PROGRESS.md`](docs/engineering/PROGRESS.md) — current
-  state, what's done, what's next. Read this first each session.
-- [`docs/engineering/PLAN.md`](docs/engineering/PLAN.md) — the shared
-  task checklist.
+- [`PROJECT.md`](PROJECT.md) — what this is, repo roles, architecture,
+  commands, and the full authoritative document map. Read this first.
+- [`docs/engineering/STATUS.md`](docs/engineering/STATUS.md) — current
+  state (branch, deploy, migrations, blockers, next action). Read this
+  first each session.
+- `ACTION_PLAN.md` — the live, cross-repo task tracker (shared with
+  `placeme-UI`/`gd-frontend`). Lives outside this repo, alongside a
+  local checkout of all three, not tracked in any of their git
+  histories — ask whoever's coordinating the three repos for it if you
+  don't have it.
 - [`docs/engineering/BRANCHING.md`](docs/engineering/BRANCHING.md) — the
   git workflow (branch per task, PR into `dev`, squash merge).
 - [`.claude/rules/guardrails.md`](.claude/rules/guardrails.md) — the

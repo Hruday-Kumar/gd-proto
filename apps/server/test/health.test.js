@@ -1,11 +1,21 @@
 import { describe, it, expect } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../src/index.js';
+import { REQUIRED_ENV_VARS } from '../src/domain/readiness.js';
 
 // Fixture URL — the auth middleware needs *a* Supabase URL to construct
 // (see authMiddleware.test.js for its real behavior); no network call
 // happens unless a request actually carries a bearer token.
 const TEST_SUPABASE_URL = 'https://test-project.supabase.co';
+
+// A fully-populated fake env for /ready's "everything configured" cases --
+// built from REQUIRED_ENV_VARS itself, not hardcoded one-by-one, so a
+// future required var is covered automatically. Must not rely on
+// ambient process.env: a developer's local .env happens to have all of
+// these, which let these two tests pass locally while CI's `test` job
+// (no Supabase/LiveKit/Gemini secrets set there -- those live only in the
+// rls-security job) silently failed on every run since 2026-08-04.
+const FULL_ENV = Object.fromEntries(REQUIRED_ENV_VARS.map((name) => [name, 'test-value']));
 
 describe('GET /health', () => {
   it('returns 200 ok', async () => {
@@ -135,7 +145,7 @@ describe('GET /health/agent', () => {
 describe('GET /ready', () => {
   it('200s when every required env var is set and the DB check succeeds', async () => {
     const res = await request(
-      createApp({ supabaseUrl: TEST_SUPABASE_URL, checkDbFn: async () => {} })
+      createApp({ supabaseUrl: TEST_SUPABASE_URL, checkDbFn: async () => {}, env: FULL_ENV })
     ).get('/ready');
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ status: 'ready' });
@@ -160,6 +170,7 @@ describe('GET /ready', () => {
         checkDbFn: async () => {
           throw new Error('relation "rooms" does not exist');
         },
+        env: FULL_ENV,
       })
     ).get('/ready');
     expect(res.status).toBe(503);
