@@ -1,0 +1,857 @@
+openapi: 3.1.0
+info:
+  title: PlaceMe gd-proto API
+  version: 0.1.0
+  description: >
+    apps/server's REST API. Source of truth for the request/response
+    contract between gd-proto and its frontends (placeme-UI canonically;
+    apps/web and gd-frontend consume the same routes). Hand-authored
+    against the actual route handlers in src/api/routes/ — see
+    ACTION_PLAN.md Phase 3 for how this is kept in sync and CONTRIBUTING
+    notes below.
+
+    Every mutating/reading route except /health, /ready, and
+    /health/agent requires a Supabase-issued bearer token (bearerAuth).
+    Every error response, from any route, uses the shared Error schema
+    (`{ "error": "<message>" }`) — set once in api/middleware/
+    errorHandler.js and reused by every route's explicit early-return
+    error responses too.
+servers:
+  - url: https://gd-proto-1.onrender.com
+    description: Production
+  - url: http://localhost:3000
+    description: Local dev
+security:
+  - bearerAuth: []
+tags:
+  - name: health
+    description: Unauthenticated liveness/readiness/monitoring endpoints.
+  - name: me
+    description: Identity.
+  - name: consent
+    description: Recording and checking pilot consent (guardrail #3).
+  - name: topics
+    description: Discussion topic generation and submission.
+  - name: rooms
+    description: Room lifecycle — create, join, match, start, poll, and read.
+  - name: feedback
+    description: Post-session generated feedback, nested under rooms.
+  - name: history
+    description: A student's own past sessions.
+
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Liveness check
+      tags: [health]
+      security: []
+      responses:
+        "200":
+          description: Process is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [ok] }
+
+  /ready:
+    get:
+      operationId: getReady
+      summary: Readiness check (config + DB connectivity)
+      tags: [health]
+      security: []
+      responses:
+        "200":
+          description: Ready to serve real traffic.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [ready] }
+        "503":
+          description: Not ready — missing config or DB unreachable.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    required: [status, reason, missingEnvVars]
+                    properties:
+                      status: { type: string, enum: [not_ready] }
+                      reason: { type: string, enum: [missing_config] }
+                      missingEnvVars: { type: array, items: { type: string } }
+                  - type: object
+                    required: [status, reason]
+                    properties:
+                      status: { type: string, enum: [not_ready] }
+                      reason: { type: string, enum: [db_unreachable] }
+
+  /health/agent:
+    get:
+      operationId: getAgentHealth
+      summary: Transcription/feedback dispatch health (internal monitoring)
+      tags: [health]
+      security:
+        - healthToken: []
+      responses:
+        "200":
+          description: Current in-process dispatch counters.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentStatus" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/me:
+    get:
+      operationId: getMe
+      summary: The signed-in user's id
+      tags: [me]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [userId]
+                properties:
+                  userId: { type: string, format: uuid }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/consent/status:
+    get:
+      operationId: getConsentStatus
+      summary: This user's current consent version and mic-enable eligibility
+      tags: [consent]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConsentStatus" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/consent:
+    post:
+      operationId: grantConsent
+      summary: Record this user's consent grant for the current version
+      tags: [consent]
+      responses:
+        "201":
+          description: Recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [consentVersion, grantedAt]
+                properties:
+                  consentVersion: { type: integer }
+                  grantedAt: { type: string, format: date-time }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/topics/custom:
+    post:
+      operationId: submitCustomTopic
+      summary: Submit a user-authored custom topic
+      tags: [topics]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text: { type: string, description: "Max length enforced server-side (domain/topicText.js)." }
+                category: { type: string }
+                difficulty: { type: string }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Topic" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/topics/generate:
+    post:
+      operationId: generateTopic
+      summary: Request an AI-generated discussion topic
+      tags: [topics]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                category: { type: string }
+                difficulty: { type: string }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Topic" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "502":
+          description: Upstream (Gemini) generation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/rooms:
+    post:
+      operationId: createRoom
+      summary: Create a new code-joinable room
+      tags: [rooms]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [topicId, durationSeconds]
+              properties:
+                topicId: { type: string, format: uuid }
+                durationSeconds: { type: integer }
+                maxParticipants: { type: integer }
+                visibility: { $ref: "#/components/schemas/Visibility" }
+                level: { $ref: "#/components/schemas/Level" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RoomSummary" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/rooms/open:
+    get:
+      operationId: listOpenRooms
+      summary: Browse rooms open to join right now (waiting + public + not full)
+      tags: [rooms]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rooms]
+                properties:
+                  rooms:
+                    type: array
+                    items: { $ref: "#/components/schemas/OpenRoom" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/rooms/mine/active:
+    get:
+      operationId: getActiveRoom
+      summary: This user's currently active (waiting/live) room, if any
+      tags: [rooms]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [room]
+                properties:
+                  room:
+                    oneOf:
+                      - type: "null"
+                      - type: object
+                        required: [id, code, status]
+                        properties:
+                          id: { type: string, format: uuid }
+                          code: { type: string }
+                          status: { $ref: "#/components/schemas/RoomLifecycleStatus" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/rooms/join:
+    post:
+      operationId: joinRoomByCode
+      summary: Join an existing room by its short code
+      tags: [rooms]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string }
+      responses:
+        "200":
+          description: Joined (or already seated)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, code, status]
+                properties:
+                  id: { type: string, format: uuid }
+                  code: { type: string }
+                  status: { $ref: "#/components/schemas/RoomLifecycleStatus" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Room already ended/live, or full.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/rooms/match:
+    post:
+      operationId: requestMatch
+      summary: Request random matchmaking; may queue or return an immediately-formed room
+      tags: [rooms]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [durationSeconds]
+              properties:
+                durationSeconds: { type: integer }
+      responses:
+        "200":
+          description: Still queued, waiting for enough participants.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [queued] }
+        "201":
+          description: Matched — a new room was formed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, code, status, topicId, members]
+                properties:
+                  id: { type: string, format: uuid }
+                  code: { type: string }
+                  status: { $ref: "#/components/schemas/RoomLifecycleStatus" }
+                  topicId: { type: string, format: uuid }
+                  members:
+                    type: array
+                    items: { type: string, format: uuid }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    delete:
+      operationId: leaveMatchQueue
+      summary: Leave the random-match queue (idempotent)
+      tags: [rooms]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [left] }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/rooms/{id}/start:
+    post:
+      operationId: startRoom
+      summary: Start a waiting room (creator only), transitioning it to live
+      tags: [rooms]
+      parameters:
+        - $ref: "#/components/parameters/RoomId"
+      responses:
+        "200":
+          description: Started
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, status, endsAt]
+                properties:
+                  id: { type: string, format: uuid }
+                  status: { $ref: "#/components/schemas/RoomLifecycleStatus" }
+                  endsAt: { type: integer, description: "Epoch ms." }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not the room's creator.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Already started/ended, or the pilot concurrency cap is hit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/rooms/{id}/status:
+    get:
+      operationId: getRoomStatus
+      summary: Poll a room's lifecycle status, topic, and timing
+      tags: [rooms]
+      parameters:
+        - $ref: "#/components/parameters/RoomId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RoomStatus" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not a participant of this room.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/rooms/{id}/token:
+    post:
+      operationId: getRoomToken
+      summary: Mint a LiveKit join token for this room's audio (requires current consent)
+      tags: [rooms]
+      parameters:
+        - $ref: "#/components/parameters/RoomId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, url, identity, roomName]
+                properties:
+                  token: { type: string }
+                  url: { type: [string, "null"], format: uri }
+                  identity: { type: string, format: uuid }
+                  roomName: { type: string, format: uuid }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Consent not current, or not a participant of this room.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Room has already ended.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/rooms/{id}/participants:
+    get:
+      operationId: getRoomParticipants
+      summary: List seated participants and their talk-time share
+      tags: [rooms]
+      parameters:
+        - $ref: "#/components/parameters/RoomId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [participants]
+                properties:
+                  participants:
+                    type: array
+                    items: { $ref: "#/components/schemas/RoomParticipant" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not a participant of this room.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/rooms/{id}/transcript:
+    get:
+      operationId: getRoomTranscript
+      summary: The full attributed transcript recorded so far for this room
+      tags: [rooms]
+      parameters:
+        - $ref: "#/components/parameters/RoomId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [lines]
+                properties:
+                  lines:
+                    type: array
+                    items: { $ref: "#/components/schemas/TranscriptLine" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not a participant of this room.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/rooms/{id}/feedback/mine:
+    get:
+      operationId: getMyFeedback
+      summary: This user's own generated feedback for a room, if ready yet
+      tags: [feedback]
+      parameters:
+        - $ref: "#/components/parameters/RoomId"
+      responses:
+        "200":
+          description: >
+            OK. `{ "feedback": null }` while generation is still in flight —
+            not an error state, callers should poll.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FeedbackResult" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/rooms/{id}/feedback/mine/rating:
+    patch:
+      operationId: rateFeedback
+      summary: Thumbs up/down (with optional reason) this user's own feedback
+      tags: [feedback]
+      parameters:
+        - $ref: "#/components/parameters/RoomId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rating]
+              properties:
+                rating: { type: boolean }
+                reason: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rating, ratingReason]
+                properties:
+                  rating: { type: boolean }
+                  ratingReason: { type: [string, "null"] }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: No feedback exists yet to rate.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/history/mine:
+    get:
+      operationId: getMyHistory
+      summary: This user's past sessions, most recent first
+      tags: [history]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sessions]
+                properties:
+                  sessions:
+                    type: array
+                    items: { $ref: "#/components/schemas/HistorySession" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Supabase JWT
+      description: "Supabase Auth access token, as `Authorization: Bearer <token>`."
+    healthToken:
+      type: apiKey
+      in: header
+      name: x-health-token
+      description: >
+        HEALTH_CHECK_TOKEN shared secret. Required in production
+        (server refuses to start without one configured); optional in
+        other environments.
+
+  parameters:
+    RoomId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid bearer token.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    BadRequest:
+      description: Invalid request body.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Resource does not exist.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    TooManyRequests:
+      description: Rate limit exceeded.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+
+    Visibility:
+      type: string
+      enum: [public, private]
+
+    Level:
+      type: string
+      enum: [beginner, intermediate, advanced]
+
+    RoomLifecycleStatus:
+      type: string
+      enum: [waiting, live, ended]
+
+    ConsentStatus:
+      type: object
+      required: [currentVersion, canEnableMic]
+      properties:
+        currentVersion: { type: integer }
+        canEnableMic: { type: boolean }
+
+    Topic:
+      type: object
+      required: [id, text, source, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        text: { type: string }
+        category: { type: [string, "null"] }
+        difficulty: { type: [string, "null"] }
+        source: { type: string, enum: [custom, llm] }
+        created_at: { type: string, format: date-time }
+
+    RoomSummary:
+      type: object
+      required: [id, code, status, topicId, durationSeconds, maxParticipants, visibility, level]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        status: { $ref: "#/components/schemas/RoomLifecycleStatus" }
+        topicId: { type: string, format: uuid }
+        durationSeconds: { type: integer }
+        maxParticipants: { type: integer }
+        visibility: { $ref: "#/components/schemas/Visibility" }
+        level: { $ref: "#/components/schemas/Level" }
+
+    OpenRoom:
+      type: object
+      required:
+        [id, code, topicText, durationSeconds, maxParticipants, participantCount, hostDisplayName, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        topicText: { type: [string, "null"] }
+        durationSeconds: { type: integer }
+        maxParticipants: { type: integer }
+        participantCount: { type: integer }
+        hostDisplayName: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    RoomStatus:
+      type: object
+      required: [id, status, code, topicText, durationSeconds, isCreator]
+      properties:
+        id: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/RoomLifecycleStatus" }
+        code: { type: string }
+        topicText: { type: [string, "null"] }
+        durationSeconds: { type: integer }
+        isCreator: { type: boolean }
+        endsAt: { type: integer, description: "Epoch ms. Present once the room has started." }
+
+    RoomParticipant:
+      type: object
+      required: [userId, displayName, talkShare]
+      properties:
+        userId: { type: string, format: uuid }
+        displayName: { type: string }
+        talkShare: { type: number, description: "0-1 share of this room's total attributed speaking time." }
+
+    TranscriptLine:
+      type: object
+      required: [userId, displayName, text, startedAtMs]
+      properties:
+        userId: { type: string, format: uuid }
+        displayName: { type: string }
+        text: { type: string }
+        startedAtMs: { type: integer }
+
+    FeedbackDimension:
+      type: object
+      required: [label, score, note]
+      properties:
+        label: { type: string }
+        score: { type: number }
+        note: { type: string }
+
+    FeedbackResult:
+      description: >
+        `{ "feedback": null }` before generation finishes; the full object
+        once it has. `score` can still be null on a pre-migration row or
+        the transcription-failed stub — never render that as a real 0
+        (SPEC-0006, BE-6/BE-7).
+      oneOf:
+        - type: object
+          required: [feedback]
+          properties:
+            feedback: { type: "null" }
+        - type: object
+          required: [feedback, score, dimensions, strengths, improvements]
+          properties:
+            feedback: { type: string }
+            score: { type: [number, "null"] }
+            dimensions:
+              type: array
+              items: { $ref: "#/components/schemas/FeedbackDimension" }
+            strengths: { type: array, items: { type: string } }
+            improvements: { type: array, items: { type: string } }
+            rating: { type: boolean, description: "Present only once the caller has rated their feedback." }
+            ratingReason: { type: [string, "null"] }
+
+    HistorySession:
+      type: object
+      required:
+        [id, code, status, durationSeconds, topicText, startedAt, endedAt, feedback, score, dimensions, strengths, improvements, talkShare]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        status: { $ref: "#/components/schemas/RoomLifecycleStatus" }
+        durationSeconds: { type: integer }
+        topicText: { type: [string, "null"] }
+        startedAt: { type: [string, "null"], format: date-time }
+        endedAt: { type: [string, "null"], format: date-time }
+        feedback: { type: [string, "null"] }
+        score: { type: [number, "null"] }
+        dimensions:
+          type: array
+          items: { $ref: "#/components/schemas/FeedbackDimension" }
+        strengths: { type: array, items: { type: string } }
+        improvements: { type: array, items: { type: string } }
+        talkShare: { type: [number, "null"] }
+
+    AgentStatus:
+      type: object
+      required:
+        [activeRooms, dispatchSuccesses, dispatchFailures, lastFailure, lastSuccess, healthy, feedbackSuccesses, feedbackFailures, lastFeedbackFailure, lastFeedbackSuccess, feedbackHealthy]
+      properties:
+        activeRooms: { type: integer }
+        dispatchSuccesses: { type: integer }
+        dispatchFailures: { type: integer }
+        lastFailure:
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [roomId, message, at]
+              properties:
+                roomId: { type: string, format: uuid }
+                message: { type: string }
+                at: { type: string, format: date-time }
+        lastSuccess:
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [roomId, at]
+              properties:
+                roomId: { type: string, format: uuid }
+                at: { type: string, format: date-time }
+        healthy: { type: boolean }
+        feedbackSuccesses: { type: integer }
+        feedbackFailures: { type: integer }
+        lastFeedbackFailure:
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [roomId, message, at]
+              properties:
+                roomId: { type: string, format: uuid }
+                message: { type: string }
+                at: { type: string, format: date-time }
+        lastFeedbackSuccess:
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [roomId, at]
+              properties:
+                roomId: { type: string, format: uuid }
+                at: { type: string, format: date-time }
+        feedbackHealthy: { type: boolean }

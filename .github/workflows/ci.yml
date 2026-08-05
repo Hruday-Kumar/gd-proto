@@ -18,6 +18,21 @@ jobs:
       - run: npm ci
       - run: npm test --workspace=@placeme/server
 
+  # Phase 3 (ACTION_PLAN.md, cross-repo contract): docs/api/openapi.yaml
+  # is the source of truth placeme-UI's TS client is generated from
+  # (see that repo's contract-drift CI job) -- lint it here so an invalid
+  # spec never lands on main/dev.
+  openapi-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run openapi:lint --workspace=@placeme/server
+
   server-lint:
     runs-on: ubuntu-latest
     steps:
