@@ -1,10 +1,13 @@
 # Builds apps/server (Express API + LiveKit agent worker, one process —
 # see docs/engineering/PHASE1_PLAN.md §3a for why they share a container).
-# Matches the Node version used in local dev (node --version → v22.x).
+# Pinned to the same Node version as .nvmrc/CI (ACTION_PLAN.md Phase 3) --
+# this is the actual production runtime, so unlike package.json's engines
+# range (which tolerates a range of local dev machines), there's no reason
+# to float it.
 # Debian-based (glibc), not Alpine (musl): @livekit/rtc-ffi-bindings only
 # ships prebuilt native bindings for linux-x64-gnu/linux-arm64-gnu, no musl
 # build exists, so this image can never satisfy that dependency on Alpine.
-FROM node:22-slim
+FROM node:22.23.1-slim
 WORKDIR /app
 
 # node:22-slim ships without the system ca-certificates package. Node's own
