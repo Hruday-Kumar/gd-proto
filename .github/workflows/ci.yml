@@ -146,17 +146,15 @@ jobs:
       - uses: actions/checkout@v4
       - run: docker build -t placeme-server .
 
-  # N8 (audit 2026-07-29), third gap: no dependency-advisory visibility in
-  # CI at all -- the tree already carries 2 known high-severity advisories
-  # (react-router, a web-only dependency; see N10 in
-  # AUDIT_COMPARISON_2026-07-29.md, which tracks fixing them separately).
-  # `continue-on-error: true` per the audit's own recommendation
-  # ("non-blocking reporting step") -- this job's purpose is visibility on
-  # every PR (so a *new* advisory doesn't land unnoticed), not to gate
-  # merges on a dependency tree this project doesn't fully control.
+  # N8 (audit 2026-07-29) added this non-blocking (`continue-on-error: true`)
+  # since the tree then carried 2 known high-severity advisories (react-router,
+  # a web-only dependency; N10 in AUDIT_COMPARISON_2026-07-29.md). Phase 3
+  # (ACTION_PLAN.md, 2026-08-05): `npm audit` is clean (0 vulnerabilities at
+  # any severity) as of this change, so there's nothing left to tolerate --
+  # made blocking so a *new* advisory actually fails the PR instead of only
+  # being visible after the fact.
   dependency-audit:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
